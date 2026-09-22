@@ -18,7 +18,7 @@ from swing_trading_ai_assistant.market_data import (
     historical_revision_store,
     historical_upstox_raw,
 )
-from swing_trading_ai_assistant.market_data.adjusted_daily import yfinance_adapter
+from swing_trading_ai_assistant.market_data.bharatstock import BharatStockClient
 from swing_trading_ai_assistant.market_data.catalog import DuckDBCatalog
 from swing_trading_ai_assistant.market_data.historical_revision_store import (
     HistoricalOhlcvImportOutcomeV1,
@@ -44,7 +44,6 @@ from swing_trading_ai_assistant.market_data.partition_publication import (
 from swing_trading_ai_assistant.market_data.provisional_store import (
     latest_provisional_partition,
 )
-from swing_trading_ai_assistant.market_data.public_contract import CoverageStateV1
 from swing_trading_ai_assistant.market_data.schedule_evidence import (
     ExpectedSessionSchedule,
     ScheduleClosure,
@@ -425,6 +424,42 @@ def test_completion_propagates_unexpected_source_defects(
             )
 
 
+@pytest.mark.parametrize(
+    "command", ("historical-ohlcv-upstox-raw", "historical-ohlcv-upstox-raw-read")
+)
+def test_historical_cli_execution_fault_is_not_a_request_rejection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    command: str,
+) -> None:
+    source, destination = _private_roots_with_source_lock(tmp_path)
+    request_file = tmp_path / "request.json"
+    request_file.write_bytes(_canonical(_request_with_current_identities()))
+    before = _tree_bytes(destination)
+
+    def fail_execution(*_: object, **__: object) -> object:
+        raise ValueError("private/path/token/provider-payload")
+
+    monkeypatch.setattr(cli, "complete_upstox_raw_historical_ohlcv_v1", fail_execution)
+    monkeypatch.setattr(
+        cli.HistoricalOhlcvRevisionStoreV1, "read_exact", fail_execution
+    )
+    args = [command, "--storage-root", str(destination), "--output", "json"]
+    if command == "historical-ohlcv-upstox-raw":
+        args.extend(
+            ["--source-storage-root", str(source), "--request-file", str(request_file)]
+        )
+    else:
+        args.extend(["--revision-sha256", "a" * 64])
+
+    assert cli.main(args) == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == "internal_error\n"
+    assert _tree_bytes(destination) == before
+
+
 def test_range_limit_plus_one_is_malformed_before_source_admission() -> None:
     request = _request()
     request["to_session"] = "2027-07-01"
@@ -577,7 +612,7 @@ def test_real_retained_reliance_july_initial_and_exact_retry(
     )
     monkeypatch.setattr(cli._HistoricalProviderSession, "fetch", fail_if_reached)
     monkeypatch.setattr(cli, "_default_download_service", fail_if_reached)
-    monkeypatch.setattr(yfinance_adapter, "_public_download", fail_if_reached)
+    monkeypatch.setattr(BharatStockClient, "history", fail_if_reached)
 
     identity = historical_upstox_raw.StorageRootLease.admit_existing_private_identity(
         tmp_path
@@ -734,7 +769,7 @@ def test_real_current_august_provisional_partition_is_insufficient(
     )
     monkeypatch.setattr(cli._HistoricalProviderSession, "fetch", fail_if_reached)
     monkeypatch.setattr(cli, "_default_download_service", fail_if_reached)
-    monkeypatch.setattr(yfinance_adapter, "_public_download", fail_if_reached)
+    monkeypatch.setattr(BharatStockClient, "history", fail_if_reached)
     evaluator = historical_upstox_raw.StoredCoverageEvaluatorV1()
     coverage_observed_at = datetime(2026, 9, 1, tzinfo=UTC)
     with evaluator.admit(source) as admission:
@@ -1357,7 +1392,7 @@ def test_synthetic_fifty_member_initial_is_source_backed_exact_and_effect_free(
     )
     monkeypatch.setattr(cli._HistoricalProviderSession, "fetch", fail_if_reached)
     monkeypatch.setattr(cli, "_default_download_service", fail_if_reached)
-    monkeypatch.setattr(yfinance_adapter, "_public_download", fail_if_reached)
+    monkeypatch.setattr(BharatStockClient, "history", fail_if_reached)
 
     identity = StorageRootLease.admit_existing_private_identity(destination)
     assert identity is not None
@@ -1447,6 +1482,58 @@ def test_synthetic_source_backed_append_copies_inherited_partition_receipts(
         parent_artifact["partition_receipts"][0]
         == append_artifact["partition_receipts"][0]
     )
+
+
+def test_source_backed_append_propagates_parent_artifact_reader_fault(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    members = [(_synthetic_isin(0), "SYM00")]
+    sessions = ("2026-07-01", "2026-07-02")
+    source = _synthetic_source_root(tmp_path, "source")
+    destination = _private_destination_root(tmp_path, "destination")
+    schedule_digest, metadata = _seed_synthetic_retained_source(
+        source,
+        members,
+        sessions,
+        known_at_by_month={(2026, 7): datetime(2026, 8, 27, 4, tzinfo=UTC)},
+    )
+    parent_request = _synthetic_request(
+        members, (sessions[0],), schedule_digest, metadata, "2026-09-02T00:00:00Z"
+    )
+    identity = StorageRootLease.admit_existing_private_identity(destination)
+    assert identity is not None
+    parent = historical_upstox_raw.complete_upstox_raw_historical_ohlcv_v1(
+        _canonical(parent_request), source, destination, identity
+    )
+    assert parent.revision_sha256 is not None
+    append_request = _synthetic_request(
+        members, sessions, schedule_digest, metadata, "2026-09-03T00:00:00Z"
+    )
+    append_request["operation"] = "APPEND"
+    append_request["parent_revision_sha256"] = parent.revision_sha256
+    retained_before = _tree_bytes(destination)
+    primary = RuntimeError("private-parent-artifact-reader-fault")
+
+    def fail_parent_artifact(
+        _: historical_revision_store.HistoricalOhlcvRevisionStoreV1,
+        __: dict[str, Any],
+        ___: int,
+    ) -> dict[str, Any]:
+        raise primary
+
+    monkeypatch.setattr(
+        historical_revision_store.HistoricalOhlcvRevisionStoreV1,
+        "_artifact_for_revision",
+        fail_parent_artifact,
+    )
+
+    with pytest.raises(RuntimeError) as raised:
+        historical_upstox_raw.complete_upstox_raw_historical_ohlcv_v1(
+            _canonical(append_request), source, destination, identity
+        )
+
+    assert raised.value is primary
+    assert _tree_bytes(destination) == retained_before
 
 
 def test_synthetic_source_backed_correction_replaces_only_named_month_coordinate(
@@ -1626,28 +1713,9 @@ def test_schedule_absence_and_corruption_have_distinct_completion_outcomes(
         assert not (destination / "historical_ohlcv_revisions").exists()
 
 
-def test_substituted_partition_and_catalog_evidence_is_conflicting(
+def test_substituted_catalog_evidence_is_conflicting(
     tmp_path: Path, monkeypatch
 ) -> None:
-    class PartitionReadFailure(RuntimeError):
-        def __init__(self, category: historical_upstox_raw.FailureCategory) -> None:
-            self.category = category
-
-    for category in (
-        historical_upstox_raw.FailureCategory.CHECKSUM_INVALID_OR_MISMATCHED,
-        historical_upstox_raw.FailureCategory.PATH_INVALID_OR_MISMATCHED,
-    ):
-        assert (
-            historical_upstox_raw._source_finding(PartitionReadFailure(category))  # pyright: ignore[reportPrivateUsage]
-            is historical_upstox_raw._Conflict
-        )
-    assert (
-        historical_upstox_raw._coverage_finding(  # pyright: ignore[reportPrivateUsage]
-            CoverageStateV1.CORRUPT
-        )
-        is historical_upstox_raw._Conflict
-    )
-
     members = [(_synthetic_isin(0), "SYM00")]
     sessions = ("2026-07-01",)
     source = _synthetic_source_root(tmp_path, "source")
@@ -1684,8 +1752,10 @@ def test_substituted_partition_and_catalog_evidence_is_conflicting(
         KeyError("injected key defect"),
         RuntimeError("injected runtime defect"),
         Exception("injected generic defect"),
+        TypeError("injected type defect"),
+        ValueError("injected value defect"),
     ),
-    ids=("assertion", "key", "runtime", "generic"),
+    ids=("assertion", "key", "runtime", "generic", "type", "value"),
 )
 @pytest.mark.parametrize(
     "boundary",

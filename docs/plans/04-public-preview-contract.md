@@ -683,3 +683,10 @@ Daily acceptance additionally proves authoritative regular and special-session
 grouping, timezone boundaries, complete/missing/duplicate minutes, integer
 volume overflow, raw/calculation provenance, deadline cleanup, exact `1d` CLI
 routing, zero provider attempts, and a read-only disposable-root smoke.
+
+## Issue #187 successor crosswalk
+
+`current-supplied-cohort-research-packet@v5` and the explicit
+`market-data research-current --contract-version v2` path are additive current
+research successors. They do not alter this preview's request, response, reader,
+or retained bytes.

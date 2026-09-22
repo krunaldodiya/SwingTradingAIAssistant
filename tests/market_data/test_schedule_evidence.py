@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -415,6 +416,48 @@ def test_atomic_link_failure_is_sanitized_and_leaves_no_final_object(
         _close(lease)
 
 
+def test_unexpected_retain_fault_propagates_after_publication_cleanup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store, lease = _store(tmp_path)
+    failure = ValueError("synthetic implementation fault")
+    try:
+        monkeypatch.setattr(
+            schedule_module.os,
+            "write",
+            lambda *_args: (_ for _ in ()).throw(failure),
+        )
+        with pytest.raises(ValueError) as raised:
+            store.retain(_schedule())
+        assert raised.value is failure
+        assert not list(tmp_path.rglob("*.json"))
+        assert not list(tmp_path.rglob(".schedule-*.tmp"))
+    finally:
+        _close(lease)
+
+
+def test_unexpected_resolve_fault_does_not_fabricate_schedule_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    schedule = _schedule()
+    store, lease = _store(tmp_path)
+    try:
+        retained = store.retain(schedule)
+        assert retained.digest is not None
+        monkeypatch.setattr(
+            schedule_module,
+            "_read_existing",
+            lambda *_args: (_ for _ in ()).throw(KeyError()),
+        )
+        with pytest.raises(KeyError):
+            store.resolve(retained.digest)
+        assert _path(
+            tmp_path, retained.digest
+        ).read_bytes() == canonical_schedule_bytes(schedule)
+    finally:
+        _close(lease)
+
+
 def test_lease_closure_before_publication_fails_closed_without_final_object(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -511,3 +554,210 @@ def test_serialization_has_only_approved_top_level_and_session_fields() -> None:
         "close_at",
         "kind",
     }
+
+
+def test_resolve_preserves_primary_fault_when_descriptor_close_also_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store, lease = _store(tmp_path)
+    failure = ValueError()
+    descriptors: list[int] = []
+    real_close = schedule_module.os.close
+
+    def fail_resolve(_operation: object, parent_fd: int, *_args: object) -> None:
+        descriptors.append(parent_fd)
+        raise failure
+
+    def close_then_fail(descriptor: int) -> None:
+        real_close(descriptor)
+        if descriptor in descriptors:
+            raise OSError()
+
+    try:
+        retained = store.retain(_schedule())
+        assert retained.digest is not None
+        with monkeypatch.context() as scoped:
+            scoped.setattr(schedule_module, "_resolve_in_parent", fail_resolve)
+            scoped.setattr(schedule_module.os, "close", close_then_fail)
+            with pytest.raises(ValueError) as raised:
+                store.resolve(retained.digest)
+            assert raised.value is failure
+        assert len(descriptors) == 1
+        with pytest.raises(OSError):
+            schedule_module.os.fstat(descriptors[0])
+    finally:
+        lease.close()
+
+
+def test_calendar_classification_propagates_computation_fault(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    schedule = _schedule(
+        schema_version=SCHEDULE_SCHEMA_VERSION_V3,
+        covered_to=date(2026, 1, 2),
+        sessions=(
+            _session(
+                trade_date=date(2026, 1, 1),
+                open_at=datetime(2026, 1, 1, 3, 45, tzinfo=UTC),
+                close_at=datetime(2026, 1, 1, 10, tzinfo=UTC),
+                kind="REGULAR",
+            ),
+            _session(kind="REGULAR"),
+        ),
+    )
+    failure = RuntimeError("private/path/token")
+
+    def fail_increment(**_kwargs: object) -> None:
+        raise failure
+
+    monkeypatch.setattr(schedule_module, "timedelta", fail_increment)
+    with pytest.raises(RuntimeError) as raised:
+        schedule_module.schedule_covers_full_calendar_range(
+            schedule, schedule.covered_from, schedule.covered_to
+        )
+    assert raised.value is failure
+
+
+@pytest.mark.parametrize("error_type", (OSError, AssertionError))
+def test_publication_cleanup_failure_cannot_report_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error_type: type[Exception]
+) -> None:
+    store, lease = _store(tmp_path)
+    schedule = _schedule()
+    failure = error_type("temporary unlink fault")
+    cleanup_started = False
+    real_unlink = os.unlink
+    real_fsync = os.fsync
+
+    def fail_unlink(path: str | Path, *, dir_fd: int | None = None) -> None:
+        nonlocal cleanup_started
+        if str(path).startswith(".schedule-"):
+            cleanup_started = True
+            raise failure
+        real_unlink(path, dir_fd=dir_fd)
+
+    def fail_cleanup_sync(descriptor: int) -> None:
+        if cleanup_started:
+            raise KeyError("secondary cleanup sync fault")
+        real_fsync(descriptor)
+
+    with lease:
+        with monkeypatch.context() as scoped:
+            scoped.setattr(os, "unlink", fail_unlink)
+            scoped.setattr(os, "fsync", fail_cleanup_sync)
+            if error_type is OSError:
+                assert store.retain(schedule).outcome is ScheduleOutcome.FAILED
+            else:
+                with pytest.raises(AssertionError) as caught:
+                    store.retain(schedule)
+                assert caught.value is failure
+        assert _path(tmp_path, schedule_digest(schedule)).read_bytes() == (
+            canonical_schedule_bytes(schedule)
+        )
+
+
+def test_open_parent_keeps_recycled_descriptor_open_after_close_fault(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, lease = _store(tmp_path)
+    primary = AssertionError("post-close parent traversal fault")
+    replacement: int | None = None
+    child_descriptors: list[int] = []
+    target: int | None = None
+    real_dup = schedule_module.os.dup
+    real_open = schedule_module.os.open
+    real_close = schedule_module.os.close
+
+    def track_dup(descriptor: int) -> int:
+        nonlocal target
+        target = real_dup(descriptor)
+        return target
+
+    def track_open(
+        path: str,
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        descriptor = real_open(path, flags, mode, dir_fd=dir_fd)
+        if path in ("calendar-schedules", "sha256"):
+            child_descriptors.append(descriptor)
+        return descriptor
+
+    def release_then_fail(descriptor: int) -> None:
+        nonlocal replacement
+        if descriptor == target and replacement is None:
+            real_close(descriptor)
+            replacement = real_open(os.devnull, os.O_RDONLY)
+            assert replacement == descriptor
+            raise primary
+        real_close(descriptor)
+
+    try:
+        with lease, lease.root_operation(tmp_path) as operation:
+            with monkeypatch.context() as scoped:
+                scoped.setattr(schedule_module.os, "dup", track_dup)
+                scoped.setattr(schedule_module.os, "open", track_open)
+                scoped.setattr(schedule_module.os, "close", release_then_fail)
+                with pytest.raises(AssertionError) as raised:
+                    schedule_module._open_parent(operation, create=True)
+                assert raised.value is primary
+            assert replacement is not None
+            os.fstat(replacement)
+            assert child_descriptors
+            for descriptor in child_descriptors:
+                with pytest.raises(OSError):
+                    os.fstat(descriptor)
+    finally:
+        if replacement is not None:
+            with contextlib.suppress(OSError):
+                os.close(replacement)
+
+
+def test_schedule_publication_keeps_recycled_descriptor_open_after_close_fault(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store, lease = _store(tmp_path)
+    primary = AssertionError("post-close publication fault")
+    replacement: int | None = None
+    target: int | None = None
+    real_open = schedule_module.os.open
+    real_close = schedule_module.os.close
+
+    def track_open(
+        path: str,
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        nonlocal target
+        descriptor = real_open(path, flags, mode, dir_fd=dir_fd)
+        if path.startswith(".schedule-"):
+            target = descriptor
+        return descriptor
+
+    def release_then_fail(descriptor: int) -> None:
+        nonlocal replacement
+        if descriptor == target and replacement is None:
+            real_close(descriptor)
+            replacement = real_open(os.devnull, os.O_RDONLY)
+            assert replacement == descriptor
+            raise primary
+        real_close(descriptor)
+
+    try:
+        with lease, monkeypatch.context() as scoped:
+            scoped.setattr(schedule_module.os, "open", track_open)
+            scoped.setattr(schedule_module.os, "close", release_then_fail)
+            with pytest.raises(AssertionError) as raised:
+                store.retain(_schedule())
+            assert raised.value is primary
+        assert replacement is not None
+        os.fstat(replacement)
+        assert not list(tmp_path.rglob(".schedule-*.tmp"))
+    finally:
+        if replacement is not None:
+            with contextlib.suppress(OSError):
+                os.close(replacement)

@@ -19,16 +19,15 @@ from typing import Any, cast
 
 import pytest
 
-import swing_trading_ai_assistant.price_action as price_action_package
 import swing_trading_ai_assistant.price_action.current_live as current_live
-import swing_trading_ai_assistant.price_action.current_same_pass as same_pass
+import swing_trading_ai_assistant.price_action.current_same_pass_v4 as same_pass
 from swing_trading_ai_assistant.market_structure.current_live import (
     MarketStructureEventV1,
     MarketStructurePivotV1,
     current_market_structure_identity_sha256_v1,
 )
-from swing_trading_ai_assistant.market_structure.current_same_pass import (
-    evaluate_current_same_pass_market_structure_v1,
+from swing_trading_ai_assistant.market_structure.current_same_pass_v4 import (
+    evaluate_current_same_pass_market_structure_v4,
 )
 from swing_trading_ai_assistant.price_action.current_live import (
     CurrentPriceActionMemberV1,
@@ -37,13 +36,13 @@ from swing_trading_ai_assistant.price_action.current_live import (
 )
 
 
-def _v3_fixture_module() -> Any:
+def _v4_fixture_module() -> Any:
     path = (
         Path(__file__).parents[1]
         / "market_regime"
-        / "test_current_supplied_cohort_v3.py"
+        / "test_current_supplied_cohort_v4.py"
     )
-    name = "price_action_current_supplied_cohort_v3_fixture"
+    name = "price_action_current_supplied_cohort_v4_fixture"
     spec = util.spec_from_file_location(name, path)
     assert spec is not None and spec.loader is not None
     module = util.module_from_spec(spec)
@@ -58,7 +57,7 @@ def _exact_context(
     **fixture_kwargs: Any,
 ) -> tuple[Any, Any]:
     tmp_path.mkdir(parents=True, exist_ok=True)
-    fixture = _v3_fixture_module()
+    fixture = _v4_fixture_module()
     capture: dict[str, Any] = {}
     fixture.test_outer_composition_retains_real_context_and_archive_files(
         tmp_path,
@@ -71,7 +70,7 @@ def _exact_context(
 
 
 def _expected_market_structure(context: Any) -> Any:
-    return evaluate_current_same_pass_market_structure_v1(
+    return evaluate_current_same_pass_market_structure_v4(
         context.request,
         context.raw_result,
         context.corporate_action_screen,
@@ -79,7 +78,7 @@ def _expected_market_structure(context: Any) -> Any:
 
 
 def _evaluate(context: Any) -> Any:
-    return same_pass.evaluate_current_same_pass_price_action_v1(
+    return same_pass.evaluate_current_same_pass_price_action_v4(
         context.request,
         context.raw_result,
         context.corporate_action_screen,
@@ -155,7 +154,7 @@ def test_asymmetric_down_candle_and_prior_close_relations_are_exact(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     context, fixture = _exact_context(tmp_path, monkeypatch)
-    raw_test = fixture._fixture_module("test_current_same_pass_daily")
+    raw_test = fixture._fixture_module("test_current_same_pass_daily_v4")
     assert context.raw_result.raw_grid is not None
     grid = context.raw_result.raw_grid
     previous = raw_test._rehashed(
@@ -189,11 +188,11 @@ def test_asymmetric_down_candle_and_prior_close_relations_are_exact(
         raw_grid=changed_grid,
     )
 
-    report = same_pass.evaluate_current_same_pass_price_action_v1(
+    report = same_pass.evaluate_current_same_pass_price_action_v4(
         context.request,
         changed_raw,
         context.corporate_action_screen,
-        evaluate_current_same_pass_market_structure_v1(
+        evaluate_current_same_pass_market_structure_v4(
             context.request,
             changed_raw,
             context.corporate_action_screen,
@@ -225,7 +224,7 @@ def test_asymmetric_up_candle_uses_maximum_and_minimum_body_edges(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     context, fixture = _exact_context(tmp_path, monkeypatch)
-    raw_test = fixture._fixture_module("test_current_same_pass_daily")
+    raw_test = fixture._fixture_module("test_current_same_pass_daily_v4")
     assert context.raw_result.raw_grid is not None
     grid = context.raw_result.raw_grid
     previous = raw_test._rehashed(
@@ -259,11 +258,11 @@ def test_asymmetric_up_candle_uses_maximum_and_minimum_body_edges(
         raw_grid=changed_grid,
     )
 
-    report = same_pass.evaluate_current_same_pass_price_action_v1(
+    report = same_pass.evaluate_current_same_pass_price_action_v4(
         context.request,
         changed_raw,
         context.corporate_action_screen,
-        evaluate_current_same_pass_market_structure_v1(
+        evaluate_current_same_pass_market_structure_v4(
             context.request,
             changed_raw,
             context.corporate_action_screen,
@@ -295,7 +294,7 @@ def test_flat_and_equality_facts_remain_observed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     context, fixture = _exact_context(tmp_path, monkeypatch)
-    raw_test = fixture._fixture_module("test_current_same_pass_daily")
+    raw_test = fixture._fixture_module("test_current_same_pass_daily_v4")
     assert context.raw_result.raw_grid is not None
     grid = context.raw_result.raw_grid
     flat_bar = raw_test._rehashed(
@@ -316,11 +315,11 @@ def test_flat_and_equality_facts_remain_observed(
         "raw_result_identity_sha256",
         raw_grid=flat_grid,
     )
-    report = same_pass.evaluate_current_same_pass_price_action_v1(
+    report = same_pass.evaluate_current_same_pass_price_action_v4(
         context.request,
         flat_raw,
         context.corporate_action_screen,
-        evaluate_current_same_pass_market_structure_v1(
+        evaluate_current_same_pass_market_structure_v4(
             context.request, flat_raw, context.corporate_action_screen
         ),
     )
@@ -380,7 +379,7 @@ def test_zero_and_limit_plus_one_cohorts_are_rejected(
         invalid = deepcopy(context.request)
         object.__setattr__(invalid, "members", members)
         with pytest.raises(ValueError):
-            same_pass.evaluate_current_same_pass_price_action_v1(
+            same_pass.evaluate_current_same_pass_price_action_v4(
                 invalid,
                 context.raw_result,
                 context.corporate_action_screen,
@@ -497,7 +496,7 @@ def test_exact_market_structure_is_required_and_natural_insufficiency_is_admissi
     context, _ = _exact_context(tmp_path, monkeypatch)
     exact = _expected_market_structure(context)
 
-    report = same_pass.evaluate_current_same_pass_price_action_v1(
+    report = same_pass.evaluate_current_same_pass_price_action_v4(
         context.request,
         context.raw_result,
         context.corporate_action_screen,
@@ -519,7 +518,7 @@ def test_nonidentical_market_structure_returns_no_member_facts(
     object.__setattr__(substituted, "runtime_code_identity_sha256", "0" * 64)
     substituted.__post_init__()
 
-    report = same_pass.evaluate_current_same_pass_price_action_v1(
+    report = same_pass.evaluate_current_same_pass_price_action_v4(
         context.request,
         context.raw_result,
         context.corporate_action_screen,
@@ -551,7 +550,7 @@ def test_hostile_supplied_market_structure_is_rejected_without_callback(
     object.__setattr__(hostile, "evidence_state", CallerScalar())
 
     with pytest.raises(ValueError, match="Price Action caller objects"):
-        same_pass.evaluate_current_same_pass_price_action_v1(
+        same_pass.evaluate_current_same_pass_price_action_v4(
             context.request,
             context.raw_result,
             context.corporate_action_screen,
@@ -571,7 +570,7 @@ def test_combined_upstream_and_market_structure_mismatch_reasons_are_ordered(
         expected_effects=("raw-mapping", "screen"),
         expect_archive_failure=True,
     )
-    raw_test = fixture._fixture_module("test_current_same_pass_daily")
+    raw_test = fixture._fixture_module("test_current_same_pass_daily_v4")
     raw = raw_test._rehashed(
         type(context.raw_result),
         context.raw_result,
@@ -581,14 +580,14 @@ def test_combined_upstream_and_market_structure_mismatch_reasons_are_ordered(
         reasons=("RAW_BAR_MISSING",),
     )
     supplied = deepcopy(
-        evaluate_current_same_pass_market_structure_v1(
+        evaluate_current_same_pass_market_structure_v4(
             context.request, raw, context.corporate_action_screen
         )
     )
     object.__setattr__(supplied, "runtime_code_identity_sha256", "0" * 64)
     supplied.__post_init__()
 
-    report = same_pass.evaluate_current_same_pass_price_action_v1(
+    report = same_pass.evaluate_current_same_pass_price_action_v4(
         context.request, raw, context.corporate_action_screen, supplied
     )
 
@@ -605,7 +604,7 @@ def test_upstream_insufficiency_maps_to_closed_precedence_without_partial_output
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     context, fixture = _exact_context(tmp_path, monkeypatch)
-    raw_test = fixture._fixture_module("test_current_same_pass_daily")
+    raw_test = fixture._fixture_module("test_current_same_pass_daily_v4")
     raw = raw_test._rehashed(
         type(context.raw_result),
         context.raw_result,
@@ -614,13 +613,13 @@ def test_upstream_insufficiency_maps_to_closed_precedence_without_partial_output
         raw_grid=None,
         reasons=("RAW_BAR_MISSING",),
     )
-    expected = evaluate_current_same_pass_market_structure_v1(
+    expected = evaluate_current_same_pass_market_structure_v4(
         context.request,
         raw,
         context.corporate_action_screen,
     )
 
-    report = same_pass.evaluate_current_same_pass_price_action_v1(
+    report = same_pass.evaluate_current_same_pass_price_action_v4(
         context.request,
         raw,
         context.corporate_action_screen,
@@ -685,7 +684,7 @@ def test_boundary_rejects_malformed_and_hostile_caller_values() -> None:
             raise RuntimeError("caller code must not run")
 
     with pytest.raises(ValueError):
-        same_pass.evaluate_current_same_pass_price_action_v1(
+        same_pass.evaluate_current_same_pass_price_action_v4(
             cast(Any, CallerValue()),
             cast(Any, object()),
             cast(Any, object()),
@@ -718,11 +717,11 @@ def test_hostile_nested_iterable_and_unbounded_decimal_stop_before_delegate(
 
     monkeypatch.setattr(
         same_pass,
-        "evaluate_current_same_pass_market_structure_v1",
+        "evaluate_current_same_pass_market_structure_v4",
         forbidden_delegate,
     )
     with pytest.raises(ValueError, match="caller objects"):
-        same_pass.evaluate_current_same_pass_price_action_v1(
+        same_pass.evaluate_current_same_pass_price_action_v4(
             context.request,
             invalid,
             context.corporate_action_screen,
@@ -735,7 +734,7 @@ def test_hostile_nested_iterable_and_unbounded_decimal_stop_before_delegate(
     assert unbounded.raw_grid is not None
     object.__setattr__(unbounded.raw_grid.bars[-1], "open", Decimal("1e1000000"))
     with pytest.raises(ValueError, match="caller objects"):
-        same_pass.evaluate_current_same_pass_price_action_v1(
+        same_pass.evaluate_current_same_pass_price_action_v4(
             context.request,
             unbounded,
             context.corporate_action_screen,
@@ -749,7 +748,7 @@ def test_hostile_nested_iterable_and_unbounded_decimal_stop_before_delegate(
         huge_coefficient.raw_grid.bars[-1], "open", Decimal("1" * 100_000)
     )
     with pytest.raises(ValueError, match="caller objects"):
-        same_pass.evaluate_current_same_pass_price_action_v1(
+        same_pass.evaluate_current_same_pass_price_action_v4(
             context.request,
             huge_coefficient,
             context.corporate_action_screen,
@@ -765,7 +764,7 @@ def test_hostile_nested_iterable_and_unbounded_decimal_stop_before_delegate(
     object.__setattr__(current, "low", Decimal("1e-128"))
     object.__setattr__(current, "close", Decimal("1e-128"))
     with pytest.raises(ValueError, match="caller objects"):
-        same_pass.evaluate_current_same_pass_price_action_v1(
+        same_pass.evaluate_current_same_pass_price_action_v4(
             context.request,
             cross_exponent,
             context.corporate_action_screen,
@@ -777,7 +776,7 @@ def test_hostile_nested_iterable_and_unbounded_decimal_stop_before_delegate(
     member = oversized_text.members[0]
     object.__setattr__(member, "effective_symbol", "é" * 4_097)
     with pytest.raises(ValueError, match="caller objects"):
-        same_pass.evaluate_current_same_pass_price_action_v1(
+        same_pass.evaluate_current_same_pass_price_action_v4(
             oversized_text,
             context.raw_result,
             context.corporate_action_screen,
@@ -800,7 +799,7 @@ def test_hostile_nested_iterable_and_unbounded_decimal_stop_before_delegate(
         datetime(2026, 8, 31, tzinfo=CallerTimezone()),
     )
     with pytest.raises(ValueError, match="caller objects"):
-        same_pass.evaluate_current_same_pass_price_action_v1(
+        same_pass.evaluate_current_same_pass_price_action_v4(
             hostile_time,
             context.raw_result,
             context.corporate_action_screen,
@@ -1008,10 +1007,10 @@ def test_public_boundary_accepts_exact_pivot_event_bounds_and_rejects_overflow(
     with monkeypatch.context() as isolated:
         isolated.setattr(
             same_pass,
-            "evaluate_current_same_pass_market_structure_v1",
+            "evaluate_current_same_pass_market_structure_v4",
             exact_delegate,
         )
-        observed = same_pass.evaluate_current_same_pass_price_action_v1(
+        observed = same_pass.evaluate_current_same_pass_price_action_v4(
             context.request,
             context.raw_result,
             context.corporate_action_screen,
@@ -1036,7 +1035,7 @@ def test_public_boundary_accepts_exact_pivot_event_bounds_and_rejects_overflow(
             ),
         )
         with pytest.raises(ValueError, match="caller objects"):
-            same_pass.evaluate_current_same_pass_price_action_v1(
+            same_pass.evaluate_current_same_pass_price_action_v4(
                 context.request,
                 context.raw_result,
                 context.corporate_action_screen,
@@ -1059,7 +1058,7 @@ def test_public_boundary_accepts_exact_pivot_event_bounds_and_rejects_overflow(
             ),
         )
         with pytest.raises(ValueError, match="caller objects"):
-            same_pass.evaluate_current_same_pass_price_action_v1(
+            same_pass.evaluate_current_same_pass_price_action_v4(
                 context.request,
                 context.raw_result,
                 context.corporate_action_screen,
@@ -1082,7 +1081,7 @@ def test_interrupted_delegate_leaves_no_cross_call_state(
 
         isolated.setattr(
             same_pass,
-            "evaluate_current_same_pass_market_structure_v1",
+            "evaluate_current_same_pass_market_structure_v4",
             interrupted,
         )
         with pytest.raises(RuntimeError, match="injected interruption"):
@@ -1140,7 +1139,7 @@ def test_partial_current_session_is_metamorphically_ignored(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     context, fixture = _exact_context(tmp_path, monkeypatch, include_partial=True)
-    raw_test = fixture._fixture_module("test_current_same_pass_daily")
+    raw_test = fixture._fixture_module("test_current_same_pass_daily_v4")
     unavailable_partial = raw_test.raw_daily._partial_failure(
         context.request, "PARTIAL_SOURCE_UNAVAILABLE"
     )
@@ -1151,11 +1150,11 @@ def test_partial_current_session_is_metamorphically_ignored(
         partial_current_session=unavailable_partial,
     )
     observed = _evaluate(context)
-    unavailable = same_pass.evaluate_current_same_pass_price_action_v1(
+    unavailable = same_pass.evaluate_current_same_pass_price_action_v4(
         context.request,
         unavailable_raw,
         context.corporate_action_screen,
-        evaluate_current_same_pass_market_structure_v1(
+        evaluate_current_same_pass_market_structure_v4(
             context.request,
             unavailable_raw,
             context.corporate_action_screen,
@@ -1170,7 +1169,7 @@ def test_report_constructor_and_evaluator_effect_boundary(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     context, fixture = _exact_context(tmp_path, monkeypatch)
-    raw_test = fixture._fixture_module("test_current_same_pass_daily")
+    raw_test = fixture._fixture_module("test_current_same_pass_daily_v4")
 
     def forbidden(*arguments: object, **keywords: object) -> None:
         del arguments, keywords
@@ -1178,36 +1177,32 @@ def test_report_constructor_and_evaluator_effect_boundary(
 
     with pytest.raises(ValueError, match="exact evidence boundary"):
         CurrentPriceActionReportV1()
-    monkeypatch.setattr(
-        raw_test.raw_daily._DefaultCurrentSamePassRawEvidencePortV1,
-        "download_under_lease",
-        forbidden,
-    )
-    monkeypatch.setattr(Path, "open", forbidden)
-    monkeypatch.setattr(Path, "read_bytes", forbidden)
-    monkeypatch.setattr(raw_test.raw_daily, "ZoneInfo", forbidden)
-    monkeypatch.setattr(os, "getenv", forbidden)
-    monkeypatch.setattr(type(os.environ), "__getitem__", forbidden)
-    monkeypatch.setattr(socket, "create_connection", forbidden)
-    monkeypatch.setattr(socket, "getaddrinfo", forbidden)
-    monkeypatch.setattr(socket, "socket", forbidden)
-    monkeypatch.setattr(subprocess, "Popen", forbidden)
-    monkeypatch.setattr(subprocess, "run", forbidden)
-    monkeypatch.setattr(time, "monotonic", forbidden)
-    monkeypatch.setattr(time, "time", forbidden)
+    # Restore process-wide guards before pytest performs reporting and cleanup.
+    with monkeypatch.context() as effect_guard:
+        effect_guard.setattr(
+            raw_test.raw_daily._DefaultCurrentSamePassRawEvidencePortV1,
+            "download_under_lease",
+            forbidden,
+        )
+        effect_guard.setattr(Path, "open", forbidden)
+        effect_guard.setattr(Path, "read_bytes", forbidden)
+        effect_guard.setattr(raw_test.raw_daily, "ZoneInfo", forbidden)
+        effect_guard.setattr(os, "getenv", forbidden)
+        effect_guard.setattr(type(os.environ), "__getitem__", forbidden)
+        effect_guard.setattr(socket, "create_connection", forbidden)
+        effect_guard.setattr(socket, "getaddrinfo", forbidden)
+        effect_guard.setattr(socket, "socket", forbidden)
+        effect_guard.setattr(subprocess, "Popen", forbidden)
+        effect_guard.setattr(subprocess, "run", forbidden)
+        effect_guard.setattr(time, "monotonic", forbidden)
+        effect_guard.setattr(time, "time", forbidden)
 
-    assert _evaluate(context).evidence_state == "OBSERVED"
+        assert _evaluate(context).evidence_state == "OBSERVED"
 
 
 def test_public_exports_and_runtime_substitution_fail_closed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    assert price_action_package.__all__ == [
-        "CurrentPriceActionMemberV1",
-        "CurrentPriceActionReportV1",
-        "evaluate_current_same_pass_price_action_v1",
-    ]
-
     def substituted_runtime_source(*arguments: object, **keywords: object) -> str:
         del arguments, keywords
         return "0" * 64

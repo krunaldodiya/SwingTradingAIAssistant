@@ -1,5 +1,150 @@
 # Capture-forward adjusted OHLCV evidence contract
 
+> Successor work (2026-09-10):
+> [Issue #184](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/184)
+> and [#183](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/183)
+> govern the BharatStock V3 and member-isolation path below.
+> The later Yahoo-specific contract and delivery evidence are historical;
+> their immutable data, labels and supported readers are not reinterpreted.
+> The [accepted as-provided decision](../roadmap.md#accepted-as-provided-ohlcv-decision-and-member-isolation)
+> replaces the provider-clarification wait for source-preserving implementation.
+> Historical evidence and independent review/release requirements remain intact.
+
+## BharatStock capture V3 and independent facts
+
+`bharatstock-capture@v3` accepts an ordered list of 1–100 explicit
+ISIN/exchange/effective-symbol identities and 1–366 completed NSE sessions.
+It verifies the exact retained official schedule, runtime source identity,
+configuration, cutoff, and selection identity before provider effects.
+The provider is `bharatstock-api@v1`. It preserves supplied OHLCV with basis
+`BHARATSTOCK_SOURCE_REPORTED_OHLC`. The owner has
+[retired optional factor application](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/184#issuecomment-5623802210);
+current processing never applies the reported factor to OHLC or volume.
+Volume is unchanged and labelled `SOURCE_REPORTED`. Original prices and
+optional adjustment fields are retained separately. Fixed source-preserving
+semantics bind request identity, reuse, recovery, correction-parent matching
+and downstream facts. Strict predecessor readers retain their original
+interpretation without exposing an active adjustment option. No hourly
+reconstruction, filling, fallback, total-return claim or fabricated historical
+publication time is permitted.
+
+Every requested member has exactly one result: `OBSERVED`,
+`INSUFFICIENT_EVIDENCE` with its local reason, or `NOT_ATTEMPTED` after the
+recorded shared failure. The original ordered selection identity remains
+separate from actual evidence coverage. Invalid local history does not discard
+another member's valid history. Authentication, authorization, quota,
+runtime/source, schedule and storage boundaries remain shared; unexpected
+software exceptions are not disguised as missing stock evidence.
+
+The immutable namespace is `bharatstock-capture-v3`, with separate prepared,
+revision and exact-request admission records beneath a held private root.
+Exact reuse precedes transport. Interrupted publication recovers validated
+prepared bytes without downloading again. Corrections name an admitted parent,
+preserve the old revision, and produce a new immutable identity only for changed
+material member evidence. Conflicting, unadmitted or unsafe files fail closed.
+The acquisition deadline is checked before client creation, each member and
+each prepared/revision/request publication, including prepared recovery.
+Expiry stops the next publication and prevents a completed-invocation claim;
+already valid retained bytes are not rewritten. Synchronous work is not claimed
+to be forcibly cancelled. No automatic provider retries are introduced by recovery.
+
+Request-pointer resolution binds both the exact request and the named
+revision's self-identity. Each held child directory revalidates its complete
+canonical ancestry to the leased root; an intermediate namespace replacement
+invalidates the operation. Known immutable read, prepare and publication
+conflicts, root-authority loss and lease-cleanup failures produce governed
+storage or schedule failures, not unclassified exceptions. This applies to
+capture, exact reads and official-selection retention/reuse. Malformed retained
+decimal values are unavailable evidence rather than internal decimal errors.
+Unexpected provider/software defects still propagate without being masked by
+cleanup failures.
+Directory and publication scopes share one primary-preserving cleanup policy.
+The active scope's exception, including cancellation, remains primary; an
+already-handled outer exception is not an active failure. Unexpected standalone
+file or directory cleanup failures remain observable execution failures rather
+than unavailable-evidence claims. Ownership is relinquished before close, and
+released descriptors are never retried. Disappearance of an already-open
+publication is a conflict, not permission to recreate it.
+
+The canonical revision budget is 8 MiB, including serialization and its final
+newline. Fresh capture checks the same limit as read/recovery before any
+prepared or admission publication. Oversized evidence returns
+`INSUFFICIENT_EVIDENCE / REVISION_TOO_LARGE`; prices are not rounded and members
+are not silently dropped to fit the budget.
+
+Fresh and prepared corrections enforce the exact reader's resulting-chain
+limits: at most 64 revisions, an admitted matching parent and nondecreasing
+observation time. Both admission paths also require materially changed
+evidence. A child of a 64-revision parent chain is rejected before transport or publication with
+`INSUFFICIENT_EVIDENCE / CORRECTION_LINEAGE_LIMIT`. An earlier child observation
+returns `CORRECTION_OBSERVATION_ORDER`; unchanged evidence retains
+`CORRECTION_CONTENT_UNCHANGED` precedence. Prepared recovery applies these same
+checks before admission and does not consume provider calls.
+
+Research identities serialize exact Decimal values compactly, including
+scientific notation where appropriate. A compact optional adjustment exponent
+must not expand into an unbounded fixed-point string during research; no source
+value is rounded, clipped or applied to OHLC to enforce this resource boundary.
+
+The bounded read-only predecessor reader preserves exact V2 bytes and labels;
+it cannot write new V2 evidence or reinterpret V2 as the new source mode.
+The current #186 writer also preserves the exact pre-change V3 reader identity
+`bcda597760ea97f8a0762845e32ef8fe4532a1b93dfd4876cf0df418b88bd49d`
+from PR #185. That read-only admission is not an active-writer whitelist:
+current capture and request-entry paths require current runtime identity.
+An explicitly borrowed exact-root lease remains caller-owned across capture
+and exact reads; mismatched or lost root authority fails before acquisition.
+
+The not-yet-released
+[#186 single-stock command](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/186)
+composes this capture with calendar-only evidence and retained BOD mapping.
+Its separate result/receipt contract does not replace the capture schema,
+relabel historical evidence or claim the remaining #172 integrations are done.
+
+`build_bharatstock_research_packet_v1` consumes an admitted retained revision.
+Owner-private independent facts use its one consistent selected price basis: Price Action
+requires the latest two completed supplied sessions; Market Structure requires
+the latest 21. Missing history for one feature must not erase an independently
+valid fact for another. Each feature must expose its own evidence state/reason.
+Shared deterministic mathematics must use neutral price/source inputs, never
+forge an Upstox raw-grid envelope from adjusted prices.
+
+Requested, observed, insufficient and unattempted membership remains explicit.
+Whole-list breadth, regime, Industry and other dependent conclusions retain
+their original denominators and evidence prerequisites; coverage is not a
+confidence score. Sanitized CLI output exposes only governed aggregate status
+and revision handles. Member identities, prices, source payloads and detailed
+facts stay owner-private.
+
+The generic downloader's Parquet output is not automatic Plan30 admission.
+The old Yahoo readers and Plan29 projections stay separate. The historical
+qualification and original provider approvals below do not qualify V2.
+The current #184/#183 implementation was delivered through PR #185 on
+September 11, 2026; the linked Issues own its exact review and verification
+receipt. That delivery does not qualify the separate historical source basis.
+
+## Single-stock public composition successor — Issue 186
+
+[#186](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/186), not
+yet released, composes this capture/reader and existing feature-local Price
+Action builder after automatic calendar and canonical mapping preparation.
+It does not reinterpret the original private capture CLI as a fact-disclosure
+surface. Its separately versioned result permits only the bounded derived fact,
+canonical requested identity, source/basis, times, exact evidence identities and
+scoped status; raw bars, source payloads, account data and private paths remain
+excluded.
+
+Warm reuse must resolve and validate exact immutable evidence before provider
+access. Refresh preserves the earlier observation and acquires a new minimal
+two-session window; it does not claim suffix-only incremental acquisition.
+The new public composition must preserve exact pre-change V3 and predecessor V2
+reads, current-writer admission, private root authority and cleanup precedence.
+Borrowing a caller-held lease must never transfer ownership or close that lease.
+The [frozen child contract](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/186#issuecomment-5631150055)
+owns its new clocks, bounded lookup and adversarial acceptance.
+
+## Historical Yahoo contract and delivery
+
 **Status:** ACCEPTED — Sprint 17 / Issue #147
 **Parent:** Issue #139
 **Prerequisites:** Issues #120 and #122 closed/completed
@@ -18,10 +163,10 @@ clarification. These post-baseline bytes require fresh exact-byte review before
 merge and are not attributed to the baseline candidate review.
 
 This is a delivery-only provenance record. It authorizes no provider call or new
-temporal capture, does not relabel later-acquired values as historical
-point-in-time evidence, and does not close Issue #147. Its historical
-qualification remains open at `1/4`, with three future completed-session
-captures and unchanged Plan 29 still mandatory.
+temporal capture and does not relabel later-acquired values as historical
+point-in-time evidence. Issue #147 later retained all `4/4` predeclared
+completed-session captures, passed unchanged Plan 29 for `OHLCV_ONLY`, and
+closed/completed through PR #166.
 
 ## Decision and authority
 
@@ -163,7 +308,7 @@ The request is decoded, closed-field validated, bounded, canonicalized, and iden
 - contract and request identities;
 - exact sorted cohort and schedule identities;
 - decision session, official close, retrieval `known_at`, and decision cutoff;
-- provider `YAHOO_FINANCE`, exact yfinance library version, adapter/source identity, and fixed call-configuration identity;
+- provider `YAHOO_FINANCE`, exact yfinance library version, top-level module origin owned by the sole matching distribution under the running interpreter's resolved `purelib`/`platlib`, one allowlisted aggregate over every distribution-owned yfinance Python source, and every loaded yfinance module executed from its descriptor-admitted bytes without a second pathname read; adapter/source identity and fixed call-configuration identity remain separately bound;
 - `ADJUSTED_YFINANCE_RATIO` OHLC and `SOURCE_REPORTED_UNADJUSTED` volume bases;
 - for every member/session, finite positive decimal open/high/low/close and integral nonnegative volume;
 - `low <= min(open, close) <= max(open, close) <= high`;
@@ -209,7 +354,7 @@ A qualification request supplies 4–366 strictly increasing unique decision poi
 - exactly one retained capture revision whose decision session matches;
 - one protected region: `DEVELOPMENT`, `OUT_OF_SAMPLE`, `UNTOUCHED_TEST`, or `WALK_FORWARD`.
 
-All four regions are nonempty, contiguous, and appear exactly in that order. The exact cohort, mapping, source, pricing bases, schedule lineage, schema, and configuration must match across captures. Runtime identity may advance only through an explicitly supported compatible reader; every capture retains its writer identity. The composed evidence source and `runtime_code_identity_sha256` bind one current composer identity calculated from both the capture-forward composer runtime identity and the unchanged Plan 29 runtime identity; the Plan 29 request and report continue to bind the Plan 29 runtime identity itself.
+All four regions are nonempty, contiguous, and appear exactly in that order. The exact cohort, mapping, composed schedule source, pricing bases, schema, and configuration must match across captures. Daily composed-schedule releases MAY differ because each decision session retains its own exact acquisition; every capture's schedule identity, source, and release MUST be independently valid and the complete ordered per-capture schedule lineage MUST be bound into the composed source identity. Runtime identity may advance only through an explicitly supported compatible reader; every capture retains its writer identity. The composed evidence source and `runtime_code_identity_sha256` bind one current composer identity calculated from both the capture-forward composer runtime identity and the unchanged Plan 29 runtime identity; the Plan 29 request and report continue to bind the Plan 29 runtime identity itself.
 
 For each member and decision session the composer emits:
 
@@ -279,10 +424,10 @@ Public capture output is limited to a result code, contract version, source prof
 |---|---|---|
 | One valid member; complete adjusted OHLCV frame; completed session; retrieval before cutoff | immutable revision `CAPTURED`; exact read succeeds; public result redacted | no raw/adjusted mixing, extra provider call, private payload, or market claim |
 | Exact retry with existing identical full-request revision | byte-identical `REUSED`; same identities | no provider call, rewrite, timestamp refresh, mismatched-request reuse, or new lineage node |
-| Explicit correction request naming a currently admitted parent and returning changed provider content | new immutable revision linked to the exact parent; prepared recovery rechecks the parent | no overwrite, orphaned correction, hidden correction, or old-identity reuse |
+| Explicit correction request naming a currently admitted parent and returning changed provider content | new immutable revision linked to the exact parent, including a parent written by an explicitly compatible historical runtime; prepared recovery rechecks the parent; writer identity alone is not changed provider content | no overwrite, orphaned correction, hidden correction, old-identity reuse, or spurious correction caused only by a reader/writer upgrade |
 | Zero/51 members; 3/367 decision points; 3/367 window sessions; oversized/deep/noncanonical JSON | structural rejection / `request_invalid` | no lease, provider, store read, staging object, or report |
 | Session still open, non-session date, wrong official close, schedule/source/release substitution | exact insufficiency or structural rejection before publication | no partial-current bar, weekend inference, schedule fallback, or timestamp clipping |
-| Empty/provider exception/wrong yfinance version/wrong call metadata | typed insufficiency with provider identity checked before frame interpretation and store authority rechecked on exception | no retry, fallback, cache relabel, raw exception, swallowed authority failure, or write |
+| Empty/provider exception/wrong yfinance version or module origin/wrong call metadata | typed insufficiency with provider identity anchored to the running interpreter's resolved install roots and checked before descriptor-held module bytes execute and before frame interpretation, with store authority rechecked on exception | no execution of a `PYTHONPATH` package or metadata substitution, pathname re-read of admitted module bytes, retry, fallback, cache relabel, raw exception, swallowed authority failure, or write |
 | Wrong timezone; non-DataFrame; flat, inverted, reordered, or duplicate MultiIndex; duplicate/missing/extra/reordered session or ticker | exact schema or coverage reason; no revision | no column guessing, nearest-date selection, dedupe, or partial grid |
 | NaN/infinity/bool/zero/negative price; invalid OHLC envelope; negative/fractional volume | exact value reason; no revision | no rounding, repair, coercion, imputation, or dropped cell |
 | Retrieved after cutoff; historical session downloaded later and assigned earlier cutoff | blocked future-known evidence | no point-in-time relabel or cutoff widening |

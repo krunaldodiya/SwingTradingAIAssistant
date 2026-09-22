@@ -39,6 +39,7 @@ update those documents as well as the note.
 ## Notes index
 
 - [2026-09-22 — Next research-assistant priorities and Linux handoff](2026-09-22-next-sprint-and-linux-handoff.md)
+- [2026-09-21 — Current-workflow efficiency investigation](2026-09-21-current-workflow-efficiency.md)
 
 - [2026-08-10 — ARK-112 disposition and Sprint 3 scope exchange](2026-08-10-ark-112-disposition-and-scope-exchange.md)
 - [2026-08-09 — Provider, account, and execution connector separation](2026-08-09-provider-account-and-execution-connector-separation-hypothesis.md)
@@ -49,3 +50,5 @@ update those documents as well as the note.
 - [2026-08-08 — Swing-trading return and loss-exit risk decision](2026-08-08-swing-trading-return-and-loss-exit-risk-decision.md)
 - [2026-08-09 — Nifty 100 universe-expansion hypothesis](2026-08-09-nifty-100-universe-expansion-hypothesis.md)
 - [2026-08-09 — Precious-metals equity-hedge hypothesis](2026-08-09-precious-metals-equity-hedge-hypothesis.md)
+
+- [Live-first contract preservation crosswalk](2026-09-21-live-first-contract-crosswalk.md) — #172 named-plan dispositions and historical evidence boundaries; parent acceptance remains open.

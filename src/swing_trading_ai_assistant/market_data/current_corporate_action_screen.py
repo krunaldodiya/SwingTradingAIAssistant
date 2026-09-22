@@ -40,6 +40,7 @@ from .schedule_evidence import (
     ExpectedSessionSchedule,
     ScheduleEvidenceResult,
     ScheduleEvidenceStore,
+    ScheduleEvidenceValidationError,
     ScheduleOutcome,
     canonical_schedule_bytes,
     exact_nse_schedule_source_release_pair_v1,
@@ -1914,7 +1915,7 @@ def _admitted_schedule_result(
         return None
     try:
         canonical = canonical_schedule_bytes(result.schedule)
-    except ValueError:
+    except ScheduleEvidenceValidationError:
         return None
     if (
         canonical != result.canonical_bytes

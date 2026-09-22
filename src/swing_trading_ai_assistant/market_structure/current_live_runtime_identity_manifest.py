@@ -1,12 +1,12 @@
-"""Reviewed nonrecursive source map for current/live Market Structure V1."""
+"""Nonrecursive source map for current research and its exact raw boundaries."""
 
 from typing import Final
 
 CURRENT_MARKET_STRUCTURE_RUNTIME_SOURCE_DIGESTS_V1: Final = {
-    "src/swing_trading_ai_assistant/market_data/current_corporate_action_screen.py": "f3d866a662a8bb44eb04e57b8297c89cee7a2a9005cf0b37716fdf99261fe9b3",
-    "src/swing_trading_ai_assistant/market_data/current_same_pass_daily.py": "862f373452d332177d43a6eac2f40b134d6a7a485b8a397c688380ca7ca3c29e",
+    "src/swing_trading_ai_assistant/market_data/current_corporate_action_screen.py": "32f6d2b8b954ca64006308f6af7370fd6489614db172297d818cf2422b946724",
+    "src/swing_trading_ai_assistant/market_data/current_same_pass_daily_v4.py": "1a423896676eb4b983c58ca5035bf29f29156fefd3b982462168c5e6232ec402",
     "src/swing_trading_ai_assistant/market_data/runtime_source_verifier.py": "834fb3261a269b35e582d91b7c497be276bd102078bb9d71816fe2f77a4c721a",
-    "src/swing_trading_ai_assistant/market_structure/__init__.py": "44cd5c22184353ce56fa95cacd71765c5ff45cd8157581e3c747f79d903b1137",
-    "src/swing_trading_ai_assistant/market_structure/current_live.py": "72ce495bab7c554ad7e8532a078ab6d2537961599606870b1b7954a47ecc3ac0",
-    "src/swing_trading_ai_assistant/market_structure/current_same_pass.py": "d1577abe5b5396647088114cc2a4f0ac8112edb98fd1e55980aa5cd39cb709eb",
+    "src/swing_trading_ai_assistant/market_structure/__init__.py": "1093ff05781ca655e97a5758479367262d91fadf5192ef45ba54bcdbe85d50f9",
+    "src/swing_trading_ai_assistant/market_structure/current_live.py": "592cecf888eee4347cf9ff6c45f03705df27c557a3d6d21df51b8ea7fdf73c31",
+    "src/swing_trading_ai_assistant/market_structure/current_same_pass_v4.py": "d90ccbae4640c0ef542f68107278a77d11298fb6eb37fcf3f2d07f6ff45c7ce7",
 }

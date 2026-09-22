@@ -7,7 +7,14 @@ from types import SimpleNamespace
 
 import pytest
 
+import swing_trading_ai_assistant.market_data.partition_publication as publication_module
 import swing_trading_ai_assistant.market_data.range_ingestion as ingestion_module
+import swing_trading_ai_assistant.market_data.validation as validation_module
+from swing_trading_ai_assistant.market_data import cli
+from swing_trading_ai_assistant.market_data.catalog import (
+    CatalogPersistenceError,
+    DuckDBCatalog,
+)
 from swing_trading_ai_assistant.market_data.historical import (
     CancellationToken,
     HistoricalFetchCode,
@@ -72,6 +79,7 @@ from swing_trading_ai_assistant.market_data.storage_root_lease import (
     LeaseOutcome,
     LeaseResult,
     StorageRootLease,
+    StorageRootLeaseError,
 )
 
 
@@ -241,6 +249,9 @@ class _Catalog:
     def __exit__(self, *_args: object) -> None:
         return None
 
+    def get_manifest(self, _plan: PlannedInstrumentMonth) -> None:
+        return None
+
 
 class _ScheduleStore:
     def __init__(self, schedule: ExpectedSessionSchedule) -> None:
@@ -334,6 +345,63 @@ def _coordinator(
         recovery_observer_factory=observer_factory,  # type: ignore[arg-type]
         lifecycle_executor_factory=lifecycle_factory or PartitionIngestionExecutor,  # type: ignore[arg-type]
     )
+
+
+@pytest.mark.parametrize("stage", ("serialization", "retention", "recovery"))
+@pytest.mark.parametrize("caller_lease", (False, True))
+def test_internal_schedule_and_recovery_faults_escape_range_dispatch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stage: str,
+    caller_lease: bool,
+) -> None:
+    failure = ValueError("private-range-implementation-fault")
+    provider_calls: list[object] = []
+
+    def fail(*_args: object) -> None:
+        raise failure
+
+    def unexpected_provider() -> None:
+        provider_calls.append(object())
+        raise AssertionError("provider must not run after local failure")
+
+    def faulting_observer(**_kwargs: object) -> SimpleNamespace:
+        return SimpleNamespace(observe=fail)
+
+    command = IngestionCommand(
+        _instrument(),
+        date(2026, 1, 1),
+        date(2026, 1, 31),
+        "1m",
+        tmp_path,
+        _wide_schedule(),
+        "nse-equity-month@v1",
+    )
+    coordinator = _coordinator(
+        faulting_observer if stage == "recovery" else _request_observer,
+        session_factory=SimpleNamespace(open=unexpected_provider),
+    )
+    if stage == "serialization":
+        monkeypatch.setattr(ingestion_module, "canonical_schedule_bytes", fail)
+    elif stage == "retention":
+        monkeypatch.setattr(_ScheduleStore, "retain", fail)
+    lease = None
+    if caller_lease:
+        acquired = StorageRootLease.try_acquire(tmp_path)
+        assert acquired.outcome is LeaseOutcome.ACQUIRED
+        assert acquired.lease is not None
+        lease = acquired.lease
+    try:
+        with pytest.raises(ValueError) as raised:
+            if lease is None:
+                coordinator.run(command)
+            else:
+                coordinator.run_under_lease(command, lease)
+        assert raised.value is failure
+        assert provider_calls == []
+    finally:
+        if lease is not None:
+            lease.close()
 
 
 def test_unsupported_interval_is_typed_rejection_before_operational_dependencies(
@@ -977,6 +1045,157 @@ def test_session_open_errors_are_typed_sanitized_and_stop_later_plans(
     assert "secret" not in report.failure_code.value
 
 
+@pytest.mark.parametrize("shared_gate", (False, True))
+def test_default_unavailable_session_preserves_authentication_failure(
+    tmp_path: Path, shared_gate: bool
+) -> None:
+    coordinator = IngestionCoordinator(
+        session_factory=None,
+        lease_acquirer=_lease,
+        catalog_factory=lambda _root: _Catalog(),  # type: ignore[arg-type]
+        schedule_store_factory=lambda _root, _lease: _ScheduleStore(  # type: ignore[arg-type]
+            _wide_schedule()
+        ),
+        recovery_observer_factory=_request_observer,  # type: ignore[arg-type]
+        publication_gate=threading.RLock() if shared_gate else None,
+    )
+    command = IngestionCommand(
+        _instrument(),
+        date(2026, 1, 1),
+        date(2026, 2, 28),
+        "1m",
+        tmp_path,
+        _wide_schedule(),
+        "nse-equity-month@v1",
+        max_total_provider_attempts=2,
+    )
+    if shared_gate:
+        lease_result = StorageRootLease.try_acquire(tmp_path)
+        assert lease_result.lease is not None
+        with lease_result.lease as lease:
+            report = coordinator.run_under_lease(command, lease)
+    else:
+        report = coordinator.run(command)
+
+    assert report.outcome is IngestionRunOutcome.FAILED
+    assert report.failure_code is RunFailureCode.AUTHENTICATION_FAILED
+    assert report.provider_attempt_count == 0
+    assert tuple(result.outcome for result in report.results) == (
+        PartitionOutcome.NOT_ATTEMPTED,
+        PartitionOutcome.NOT_ATTEMPTED,
+    )
+
+
+@pytest.mark.parametrize(
+    "error_type",
+    (None, AssertionError, KeyError, RuntimeError, Exception, TypeError, ValueError),
+)
+def test_real_cli_session_factory_distinguishes_missing_credentials_from_faults(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error_type: type[Exception] | None
+) -> None:
+    environment_provider = cli.EnvironmentAccessTokenProvider
+    monkeypatch.setattr(
+        cli, "EnvironmentAccessTokenProvider", lambda: environment_provider({})
+    )
+    failure = error_type("private-token-provider-fault") if error_type else None
+    if failure is not None:
+
+        def fail(_self: object) -> None:
+            raise failure
+
+        monkeypatch.setattr(environment_provider, "get_access_token", fail)
+
+    requests: list[object] = []
+
+    def forbidden_provider_request(*args: object, **_kwargs: object) -> None:
+        requests.append(args)
+        raise AssertionError("credential failure must stop before provider requests")
+
+    monkeypatch.setattr(cli.UrllibHttpTransport, "get", forbidden_provider_request)
+    factory = cli._HistoricalProviderSessionFactory(
+        cli.UpstoxV3HistoricalClient(
+            cli.UrllibHttpTransport(
+                max_body_bytes=cli.DEFAULT_MAX_HISTORICAL_RESPONSE_BYTES
+            )
+        ),
+        cli._LazyEnvironmentAccessTokenProvider(),
+    )
+    coordinator = _coordinator(_request_observer, session_factory=factory)
+    command = IngestionCommand(
+        _instrument(),
+        date(2026, 1, 1),
+        date(2026, 2, 28),
+        "1m",
+        tmp_path,
+        _wide_schedule(),
+        "nse-equity-month@v1",
+        max_total_provider_attempts=2,
+    )
+
+    if error_type is None:
+        report = coordinator.run(command)
+        assert report.outcome is IngestionRunOutcome.FAILED
+        assert report.failure_code is RunFailureCode.AUTHENTICATION_FAILED
+        assert report.provider_attempt_count == 0
+        assert tuple(result.outcome for result in report.results) == (
+            PartitionOutcome.NOT_ATTEMPTED,
+            PartitionOutcome.NOT_ATTEMPTED,
+        )
+    else:
+        with pytest.raises(error_type) as raised:
+            coordinator.run(command)
+        assert raised.value is failure
+    assert requests == []
+
+
+@pytest.mark.parametrize("stage", ("open", "request_executor"))
+def test_unknown_provider_setup_faults_escape_before_fetch(
+    tmp_path: Path, stage: str
+) -> None:
+    failure = RuntimeError("private-provider-implementation-fault")
+    session_calls: list[object] = []
+    fetches: list[object] = []
+
+    def open_session() -> object:
+        session_calls.append(object())
+        if stage == "open":
+            raise failure
+        return SimpleNamespace(
+            fetch=lambda request: fetches.append(request) or HistoricalResponse(500, [])
+        )
+
+    def run_id() -> str:
+        if stage == "request_executor":
+            raise failure
+        return "run"
+
+    coordinator = IngestionCoordinator(
+        session_factory=SimpleNamespace(open=open_session),  # type: ignore[arg-type]
+        run_id_factory=run_id,
+        lease_acquirer=_lease,
+        catalog_factory=lambda _root: _Catalog(),  # type: ignore[arg-type]
+        schedule_store_factory=lambda _root, _lease: _ScheduleStore(_wide_schedule()),  # type: ignore[arg-type]
+        recovery_observer_factory=_request_observer,  # type: ignore[arg-type]
+    )
+    command = IngestionCommand(
+        _instrument(),
+        date(2026, 1, 1),
+        date(2026, 2, 28),
+        "1m",
+        tmp_path,
+        _wide_schedule(),
+        "nse-equity-month@v1",
+        max_total_provider_attempts=2,
+    )
+
+    with pytest.raises(RuntimeError) as raised:
+        coordinator.run(command)
+
+    assert raised.value is failure
+    assert len(session_calls) == 1
+    assert fetches == []
+
+
 def test_invalid_validation_policy_rejects_before_lease_or_other_side_effects(
     tmp_path: Path,
 ) -> None:
@@ -1238,6 +1457,202 @@ def test_child_h_catalog_failure_stops_later_lifecycle_work(
     assert report.results[1].error_code == "CATALOG_UNAVAILABLE"
 
 
+def test_real_lifecycle_catalog_defect_escapes_before_later_fetch(
+    tmp_path: Path,
+) -> None:
+    failure = AssertionError("private-catalog-implementation-fault")
+    created: list[date] = []
+    fetches: list[object] = []
+
+    class Catalog(_Catalog):
+        def get_manifest(self, _plan: object) -> None:
+            return None
+
+        def create_manifest(self, manifest: PartitionManifest) -> None:
+            created.append(manifest.plan.from_date)
+            if manifest.plan.from_date == date(2026, 1, 1):
+                raise failure
+
+    catalog = Catalog()
+    coordinator = IngestionCoordinator(
+        session_factory=SimpleNamespace(
+            open=lambda: SimpleNamespace(
+                fetch=lambda request: (
+                    fetches.append(request) or HistoricalResponse(500, [])
+                )
+            )
+        ),  # type: ignore[arg-type]
+        lease_acquirer=_lease,
+        catalog_factory=lambda _root: catalog,  # type: ignore[arg-type]
+        schedule_store_factory=lambda _root, _lease: _ScheduleStore(_wide_schedule()),  # type: ignore[arg-type]
+        recovery_observer_factory=_request_observer,  # type: ignore[arg-type]
+    )
+    command = IngestionCommand(
+        _instrument(),
+        date(2026, 1, 1),
+        date(2026, 2, 28),
+        "1m",
+        tmp_path,
+        _wide_schedule(),
+        "nse-equity-month@v1",
+        max_total_provider_attempts=2,
+    )
+
+    with pytest.raises(AssertionError) as raised:
+        coordinator.run(command)
+
+    assert raised.value is failure
+    assert created == [date(2026, 1, 1)]
+    assert fetches == []
+
+
+def test_default_lifecycle_clock_fault_escapes_before_later_range_work(
+    tmp_path: Path,
+) -> None:
+    failure = RuntimeError("clock implementation fault")
+    catalog_lookups: list[date] = []
+    provider_fetches: list[object] = []
+
+    class FaultingClock:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def now(self) -> datetime:
+            self.calls += 1
+            if self.calls >= 3:
+                raise failure
+            return datetime(2026, 3, 1, tzinfo=UTC)
+
+    class Catalog(_Catalog):
+        def get_manifest(self, plan: PlannedInstrumentMonth) -> None:
+            catalog_lookups.append(plan.from_date)
+            return None
+
+    coordinator = IngestionCoordinator(
+        session_factory=SimpleNamespace(
+            open=lambda: SimpleNamespace(fetch=provider_fetches.append)
+        ),  # type: ignore[arg-type]
+        clock=FaultingClock(),
+        lease_acquirer=_lease,
+        catalog_factory=lambda _root: Catalog(),  # type: ignore[arg-type]
+        schedule_store_factory=lambda _root, _lease: _ScheduleStore(_wide_schedule()),  # type: ignore[arg-type]
+        recovery_observer_factory=_request_observer,  # type: ignore[arg-type]
+    )
+    command = IngestionCommand(
+        _instrument(),
+        date(2026, 1, 1),
+        date(2026, 2, 28),
+        "1m",
+        tmp_path,
+        _wide_schedule(),
+        "nse-equity-month@v1",
+        max_total_provider_attempts=2,
+    )
+
+    with pytest.raises(RuntimeError) as raised:
+        coordinator.run(command)
+
+    assert raised.value is failure
+    assert catalog_lookups == [date(2026, 1, 1)]
+    assert provider_fetches == []
+
+
+@pytest.mark.parametrize("stage", ("session", "schedule", "publisher"))
+def test_real_lifecycle_unknown_fault_escapes_before_later_month_work(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stage: str,
+) -> None:
+    failure = AssertionError(f"private-{stage}-implementation-fault")
+    sessions = (
+        ScheduleSession(
+            date(2026, 1, 2),
+            datetime(2026, 1, 2, 3, 45, tzinfo=UTC),
+            datetime(2026, 1, 2, 3, 46, tzinfo=UTC),
+            "regular",
+        ),
+        ScheduleSession(
+            date(2026, 2, 2),
+            datetime(2026, 2, 2, 3, 45, tzinfo=UTC),
+            datetime(2026, 2, 2, 3, 46, tzinfo=UTC),
+            "regular",
+        ),
+    )
+    schedule = ExpectedSessionSchedule(
+        2,
+        "nse",
+        "2026-Q1",
+        datetime(2026, 3, 1, tzinfo=UTC),
+        "Asia/Kolkata",
+        date(2026, 1, 1),
+        date(2026, 2, 28),
+        sessions,
+        _closures(date(2026, 1, 1), date(2026, 2, 28), sessions),
+    )
+    requests: list[date] = []
+
+    def fetch(request: object) -> HistoricalResponse:
+        requests.append(request.from_date)  # type: ignore[union-attr]
+        if stage == "session":
+            raise failure
+        if request.from_date != date(2026, 1, 1):  # type: ignore[union-attr]
+            raise AssertionError("later month request must not occur")
+        return HistoricalResponse(
+            200,
+            [["2026-01-02T03:45:00+00:00", 1, 1, 1, 1, 1, None]],
+        )
+
+    if stage == "schedule":
+        monkeypatch.setattr(
+            validation_module,
+            "canonical_schedule_bytes",
+            lambda _schedule: (_ for _ in ()).throw(failure),
+        )
+    elif stage == "publisher":
+        monkeypatch.setattr(
+            publication_module,
+            "iter_candles_from_parquet",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(failure),
+        )
+
+    command = IngestionCommand(
+        _instrument(),
+        date(2026, 1, 1),
+        date(2026, 2, 28),
+        "1m",
+        tmp_path,
+        schedule,
+        "nse-equity-month@v1",
+        max_total_provider_attempts=2,
+    )
+
+    def catalog_factory(root: Path) -> DuckDBCatalog:
+        return DuckDBCatalog(root)
+
+    coordinator = IngestionCoordinator(
+        session_factory=SimpleNamespace(open=lambda: SimpleNamespace(fetch=fetch)),  # type: ignore[arg-type]
+        lease_acquirer=_lease,
+        catalog_factory=catalog_factory,
+        schedule_store_factory=lambda _root, _lease: _ScheduleStore(schedule),  # type: ignore[arg-type]
+        recovery_observer_factory=_request_observer,  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(AssertionError) as raised:
+        coordinator.run(command)
+
+    assert raised.value is failure
+    assert requests == [date(2026, 1, 1)]
+    assert list(tmp_path.rglob("bars.parquet")) == []
+    plans = plan_upstox_equity_months(
+        _instrument(), date(2026, 1, 1), date(2026, 2, 28), "1m"
+    )
+    with DuckDBCatalog(tmp_path) as catalog:
+        first = catalog.get_manifest(plans[0])
+        assert first is not None
+        assert first.state is ManifestState.IN_PROGRESS
+        assert catalog.get_manifest(plans[1]) is None
+
+
 def test_first_local_fatal_stops_observation_and_marks_later_plans_not_attempted(
     tmp_path: Path,
 ) -> None:
@@ -1343,7 +1758,7 @@ def test_hostile_lease_port_rejects_before_schedule_catalog_or_provider(
 
     def acquire(_root: object) -> object:
         if raises:
-            raise RuntimeError("lease secret")
+            raise StorageRootLeaseError("storage authority unavailable")
         return SimpleNamespace(outcome=LeaseOutcome.ACQUIRED, lease=_Lease())
 
     report = IngestionCoordinator(
@@ -1371,6 +1786,38 @@ def test_hostile_lease_port_rejects_before_schedule_catalog_or_provider(
     assert provider_calls == []
 
 
+def test_unknown_lease_acquisition_fault_escapes_before_dependencies(
+    tmp_path: Path,
+) -> None:
+    failure = RuntimeError("private-lease-implementation-fault")
+    schedule_calls: list[object] = []
+    catalog_calls: list[object] = []
+    provider_calls: list[object] = []
+    coordinator = IngestionCoordinator(
+        session_factory=SimpleNamespace(open=lambda: provider_calls.append(object())),  # type: ignore[arg-type]
+        lease_acquirer=lambda _root: (_ for _ in ()).throw(failure),  # type: ignore[arg-type]
+        schedule_store_factory=lambda *_args: schedule_calls.append(object()),  # type: ignore[arg-type]
+        catalog_factory=lambda _root: catalog_calls.append(object()),  # type: ignore[arg-type]
+    )
+    command = IngestionCommand(
+        _instrument(),
+        date(2026, 1, 1),
+        date(2026, 1, 31),
+        "1m",
+        tmp_path,
+        _wide_schedule(),
+        "nse-equity-month@v1",
+    )
+
+    with pytest.raises(RuntimeError) as raised:
+        coordinator.run(command)
+
+    assert raised.value is failure
+    assert schedule_calls == []
+    assert catalog_calls == []
+    assert provider_calls == []
+
+
 @pytest.mark.parametrize("raises", [False, True])
 def test_hostile_schedule_port_rejects_before_catalog_or_provider(
     tmp_path: Path, raises: bool
@@ -1383,26 +1830,25 @@ def test_hostile_schedule_port_rejects_before_catalog_or_provider(
             raise RuntimeError("schedule secret")
         return SimpleNamespace()
 
-    report = IngestionCoordinator(
-        session_factory=SimpleNamespace(open=lambda: provider_calls.append(object())),  # type: ignore[arg-type]
-        lease_acquirer=_lease,  # type: ignore[arg-type]
-        schedule_store_factory=schedule_store_factory,  # type: ignore[arg-type]
-        catalog_factory=lambda _root: catalog_calls.append(object()),  # type: ignore[arg-type]
-    ).run(
-        IngestionCommand(
-            _instrument(),
-            date(2026, 1, 1),
-            date(2026, 1, 31),
-            "1m",
-            tmp_path,
-            _wide_schedule(),
-            "nse-equity-month@v1",
+    with pytest.raises(RuntimeError if raises else AttributeError):
+        IngestionCoordinator(
+            session_factory=SimpleNamespace(
+                open=lambda: provider_calls.append(object())
+            ),  # type: ignore[arg-type]
+            lease_acquirer=_lease,  # type: ignore[arg-type]
+            schedule_store_factory=schedule_store_factory,  # type: ignore[arg-type]
+            catalog_factory=lambda _root: catalog_calls.append(object()),  # type: ignore[arg-type]
+        ).run(
+            IngestionCommand(
+                _instrument(),
+                date(2026, 1, 1),
+                date(2026, 1, 31),
+                "1m",
+                tmp_path,
+                _wide_schedule(),
+                "nse-equity-month@v1",
+            )
         )
-    )
-
-    assert report.outcome is IngestionRunOutcome.REJECTED
-    assert report.failure_code is RunFailureCode.SCHEDULE_UNSUPPORTED
-    assert report.not_attempted_count == 1
     assert catalog_calls == []
     assert provider_calls == []
 
@@ -1477,7 +1923,7 @@ def test_schedule_failure_and_catalog_failure_are_zero_provider_paths(
     ).run(command)
     catalog_report = IngestionCoordinator(
         lease_acquirer=_lease,
-        catalog_factory=lambda _root: (_ for _ in ()).throw(RuntimeError()),  # type: ignore[arg-type]
+        catalog_factory=lambda _root: (_ for _ in ()).throw(CatalogPersistenceError()),  # type: ignore[arg-type]
         schedule_store_factory=lambda _root, _lease: _ScheduleStore(_wide_schedule()),  # type: ignore[arg-type]
     ).run(command)
 
@@ -1774,7 +2220,7 @@ def test_post_attempt_exception_category_evidence_matrix(
 
         def get_manifest(self, _plan: object) -> PartitionManifest | None:
             if self.unreadable:
-                raise RuntimeError("catalog secret")
+                raise CatalogPersistenceError("catalog unavailable")
             return self.manifest
 
     catalog = Catalog()
@@ -1812,7 +2258,7 @@ def test_post_attempt_exception_category_evidence_matrix(
             else:
                 catalog.unreadable = True
             kwargs["fetcher"]._remaining_attempts -= 1  # type: ignore[union-attr,reportPrivateUsage]
-            raise RuntimeError("secret")
+            raise PartitionClockFailure("clock unavailable")
 
         return SimpleNamespace(execute=execute)
 
@@ -1857,8 +2303,6 @@ def test_post_attempt_exception_category_evidence_matrix(
     [
         (PartitionClockFailure, RunFailureCode.PARTITION_FAILURE),
         (PartitionLifecycleConflict, RunFailureCode.PARTITION_FAILURE),
-        (RuntimeError, RunFailureCode.PARTITION_FAILURE),
-        (ValueError, RunFailureCode.PARTITION_FAILURE),
         (PartitionCatalogFailure, RunFailureCode.CATALOG_UNAVAILABLE),
     ],
 )
@@ -1921,6 +2365,99 @@ def test_post_attempt_lifecycle_exceptions_are_fatal_and_preserve_current_eviden
     assert report.results[0].final_manifest is catalog.manifest
     assert report.not_attempted_count == 2
     assert "secret" not in report.results[0].error_code  # type: ignore[operator]
+
+
+def test_typed_current_manifest_lookup_failure_preserves_lifecycle_primary(
+    tmp_path: Path,
+) -> None:
+    executed: list[date] = []
+    fetches: list[object] = []
+
+    class Catalog(_Catalog):
+        def get_manifest(self, _plan: object) -> None:
+            raise CatalogPersistenceError("catalog unavailable")
+
+    def lifecycle_factory(**_kwargs: object) -> SimpleNamespace:
+        def execute(plan: object) -> None:
+            executed.append(plan.from_date)  # type: ignore[union-attr]
+            raise PartitionClockFailure("clock unavailable")
+
+        return SimpleNamespace(execute=execute)
+
+    report = IngestionCoordinator(
+        session_factory=SimpleNamespace(
+            open=lambda: SimpleNamespace(fetch=fetches.append)
+        ),  # type: ignore[arg-type]
+        lease_acquirer=_lease,
+        catalog_factory=lambda _root: Catalog(),  # type: ignore[arg-type]
+        schedule_store_factory=lambda _root, _lease: _ScheduleStore(_wide_schedule()),  # type: ignore[arg-type]
+        recovery_observer_factory=_request_observer,  # type: ignore[arg-type]
+        lifecycle_executor_factory=lifecycle_factory,  # type: ignore[arg-type]
+    ).run(
+        IngestionCommand(
+            _instrument(),
+            date(2026, 1, 1),
+            date(2026, 2, 28),
+            "1m",
+            tmp_path,
+            _wide_schedule(),
+            "nse-equity-month@v1",
+            max_total_provider_attempts=2,
+        )
+    )
+
+    assert report.failure_code is RunFailureCode.PARTITION_FAILURE
+    assert executed == [date(2026, 1, 1), date(2026, 2, 1)]
+    assert fetches == []
+    assert report.failed_count == 2
+    assert report.not_attempted_count == 0
+
+
+def test_unknown_current_manifest_lookup_fault_escapes_lifecycle_mapping(
+    tmp_path: Path,
+) -> None:
+    failure = RuntimeError("private-current-manifest-implementation-fault")
+    executed: list[date] = []
+    fetches: list[object] = []
+
+    class Catalog(_Catalog):
+        def get_manifest(self, _plan: object) -> None:
+            raise failure
+
+    def lifecycle_factory(**_kwargs: object) -> SimpleNamespace:
+        def execute(plan: object) -> None:
+            executed.append(plan.from_date)  # type: ignore[union-attr]
+            raise PartitionClockFailure("clock unavailable")
+
+        return SimpleNamespace(execute=execute)
+
+    coordinator = IngestionCoordinator(
+        session_factory=SimpleNamespace(
+            open=lambda: SimpleNamespace(fetch=fetches.append)
+        ),  # type: ignore[arg-type]
+        lease_acquirer=_lease,
+        catalog_factory=lambda _root: Catalog(),  # type: ignore[arg-type]
+        schedule_store_factory=lambda _root, _lease: _ScheduleStore(_wide_schedule()),  # type: ignore[arg-type]
+        recovery_observer_factory=_request_observer,  # type: ignore[arg-type]
+        lifecycle_executor_factory=lifecycle_factory,  # type: ignore[arg-type]
+    )
+    command = IngestionCommand(
+        _instrument(),
+        date(2026, 1, 1),
+        date(2026, 2, 28),
+        "1m",
+        tmp_path,
+        _wide_schedule(),
+        "nse-equity-month@v1",
+        max_total_provider_attempts=2,
+    )
+
+    with pytest.raises(RuntimeError) as raised:
+        coordinator.run(command)
+
+    assert raised.value is failure
+    assert executed == [date(2026, 1, 1)]
+    assert fetches == []
 
 
 def test_between_partition_cancellation_marks_every_remaining_plan_cancelled(

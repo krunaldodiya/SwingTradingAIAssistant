@@ -5,13 +5,12 @@ build-backend = "hatchling.build"
 [project]
 name = "swing-trading-ai-assistant"
 version = "0.1.0"
-description = "Deterministic market-data and research foundations for Nifty 50 swing trading"
+description = "Deterministic market-data and research foundations for NSE listed-equity swing trading"
 requires-python = ">=3.11"
 dependencies = [
     "duckdb>=1.5.5,<1.6",
     "pyarrow>=25,<26",
     "python-dotenv>=1.1",
-    "yfinance==1.6.0",
 ]
 
 [project.optional-dependencies]
@@ -33,6 +32,7 @@ evidence-readiness = "swing_trading_ai_assistant.historical_evaluation.prospecti
 market-regime-acquisition-decision = "swing_trading_ai_assistant.historical_evaluation.acquisition_decision_cli:main"
 historical-validation-gate = "swing_trading_ai_assistant.entrypoints.historical_validation_gate:main"
 capture-forward-adjusted-ohlcv = "swing_trading_ai_assistant.entrypoints.capture_forward_adjusted_ohlcv:main"
+efficient-current-nifty100-adjusted-capture = "swing_trading_ai_assistant.entrypoints.efficient_current_nifty100_adjusted_capture:main"
 equity-data-download = "equity_data_downloader.cli:main"
 
 [tool.hatch.build.targets.wheel]

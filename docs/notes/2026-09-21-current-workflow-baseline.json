@@ -1,0 +1,2396 @@
+{
+  "status": "pre-optimization baseline; candidate evidence pending",
+  "revision": "b3465a9695d7f1d8f6284f8f375ccade51917684",
+  "tree": "6628bb23782cbd6cfc95805f41c52b6fbac93109",
+  "metric": "public entry through typed return; synchronous time to first usable result equals elapsed",
+  "workload": "21 complete 375-minute sessions plus 15 current minutes per member; synthetic data and denied sockets",
+  "limits": [
+    "No live-provider latency or production SLA",
+    "Fixed logical clock does not prove deadline enforcement",
+    "Sampled RSS may miss short peaks",
+    "Interrupted N50 is not a completed baseline or denominator for speedup"
+  ],
+  "harness_sha256": {
+    "baseline_worker.py": "0e6fda9d980b0874297b8ffd5f16e91b3e4da4a8020ca6def2b4d9b4b8d90a33",
+    "baseline_runner.py": "bf403c8ac9b56b5a50dd03c5957916cb90c5ee9ab49596c574b981105f574425",
+    "protocol.md": "6002b527f85591094acd15dd39b8b9e44ecbd58ee86f4f205079191d48a5d162",
+    "protocol-amendment-20260921.md": "74d8d36d28dd89aa0d5c39731e80eaf616b46759dc165761053318ef400f3df8",
+    "implementation-budget-freeze.md": "a09d0f486acacb09580b333ef0cdbaccb9b8fb594a9deb02299ffa76629942ab"
+  },
+  "runs": [
+    {
+      "n": 1,
+      "repetition": 0,
+      "warmup": true,
+      "series": "original",
+      "raw_jsonl_sha256": "68d09cee92a77595376d03ec733439a9c1cd40f859e030e774ae7e525e93e69f",
+      "resources": {
+        "n": 1,
+        "repetition": 0,
+        "warmup": true,
+        "exit_code": 0,
+        "process_peak_rss_bytes": 161165312,
+        "public_call_rss": {
+          "ACQUIRE_MISSING": {
+            "start_rss_bytes": 100966400,
+            "peak_rss_bytes": 161165312,
+            "samples": 463,
+            "max_sample_gap_seconds": 0.07491202500386862
+          },
+          "RETAINED_ONLY": {
+            "start_rss_bytes": 151195648,
+            "peak_rss_bytes": 156966912,
+            "samples": 154,
+            "max_sample_gap_seconds": 0.02820102799887536
+          },
+          "REFRESH_ONCE": {
+            "start_rss_bytes": 153358336,
+            "peak_rss_bytes": 159301632,
+            "samples": 384,
+            "max_sample_gap_seconds": 0.06577359900256852
+          }
+        },
+        "platform": "macOS-26.6.2-x86_64-i386-64bit-Mach-O",
+        "python": "3.13.7 (main, Sep 18 2025, 19:55:22) [Clang 20.1.4 ]",
+        "worker_sha256": "0e6fda9d980b0874297b8ffd5f16e91b3e4da4a8020ca6def2b4d9b4b8d90a33"
+      },
+      "results": [
+        {
+          "mode": "ACQUIRE_MISSING",
+          "n": 1,
+          "seconds": 10.340098576998571,
+          "ttfi_seconds": 10.340098576998571,
+          "setup_seconds": 0.14515612800460076,
+          "history_rows_per_member": 7875,
+          "current_rows_per_member": 15,
+          "attempts": 4,
+          "fixture_payload_bytes": 596357,
+          "unused_replies": 0,
+          "completed_states": [
+            "OBSERVED"
+          ],
+          "current_states": [
+            "OBSERVED"
+          ],
+          "result_identity_sha256": "61ea7ce7dca6777976c02b7792911d7cc5c1b02b7ad924f5c15a006cef867fe6",
+          "request_identity_sha256": "0abbfe9ae4092bcf856108a0828a73b3f9668aa2bc14974dbf845e0ed1411d0e"
+        },
+        {
+          "mode": "RETAINED_ONLY",
+          "n": 1,
+          "seconds": 3.397257542004809,
+          "ttfi_seconds": 3.397257542004809,
+          "setup_seconds": 0.14515612800460076,
+          "history_rows_per_member": 7875,
+          "current_rows_per_member": 15,
+          "attempts": 0,
+          "fixture_payload_bytes": 0,
+          "unused_replies": 0,
+          "completed_states": [
+            "OBSERVED"
+          ],
+          "current_states": [
+            "OBSERVED"
+          ],
+          "result_identity_sha256": "71415a7274be76b4e4f7ffb1dc8abd04f0829cc520af09047926fe37f5209bf4",
+          "request_identity_sha256": "40a86a00fb73e43d0236834cf8af4dc0e427b086216d52668719e9617ccad60c"
+        },
+        {
+          "mode": "REFRESH_ONCE",
+          "n": 1,
+          "seconds": 8.667758511997818,
+          "ttfi_seconds": 8.667758511997818,
+          "setup_seconds": 0.14515612800460076,
+          "history_rows_per_member": 7875,
+          "current_rows_per_member": 15,
+          "attempts": 1,
+          "fixture_payload_bytes": 1172,
+          "unused_replies": 0,
+          "completed_states": [
+            "OBSERVED"
+          ],
+          "current_states": [
+            "OBSERVED"
+          ],
+          "result_identity_sha256": "fd3ef22b618a766df372dfb018f9c4faf7685000d15ed170c36db973abaed35e",
+          "request_identity_sha256": "6bf80f5e1a07f4977031e8e7eb78f396b37eb5e60170221662aa25621a294e27"
+        }
+      ],
+      "status": "completed"
+    },
+    {
+      "n": 1,
+      "repetition": 1,
+      "warmup": false,
+      "series": "original",
+      "raw_jsonl_sha256": "ba6b4855d2b22d602f3b8445164cb6db531cb4df63b47752931a463041f131bf",
+      "resources": {
+        "n": 1,
+        "repetition": 1,
+        "warmup": false,
+        "exit_code": 0,
+        "process_peak_rss_bytes": 160210944,
+        "public_call_rss": {
+          "ACQUIRE_MISSING": {
+            "start_rss_bytes": 101122048,
+            "peak_rss_bytes": 160210944,
+            "samples": 432,
+            "max_sample_gap_seconds": 0.07842697099840734
+          },
+          "RETAINED_ONLY": {
+            "start_rss_bytes": 152862720,
+            "peak_rss_bytes": 158117888,
+            "samples": 135,
+            "max_sample_gap_seconds": 0.025081724001211114
+          },
+          "REFRESH_ONCE": {
+            "start_rss_bytes": 154480640,
+            "peak_rss_bytes": 160075776,
+            "samples": 374,
+            "max_sample_gap_seconds": 0.0250996100003249
+          }
+        },
+        "platform": "macOS-26.6.2-x86_64-i386-64bit-Mach-O",
+        "python": "3.13.7 (main, Sep 18 2025, 19:55:22) [Clang 20.1.4 ]",
+        "worker_sha256": "0e6fda9d980b0874297b8ffd5f16e91b3e4da4a8020ca6def2b4d9b4b8d90a33"
+      },
+      "results": [
+        {
+          "mode": "ACQUIRE_MISSING",
+          "n": 1,
+          "seconds": 9.703534200998547,
+          "ttfi_seconds": 9.703534200998547,
+          "setup_seconds": 0.13142178999987664,
+          "history_rows_per_member": 7875,
+          "current_rows_per_member": 15,
+          "attempts": 4,
+          "fixture_payload_bytes": 596357,
+          "unused_replies": 0,
+          "completed_states": [
+            "OBSERVED"
+          ],
+          "current_states": [
+            "OBSERVED"
+          ],
+          "result_identity_sha256": "61ea7ce7dca6777976c02b7792911d7cc5c1b02b7ad924f5c15a006cef867fe6",
+          "request_identity_sha256": "0abbfe9ae4092bcf856108a0828a73b3f9668aa2bc14974dbf845e0ed1411d0e"
+        },
+        {
+          "mode": "RETAINED_ONLY",
+          "n": 1,
+          "seconds": 3.011727263998182,
+          "ttfi_seconds": 3.011727263998182,
+          "setup_seconds": 0.13142178999987664,
+          "history_rows_per_member": 7875,
+          "current_rows_per_member": 15,
+          "attempts": 0,
+          "fixture_payload_bytes": 0,
+          "unused_replies": 0,
+          "completed_states": [
+            "OBSERVED"
+          ],
+          "current_states": [
+            "OBSERVED"
+          ],
+          "result_identity_sha256": "71415a7274be76b4e4f7ffb1dc8abd04f0829cc520af09047926fe37f5209bf4",
+          "request_identity_sha256": "40a86a00fb73e43d0236834cf8af4dc0e427b086216d52668719e9617ccad60c"
+        },
+        {
+          "mode": "REFRESH_ONCE",
+          "n": 1,
+          "seconds": 8.386180785004399,
+          "ttfi_seconds": 8.386180785004399,
+          "setup_seconds": 0.13142178999987664,
+          "history_rows_per_member": 7875,
+          "current_rows_per_member": 15,
+          "attempts": 1,
+          "fixture_payload_bytes": 1172,
+          "unused_replies": 0,
+          "completed_states": [
+            "OBSERVED"
+          ],
+          "current_states": [
+            "OBSERVED"
+          ],
+          "result_identity_sha256": "fd3ef22b618a766df372dfb018f9c4faf7685000d15ed170c36db973abaed35e",
+          "request_identity_sha256": "6bf80f5e1a07f4977031e8e7eb78f396b37eb5e60170221662aa25621a294e27"
+        }
+      ],
+      "status": "completed"
+    },
+    {
+      "n": 1,
+      "repetition": 2,
+      "warmup": false,
+      "series": "original",
+      "raw_jsonl_sha256": "e850d13fd6c32182a1ce2b3cee49a56cec5f9560f2afd8e6c624c2acd004957c",
+      "resources": {
+        "n": 1,
+        "repetition": 2,
+        "warmup": false,
+        "exit_code": 0,
+        "process_peak_rss_bytes": 160010240,
+        "public_call_rss": {
+          "ACQUIRE_MISSING": {
+            "start_rss_bytes": 100003840,
+            "peak_rss_bytes": 159244288,
+            "samples": 428,
+            "max_sample_gap_seconds": 0.02510551599698374
+          },
+          "RETAINED_ONLY": {
+            "start_rss_bytes": 150966272,
+            "peak_rss_bytes": 157229056,
+            "samples": 135,
+            "max_sample_gap_seconds": 0.0719132809972507
+          },
+          "REFRESH_ONCE": {
+            "start_rss_bytes": 153608192,
+            "peak_rss_bytes": 160010240,
+            "samples": 378,
+            "max_sample_gap_seconds": 0.02512384400324663
+          }
+        },
+        "platform": "macOS-26.6.2-x86_64-i386-64bit-Mach-O",
+        "python": "3.13.7 (main, Sep 18 2025, 19:55:22) [Clang 20.1.4 ]",
+        "worker_sha256": "0e6fda9d980b0874297b8ffd5f16e91b3e4da4a8020ca6def2b4d9b4b8d90a33"
+      },
+      "results": [
+        {
+          "mode": "ACQUIRE_MISSING",
+          "n": 1,
+          "seconds": 9.559894380996411,
+          "ttfi_seconds": 9.559894380996411,
+          "setup_seconds": 0.11572188999707578,
+          "history_rows_per_member": 7875,
+          "current_rows_per_member": 15,
+          "attempts": 4,
+          "fixture_payload_bytes": 596357,
+          "unused_replies": 0,
+          "completed_states": [
+            "OBSERVED"
+          ],
+          "current_states": [
+            "OBSERVED"
+          ],
+          "result_identity_sha256": "61ea7ce7dca6777976c02b7792911d7cc5c1b02b7ad924f5c15a006cef867fe6",
+          "request_identity_sha256": "0abbfe9ae4092bcf856108a0828a73b3f9668aa2bc14974dbf845e0ed1411d0e"
+        },
+        {
+          "mode": "RETAINED_ONLY",
+          "n": 1,
+          "seconds": 3.014031497994438,
+          "ttfi_seconds": 3.014031497994438,
+          "setup_seconds": 0.11572188999707578,
+          "history_rows_per_member": 7875,
+          "current_rows_per_member": 15,
+          "attempts": 0,
+          "fixture_payload_bytes": 0,
+          "unused_replies": 0,
+          "completed_states": [
+            "OBSERVED"
+          ],
+          "current_states": [
+            "OBSERVED"
+          ],
+          "result_identity_sha256": "71415a7274be76b4e4f7ffb1dc8abd04f0829cc520af09047926fe37f5209bf4",
+          "request_identity_sha256": "40a86a00fb73e43d0236834cf8af4dc0e427b086216d52668719e9617ccad60c"
+        },
+        {
+          "mode": "REFRESH_ONCE",
+          "n": 1,
+          "seconds": 8.457123101994512,
+          "ttfi_seconds": 8.457123101994512,
+          "setup_seconds": 0.11572188999707578,
+          "history_rows_per_member": 7875,
+          "current_rows_per_member": 15,
+          "attempts": 1,
+          "fixture_payload_bytes": 1172,
+          "unused_replies": 0,
+          "completed_states": [
+            "OBSERVED"
+          ],
+          "current_states": [
+            "OBSERVED"
+          ],
+          "result_identity_sha256": "fd3ef22b618a766df372dfb018f9c4faf7685000d15ed170c36db973abaed35e",
+          "request_identity_sha256": "6bf80f5e1a07f4977031e8e7eb78f396b37eb5e60170221662aa25621a294e27"
+        }
+      ],
+      "status": "completed"
+    },
+    {
+      "n": 1,
+      "repetition": 3,
+      "warmup": false,
+      "series": "original",
+      "raw_jsonl_sha256": "5ccd63095a974ccb6b94af7d039bfd70e3ad55072b9aa4adf0f99aa267362c95",
+      "resources": {
+        "n": 1,
+        "repetition": 3,
+        "warmup": false,
+        "exit_code": 0,
+        "process_peak_rss_bytes": 158208000,
+        "public_call_rss": {
+          "ACQUIRE_MISSING": {
+            "start_rss_bytes": 100425728,
+            "peak_rss_bytes": 158167040,
+            "samples": 450,
+            "max_sample_gap_seconds": 0.07501925100223161
+          },
+          "RETAINED_ONLY": {
+            "start_rss_bytes": 149983232,
+            "peak_rss_bytes": 156684288,
+            "samples": 131,
+            "max_sample_gap_seconds": 0.025069335002626758
+          },
+          "REFRESH_ONCE": {
+            "start_rss_bytes": 152633344,
+            "peak_rss_bytes": 158208000,
+            "samples": 373,
+            "max_sample_gap_seconds": 0.025642961998528335
+          }
+        },
+        "platform": "macOS-26.6.2-x86_64-i386-64bit-Mach-O",
+        "python": "3.13.7 (main, Sep 18 2025, 19:55:22) [Clang 20.1.4 ]",
+        "worker_sha256": "0e6fda9d980b0874297b8ffd5f16e91b3e4da4a8020ca6def2b4d9b4b8d90a33"
+      },
+      "results": [
+        {
+          "mode": "ACQUIRE_MISSING",
+          "n": 1,
+          "seconds": 10.052422142995056,
+          "ttfi_seconds": 10.052422142995056,
+          "setup_seconds": 0.11598979999689618,
+          "history_rows_per_member": 7875,
+          "current_rows_per_member": 15,
+          "attempts": 4,
+          "fixture_payload_bytes": 596357,
+          "unused_replies": 0,
+          "completed_states": [
+            "OBSERVED"
+          ],
+          "current_states": [
+            "OBSERVED"
+          ],
+          "result_identity_sha256": "61ea7ce7dca6777976c02b7792911d7cc5c1b02b7ad924f5c15a006cef867fe6",
+          "request_identity_sha256": "0abbfe9ae4092bcf856108a0828a73b3f9668aa2bc14974dbf845e0ed1411d0e"
+        },
+        {
+          "mode": "RETAINED_ONLY",
+          "n": 1,
+          "seconds": 2.9298398610044387,
+          "ttfi_seconds": 2.9298398610044387,
+          "setup_seconds": 0.11598979999689618,
+          "history_rows_per_member": 7875,
+          "current_rows_per_member": 15,
+          "attempts": 0,
+          "fixture_payload_bytes": 0,
+          "unused_replies": 0,
+          "completed_states": [
+            "OBSERVED"
+          ],
+          "current_states": [
+            "OBSERVED"
+          ],
+          "result_identity_sha256": "71415a7274be76b4e4f7ffb1dc8abd04f0829cc520af09047926fe37f5209bf4",
+          "request_identity_sha256": "40a86a00fb73e43d0236834cf8af4dc0e427b086216d52668719e9617ccad60c"
+        },
+        {
+          "mode": "REFRESH_ONCE",
+          "n": 1,
+          "seconds": 8.365424010000424,
+          "ttfi_seconds": 8.365424010000424,
+          "setup_seconds": 0.11598979999689618,
+          "history_rows_per_member": 7875,
+          "current_rows_per_member": 15,
+          "attempts": 1,
+          "fixture_payload_bytes": 1172,
+          "unused_replies": 0,
+          "completed_states": [
+            "OBSERVED"
+          ],
+          "current_states": [
+            "OBSERVED"
+          ],
+          "result_identity_sha256": "fd3ef22b618a766df372dfb018f9c4faf7685000d15ed170c36db973abaed35e",
+          "request_identity_sha256": "6bf80f5e1a07f4977031e8e7eb78f396b37eb5e60170221662aa25621a294e27"
+        }
+      ],
+      "status": "completed"
+    },
+    {
+      "n": 2,
+      "repetition": 0,
+      "warmup": true,
+      "series": "original",
+      "raw_jsonl_sha256": "9cbd5cc78f0e6790502fc3c2ead7710fb4763c32b12e89b78267833d00d7c671",
+      "resources": {
+        "n": 2,
+        "repetition": 0,
+        "warmup": true,
+        "exit_code": 0,
+        "process_peak_rss_bytes": 176840704,
+        "public_call_rss": {
+          "ACQUIRE_MISSING": {
+            "start_rss_bytes": 100421632,
+            "peak_rss_bytes": 176840704,
+            "samples": 964,
+            "max_sample_gap_seconds": 0.025927255999704357
+          },
+          "RETAINED_ONLY": {
+            "start_rss_bytes": 167301120,
+            "peak_rss_bytes": 171986944,
+            "samples": 229,
+            "max_sample_gap_seconds": 0.025146900996332988
+          },
+          "REFRESH_ONCE": {
+            "start_rss_bytes": 169259008,
+            "peak_rss_bytes": 174407680,
+            "samples": 838,
+            "max_sample_gap_seconds": 0.07354166099685244
+          }
+        },
+        "platform": "macOS-26.6.2-x86_64-i386-64bit-Mach-O",
+        "python": "3.13.7 (main, Sep 18 2025, 19:55:22) [Clang 20.1.4 ]",
+        "worker_sha256": "0e6fda9d980b0874297b8ffd5f16e91b3e4da4a8020ca6def2b4d9b4b8d90a33"
+      },
+      "results": [
+        {
+          "mode": "ACQUIRE_MISSING",
+          "n": 2,
+          "seconds": 21.63555995000206,
+          "ttfi_seconds": 21.63555995000206,
+          "setup_seconds": 0.12186716399446595,
+          "history_rows_per_member": 7875,
+          "current_rows_per_member": 15,
+          "attempts": 7,
+          "fixture_payload_bytes": 1192596,
+          "unused_replies": 0,
+          "completed_states": [
+            "OBSERVED",
+            "OBSERVED"
+          ],
+          "current_states": [
+            "OBSERVED",
+            "OBSERVED"
+          ],
+          "result_identity_sha256": "e5776b1b578f63f0ba07df5e63f636d40b22f8b56060c3c430aefd7241c6a015",
+          "request_identity_sha256": "b03a7196a348d09da2c678d25c6d8bce592f85568cd3eadd6dd833bfe66b947d"
+        },
+        {
+          "mode": "RETAINED_ONLY",
+          "n": 2,
+          "seconds": 5.119133790998603,
+          "ttfi_seconds": 5.119133790998603,
+          "setup_seconds": 0.12186716399446595,
+          "history_rows_per_member": 7875,
+          "current_rows_per_member": 15,
+          "attempts": 0,
+          "fixture_payload_bytes": 0,
+          "unused_replies": 0,
+          "completed_states": [
+            "OBSERVED",
+            "OBSERVED"
+          ],
+          "current_states": [
+            "OBSERVED",
+            "OBSERVED"
+          ],
+          "result_identity_sha256": "a441abd8aa6af64f3e9844a20bf531247d0a94e0fec4612e5048f3e11fa48d18",
+          "request_identity_sha256": "474a124c9c65432c0c0ed81565588e77c0394aa2be63e6a51acfc3ef7e873603"
+        },
+        {
+          "mode": "REFRESH_ONCE",
+          "n": 2,
+          "seconds": 18.91683449199627,
+          "ttfi_seconds": 18.91683449199627,
+          "setup_seconds": 0.12186716399446595,
+          "history_rows_per_member": 7875,
+          "current_rows_per_member": 15,
+          "attempts": 2,
+          "fixture_payload_bytes": 2344,
+          "unused_replies": 0,
+          "completed_states": [
+            "OBSERVED",
+            "OBSERVED"
+          ],
+          "current_states": [
+            "OBSERVED",
+            "OBSERVED"
+          ],
+          "result_identity_sha256": "bbfa401d844b82debaf45b7863fc01a36cd0092470fc3ad5dbd7e48163496459",
+          "request_identity_sha256": "3ccbc93a81081cfc7451984b4b825f2cfe00af292ce3a12325d9939a2d745795"
+        }
+      ],
+      "status": "completed"
+    },
+    {
+      "n": 2,
+      "repetition": 1,
+      "warmup": false,
+      "series": "original",
+      "raw_jsonl_sha256": "757ea6bcf809a6601c0fbe2b600cb2a0cc9c0ac6494deb76dfcb81f96067576a",
+      "resources": {
+        "n": 2,
+        "repetition": 1,
+        "warmup": false,
+        "exit_code": 0,
+        "process_peak_rss_bytes": 170364928,
+        "public_call_rss": {
+          "ACQUIRE_MISSING": {
+            "start_rss_bytes": 97050624,
+            "peak_rss_bytes": 169656320,
+            "samples": 984,
+            "max_sample_gap_seconds": 0.025778342998819426
+          },
+          "RETAINED_ONLY": {
+            "start_rss_bytes": 162955264,
+            "peak_rss_bytes": 167669760,
+            "samples": 229,
+            "max_sample_gap_seconds": 0.025262180002755485
+          },
+          "REFRESH_ONCE": {
+            "start_rss_bytes": 164753408,
+            "peak_rss_bytes": 170364928,
+            "samples": 852,
+            "max_sample_gap_seconds": 0.025187714003550354
+          }
+        },
+        "platform": "macOS-26.6.2-x86_64-i386-64bit-Mach-O",
+        "python": "3.13.7 (main, Sep 18 2025, 19:55:22) [Clang 20.1.4 ]",
+        "worker_sha256": "0e6fda9d980b0874297b8ffd5f16e91b3e4da4a8020ca6def2b4d9b4b8d90a33"
+      },
+      "results": [
+        {
+          "mode": "ACQUIRE_MISSING",
+          "n": 2,
+          "seconds": 22.03560206900147,
+          "ttfi_seconds": 22.03560206900147,
+          "setup_seconds": 0.11512837700138334,
+          "history_rows_per_member": 7875,
+          "current_rows_per_member": 15,
+          "attempts": 7,
+          "fixture_payload_bytes": 1192596,
+          "unused_replies": 0,
+          "completed_states": [
+            "OBSERVED",
+            "OBSERVED"
+          ],
+          "current_states": [
+            "OBSERVED",
+            "OBSERVED"
+          ],
+          "result_identity_sha256": "e5776b1b578f63f0ba07df5e63f636d40b22f8b56060c3c430aefd7241c6a015",
+          "request_identity_sha256": "b03a7196a348d09da2c678d25c6d8bce592f85568cd3eadd6dd833bfe66b947d"
+        },
+        {
+          "mode": "RETAINED_ONLY",
+          "n": 2,
+          "seconds": 5.116231271000288,
+          "ttfi_seconds": 5.116231271000288,
+          "setup_seconds": 0.11512837700138334,
+          "history_rows_per_member": 7875,
+          "current_rows_per_member": 15,
+          "attempts": 0,
+          "fixture_payload_bytes": 0,
+          "unused_replies": 0,
+          "completed_states": [
+            "OBSERVED",
+            "OBSERVED"
+          ],
+          "current_states": [
+            "OBSERVED",
+            "OBSERVED"
+          ],
+          "result_identity_sha256": "a441abd8aa6af64f3e9844a20bf531247d0a94e0fec4612e5048f3e11fa48d18",
+          "request_identity_sha256": "474a124c9c65432c0c0ed81565588e77c0394aa2be63e6a51acfc3ef7e873603"
+        },
+        {
+          "mode": "REFRESH_ONCE",
+          "n": 2,
+          "seconds": 19.085909428999003,
+          "ttfi_seconds": 19.085909428999003,
+          "setup_seconds": 0.11512837700138334,
+          "history_rows_per_member": 7875,
+          "current_rows_per_member": 15,
+          "attempts": 2,
+          "fixture_payload_bytes": 2344,
+          "unused_replies": 0,
+          "completed_states": [
+            "OBSERVED",
+            "OBSERVED"
+          ],
+          "current_states": [
+            "OBSERVED",
+            "OBSERVED"
+          ],
+          "result_identity_sha256": "bbfa401d844b82debaf45b7863fc01a36cd0092470fc3ad5dbd7e48163496459",
+          "request_identity_sha256": "3ccbc93a81081cfc7451984b4b825f2cfe00af292ce3a12325d9939a2d745795"
+        }
+      ],
+      "status": "completed"
+    },
+    {
+      "n": 2,
+      "repetition": 2,
+      "warmup": false,
+      "series": "original",
+      "raw_jsonl_sha256": "6ca3f85acfe32bd1e1ad07603597ee3b60230224492cfdee42e258fead68d81a",
+      "resources": {
+        "n": 2,
+        "repetition": 2,
+        "warmup": false,
+        "exit_code": 0,
+        "process_peak_rss_bytes": 174911488,
+        "public_call_rss": {
+          "ACQUIRE_MISSING": {
+            "start_rss_bytes": 97505280,
+            "peak_rss_bytes": 168747008,
+            "samples": 966,
+            "max_sample_gap_seconds": 0.025450048000493553
+          },
+          "RETAINED_ONLY": {
+            "start_rss_bytes": 165953536,
+            "peak_rss_bytes": 172769280,
+            "samples": 229,
+            "max_sample_gap_seconds": 0.09016430699557532
+          },
+          "REFRESH_ONCE": {
+            "start_rss_bytes": 169975808,
+            "peak_rss_bytes": 174911488,
+            "samples": 1023,
+            "max_sample_gap_seconds": 0.051087006999296136
+          }
+        },
+        "platform": "macOS-26.6.2-x86_64-i386-64bit-Mach-O",
+        "python": "3.13.7 (main, Sep 18 2025, 19:55:22) [Clang 20.1.4 ]",
+        "worker_sha256": "0e6fda9d980b0874297b8ffd5f16e91b3e4da4a8020ca6def2b4d9b4b8d90a33"
+      },
+      "results": [
+        {
+          "mode": "ACQUIRE_MISSING",
+          "n": 2,
+          "seconds": 21.6045527929964,
+          "ttfi_seconds": 21.6045527929964,
+          "setup_seconds": 0.11593013999663526,
+          "history_rows_per_member": 7875,
+          "current_rows_per_member": 15,
+          "attempts": 7,
+          "fixture_payload_bytes": 1192596,
+          "unused_replies": 0,
+          "completed_states": [
+            "OBSERVED",
+            "OBSERVED"
+          ],
+          "current_states": [
+            "OBSERVED",
+            "OBSERVED"
+          ],
+          "result_identity_sha256": "e5776b1b578f63f0ba07df5e63f636d40b22f8b56060c3c430aefd7241c6a015",
+          "request_identity_sha256": "b03a7196a348d09da2c678d25c6d8bce592f85568cd3eadd6dd833bfe66b947d"
+        },
+        {
+          "mode": "RETAINED_ONLY",
+          "n": 2,
+          "seconds": 5.238552950999292,
+          "ttfi_seconds": 5.238552950999292,
+          "setup_seconds": 0.11593013999663526,
+          "history_rows_per_member": 7875,
+          "current_rows_per_member": 15,
+          "attempts": 0,
+          "fixture_payload_bytes": 0,
+          "unused_replies": 0,
+          "completed_states": [
+            "OBSERVED",
+            "OBSERVED"
+          ],
+          "current_states": [
+            "OBSERVED",
+            "OBSERVED"
+          ],
+          "result_identity_sha256": "a441abd8aa6af64f3e9844a20bf531247d0a94e0fec4612e5048f3e11fa48d18",
+          "request_identity_sha256": "474a124c9c65432c0c0ed81565588e77c0394aa2be63e6a51acfc3ef7e873603"
+        },
+        {
+          "mode": "REFRESH_ONCE",
+          "n": 2,
+          "seconds": 23.30393604499841,
+          "ttfi_seconds": 23.30393604499841,
+          "setup_seconds": 0.11593013999663526,
+          "history_rows_per_member": 7875,
+          "current_rows_per_member": 15,
+          "attempts": 2,
+          "fixture_payload_bytes": 2344,
+          "unused_replies": 0,
+          "completed_states": [
+            "OBSERVED",
+            "OBSERVED"
+          ],
+          "current_states": [
+            "OBSERVED",
+            "OBSERVED"
+          ],
+          "result_identity_sha256": "bbfa401d844b82debaf45b7863fc01a36cd0092470fc3ad5dbd7e48163496459",
+          "request_identity_sha256": "3ccbc93a81081cfc7451984b4b825f2cfe00af292ce3a12325d9939a2d745795"
+        }
+      ],
+      "status": "completed"
+    },
+    {
+      "n": 2,
+      "repetition": 3,
+      "warmup": false,
+      "series": "original",
+      "raw_jsonl_sha256": "ae8e11c125088689ac24a1c35089ceb600ee55fb8ad86f3f512f9171ff9a89b7",
+      "resources": {
+        "n": 2,
+        "repetition": 3,
+        "warmup": false,
+        "exit_code": 0,
+        "process_peak_rss_bytes": 172802048,
+        "public_call_rss": {
+          "ACQUIRE_MISSING": {
+            "start_rss_bytes": 99663872,
+            "peak_rss_bytes": 168718336,
+            "samples": 976,
+            "max_sample_gap_seconds": 0.025123780003923457
+          },
+          "RETAINED_ONLY": {
+            "start_rss_bytes": 165281792,
+            "peak_rss_bytes": 169730048,
+            "samples": 229,
+            "max_sample_gap_seconds": 0.02512863800075138
+          },
+          "REFRESH_ONCE": {
+            "start_rss_bytes": 166924288,
+            "peak_rss_bytes": 172802048,
+            "samples": 880,
+            "max_sample_gap_seconds": 0.074043510001502
+          }
+        },
+        "platform": "macOS-26.6.2-x86_64-i386-64bit-Mach-O",
+        "python": "3.13.7 (main, Sep 18 2025, 19:55:22) [Clang 20.1.4 ]",
+        "worker_sha256": "0e6fda9d980b0874297b8ffd5f16e91b3e4da4a8020ca6def2b4d9b4b8d90a33"
+      },
+      "results": [
+        {
+          "mode": "ACQUIRE_MISSING",
+          "n": 2,
+          "seconds": 21.656347656004073,
+          "ttfi_seconds": 21.656347656004073,
+          "setup_seconds": 0.12411790400074096,
+          "history_rows_per_member": 7875,
+          "current_rows_per_member": 15,
+          "attempts": 7,
+          "fixture_payload_bytes": 1192596,
+          "unused_replies": 0,
+          "completed_states": [
+            "OBSERVED",
+            "OBSERVED"
+          ],
+          "current_states": [
+            "OBSERVED",
+            "OBSERVED"
+          ],
+          "result_identity_sha256": "e5776b1b578f63f0ba07df5e63f636d40b22f8b56060c3c430aefd7241c6a015",
+          "request_identity_sha256": "b03a7196a348d09da2c678d25c6d8bce592f85568cd3eadd6dd833bfe66b947d"
+        },
+        {
+          "mode": "RETAINED_ONLY",
+          "n": 2,
+          "seconds": 5.092906229001528,
+          "ttfi_seconds": 5.092906229001528,
+          "setup_seconds": 0.12411790400074096,
+          "history_rows_per_member": 7875,
+          "current_rows_per_member": 15,
+          "attempts": 0,
+          "fixture_payload_bytes": 0,
+          "unused_replies": 0,
+          "completed_states": [
+            "OBSERVED",
+            "OBSERVED"
+          ],
+          "current_states": [
+            "OBSERVED",
+            "OBSERVED"
+          ],
+          "result_identity_sha256": "a441abd8aa6af64f3e9844a20bf531247d0a94e0fec4612e5048f3e11fa48d18",
+          "request_identity_sha256": "474a124c9c65432c0c0ed81565588e77c0394aa2be63e6a51acfc3ef7e873603"
+        },
+        {
+          "mode": "REFRESH_ONCE",
+          "n": 2,
+          "seconds": 19.518695762999414,
+          "ttfi_seconds": 19.518695762999414,
+          "setup_seconds": 0.12411790400074096,
+          "history_rows_per_member": 7875,
+          "current_rows_per_member": 15,
+          "attempts": 2,
+          "fixture_payload_bytes": 2344,
+          "unused_replies": 0,
+          "completed_states": [
+            "OBSERVED",
+            "OBSERVED"
+          ],
+          "current_states": [
+            "OBSERVED",
+            "OBSERVED"
+          ],
+          "result_identity_sha256": "bbfa401d844b82debaf45b7863fc01a36cd0092470fc3ad5dbd7e48163496459",
+          "request_identity_sha256": "3ccbc93a81081cfc7451984b4b825f2cfe00af292ce3a12325d9939a2d745795"
+        }
+      ],
+      "status": "completed"
+    },
+    {
+      "n": 2,
+      "repetition": 4,
+      "warmup": false,
+      "series": "supplemental",
+      "raw_jsonl_sha256": "6bd5de83bcbaf67583e0d0239f4362ffc9b8d942edfb5596afb4ac84495a63a1",
+      "resources": {
+        "n": 2,
+        "repetition": 4,
+        "warmup": false,
+        "exit_code": 0,
+        "process_peak_rss_bytes": 174206976,
+        "public_call_rss": {
+          "ACQUIRE_MISSING": {
+            "start_rss_bytes": 97173504,
+            "peak_rss_bytes": 173518848,
+            "samples": 1028,
+            "max_sample_gap_seconds": 0.09235062499647029
+          },
+          "RETAINED_ONLY": {
+            "start_rss_bytes": 167129088,
+            "peak_rss_bytes": 170668032,
+            "samples": 254,
+            "max_sample_gap_seconds": 0.0905535880010575
+          },
+          "REFRESH_ONCE": {
+            "start_rss_bytes": 167604224,
+            "peak_rss_bytes": 174206976,
+            "samples": 911,
+            "max_sample_gap_seconds": 0.10704090599756455
+          }
+        },
+        "platform": "macOS-26.6.2-x86_64-i386-64bit-Mach-O",
+        "python": "3.13.7 (main, Sep 18 2025, 19:55:22) [Clang 20.1.4 ]",
+        "worker_sha256": "0e6fda9d980b0874297b8ffd5f16e91b3e4da4a8020ca6def2b4d9b4b8d90a33"
+      },
+      "results": [
+        {
+          "mode": "ACQUIRE_MISSING",
+          "n": 2,
+          "seconds": 23.158536003997142,
+          "ttfi_seconds": 23.158536003997142,
+          "setup_seconds": 0.12682666599721415,
+          "history_rows_per_member": 7875,
+          "current_rows_per_member": 15,
+          "attempts": 7,
+          "fixture_payload_bytes": 1192596,
+          "unused_replies": 0,
+          "completed_states": [
+            "OBSERVED",
+            "OBSERVED"
+          ],
+          "current_states": [
+            "OBSERVED",
+            "OBSERVED"
+          ],
+          "result_identity_sha256": "e5776b1b578f63f0ba07df5e63f636d40b22f8b56060c3c430aefd7241c6a015",
+          "request_identity_sha256": "b03a7196a348d09da2c678d25c6d8bce592f85568cd3eadd6dd833bfe66b947d"
+        },
+        {
+          "mode": "RETAINED_ONLY",
+          "n": 2,
+          "seconds": 5.806481952000468,
+          "ttfi_seconds": 5.806481952000468,
+          "setup_seconds": 0.12682666599721415,
+          "history_rows_per_member": 7875,
+          "current_rows_per_member": 15,
+          "attempts": 0,
+          "fixture_payload_bytes": 0,
+          "unused_replies": 0,
+          "completed_states": [
+            "OBSERVED",
+            "OBSERVED"
+          ],
+          "current_states": [
+            "OBSERVED",
+            "OBSERVED"
+          ],
+          "result_identity_sha256": "a441abd8aa6af64f3e9844a20bf531247d0a94e0fec4612e5048f3e11fa48d18",
+          "request_identity_sha256": "474a124c9c65432c0c0ed81565588e77c0394aa2be63e6a51acfc3ef7e873603"
+        },
+        {
+          "mode": "REFRESH_ONCE",
+          "n": 2,
+          "seconds": 20.355683594003494,
+          "ttfi_seconds": 20.355683594003494,
+          "setup_seconds": 0.12682666599721415,
+          "history_rows_per_member": 7875,
+          "current_rows_per_member": 15,
+          "attempts": 2,
+          "fixture_payload_bytes": 2344,
+          "unused_replies": 0,
+          "completed_states": [
+            "OBSERVED",
+            "OBSERVED"
+          ],
+          "current_states": [
+            "OBSERVED",
+            "OBSERVED"
+          ],
+          "result_identity_sha256": "bbfa401d844b82debaf45b7863fc01a36cd0092470fc3ad5dbd7e48163496459",
+          "request_identity_sha256": "3ccbc93a81081cfc7451984b4b825f2cfe00af292ce3a12325d9939a2d745795"
+        }
+      ],
+      "status": "completed"
+    },
+    {
+      "n": 2,
+      "repetition": 5,
+      "warmup": false,
+      "series": "supplemental",
+      "raw_jsonl_sha256": "cf3f3bde0eff758eebbc9966b1a2fb8f9e4b705df83ba6b8311369e3126e62b4",
+      "resources": {
+        "n": 2,
+        "repetition": 5,
+        "warmup": false,
+        "exit_code": 0,
+        "process_peak_rss_bytes": 175984640,
+        "public_call_rss": {
+          "ACQUIRE_MISSING": {
+            "start_rss_bytes": 100917248,
+            "peak_rss_bytes": 175984640,
+            "samples": 983,
+            "max_sample_gap_seconds": 0.09608445199410198
+          },
+          "RETAINED_ONLY": {
+            "start_rss_bytes": 164544512,
+            "peak_rss_bytes": 169181184,
+            "samples": 233,
+            "max_sample_gap_seconds": 0.09910764700180152
+          },
+          "REFRESH_ONCE": {
+            "start_rss_bytes": 166371328,
+            "peak_rss_bytes": 172720128,
+            "samples": 870,
+            "max_sample_gap_seconds": 0.08426220000546891
+          }
+        },
+        "platform": "macOS-26.6.2-x86_64-i386-64bit-Mach-O",
+        "python": "3.13.7 (main, Sep 18 2025, 19:55:22) [Clang 20.1.4 ]",
+        "worker_sha256": "0e6fda9d980b0874297b8ffd5f16e91b3e4da4a8020ca6def2b4d9b4b8d90a33"
+      },
+      "results": [
+        {
+          "mode": "ACQUIRE_MISSING",
+          "n": 2,
+          "seconds": 22.073896298999898,
+          "ttfi_seconds": 22.073896298999898,
+          "setup_seconds": 0.11518063400581013,
+          "history_rows_per_member": 7875,
+          "current_rows_per_member": 15,
+          "attempts": 7,
+          "fixture_payload_bytes": 1192596,
+          "unused_replies": 0,
+          "completed_states": [
+            "OBSERVED",
+            "OBSERVED"
+          ],
+          "current_states": [
+            "OBSERVED",
+            "OBSERVED"
+          ],
+          "result_identity_sha256": "e5776b1b578f63f0ba07df5e63f636d40b22f8b56060c3c430aefd7241c6a015",
+          "request_identity_sha256": "b03a7196a348d09da2c678d25c6d8bce592f85568cd3eadd6dd833bfe66b947d"
+        },
+        {
+          "mode": "RETAINED_ONLY",
+          "n": 2,
+          "seconds": 5.266700810003385,
+          "ttfi_seconds": 5.266700810003385,
+          "setup_seconds": 0.11518063400581013,
+          "history_rows_per_member": 7875,
+          "current_rows_per_member": 15,
+          "attempts": 0,
+          "fixture_payload_bytes": 0,
+          "unused_replies": 0,
+          "completed_states": [
+            "OBSERVED",
+            "OBSERVED"
+          ],
+          "current_states": [
+            "OBSERVED",
+            "OBSERVED"
+          ],
+          "result_identity_sha256": "a441abd8aa6af64f3e9844a20bf531247d0a94e0fec4612e5048f3e11fa48d18",
+          "request_identity_sha256": "474a124c9c65432c0c0ed81565588e77c0394aa2be63e6a51acfc3ef7e873603"
+        },
+        {
+          "mode": "REFRESH_ONCE",
+          "n": 2,
+          "seconds": 19.51487174000067,
+          "ttfi_seconds": 19.51487174000067,
+          "setup_seconds": 0.11518063400581013,
+          "history_rows_per_member": 7875,
+          "current_rows_per_member": 15,
+          "attempts": 2,
+          "fixture_payload_bytes": 2344,
+          "unused_replies": 0,
+          "completed_states": [
+            "OBSERVED",
+            "OBSERVED"
+          ],
+          "current_states": [
+            "OBSERVED",
+            "OBSERVED"
+          ],
+          "result_identity_sha256": "bbfa401d844b82debaf45b7863fc01a36cd0092470fc3ad5dbd7e48163496459",
+          "request_identity_sha256": "3ccbc93a81081cfc7451984b4b825f2cfe00af292ce3a12325d9939a2d745795"
+        }
+      ],
+      "status": "completed"
+    },
+    {
+      "n": 2,
+      "repetition": 6,
+      "warmup": false,
+      "series": "supplemental",
+      "raw_jsonl_sha256": "bc0683af575f6978b523ee1b26a0e1a5d31db53fb74277bbac47f2e89e42220e",
+      "resources": {
+        "n": 2,
+        "repetition": 6,
+        "warmup": false,
+        "exit_code": 0,
+        "process_peak_rss_bytes": 175669248,
+        "public_call_rss": {
+          "ACQUIRE_MISSING": {
+            "start_rss_bytes": 97144832,
+            "peak_rss_bytes": 175669248,
+            "samples": 1024,
+            "max_sample_gap_seconds": 0.07981163400108926
+          },
+          "RETAINED_ONLY": {
+            "start_rss_bytes": 161607680,
+            "peak_rss_bytes": 166600704,
+            "samples": 234,
+            "max_sample_gap_seconds": 0.025113611001870595
+          },
+          "REFRESH_ONCE": {
+            "start_rss_bytes": 163782656,
+            "peak_rss_bytes": 169394176,
+            "samples": 851,
+            "max_sample_gap_seconds": 0.05802540200238582
+          }
+        },
+        "platform": "macOS-26.6.2-x86_64-i386-64bit-Mach-O",
+        "python": "3.13.7 (main, Sep 18 2025, 19:55:22) [Clang 20.1.4 ]",
+        "worker_sha256": "0e6fda9d980b0874297b8ffd5f16e91b3e4da4a8020ca6def2b4d9b4b8d90a33"
+      },
+      "results": [
+        {
+          "mode": "ACQUIRE_MISSING",
+          "n": 2,
+          "seconds": 22.700186217996816,
+          "ttfi_seconds": 22.700186217996816,
+          "setup_seconds": 0.11817338399850996,
+          "history_rows_per_member": 7875,
+          "current_rows_per_member": 15,
+          "attempts": 7,
+          "fixture_payload_bytes": 1192596,
+          "unused_replies": 0,
+          "completed_states": [
+            "OBSERVED",
+            "OBSERVED"
+          ],
+          "current_states": [
+            "OBSERVED",
+            "OBSERVED"
+          ],
+          "result_identity_sha256": "e5776b1b578f63f0ba07df5e63f636d40b22f8b56060c3c430aefd7241c6a015",
+          "request_identity_sha256": "b03a7196a348d09da2c678d25c6d8bce592f85568cd3eadd6dd833bfe66b947d"
+        },
+        {
+          "mode": "RETAINED_ONLY",
+          "n": 2,
+          "seconds": 5.163425693004683,
+          "ttfi_seconds": 5.163425693004683,
+          "setup_seconds": 0.11817338399850996,
+          "history_rows_per_member": 7875,
+          "current_rows_per_member": 15,
+          "attempts": 0,
+          "fixture_payload_bytes": 0,
+          "unused_replies": 0,
+          "completed_states": [
+            "OBSERVED",
+            "OBSERVED"
+          ],
+          "current_states": [
+            "OBSERVED",
+            "OBSERVED"
+          ],
+          "result_identity_sha256": "a441abd8aa6af64f3e9844a20bf531247d0a94e0fec4612e5048f3e11fa48d18",
+          "request_identity_sha256": "474a124c9c65432c0c0ed81565588e77c0394aa2be63e6a51acfc3ef7e873603"
+        },
+        {
+          "mode": "REFRESH_ONCE",
+          "n": 2,
+          "seconds": 19.06555158500123,
+          "ttfi_seconds": 19.06555158500123,
+          "setup_seconds": 0.11817338399850996,
+          "history_rows_per_member": 7875,
+          "current_rows_per_member": 15,
+          "attempts": 2,
+          "fixture_payload_bytes": 2344,
+          "unused_replies": 0,
+          "completed_states": [
+            "OBSERVED",
+            "OBSERVED"
+          ],
+          "current_states": [
+            "OBSERVED",
+            "OBSERVED"
+          ],
+          "result_identity_sha256": "bbfa401d844b82debaf45b7863fc01a36cd0092470fc3ad5dbd7e48163496459",
+          "request_identity_sha256": "3ccbc93a81081cfc7451984b4b825f2cfe00af292ce3a12325d9939a2d745795"
+        }
+      ],
+      "status": "completed"
+    },
+    {
+      "n": 50,
+      "repetition": 0,
+      "warmup": true,
+      "series": "original",
+      "raw_jsonl_sha256": "370152acc9d537158a98c61366a6ad494991b0dda7f5551ed0b63c5c2ab515c2",
+      "resources": {
+        "n": 50,
+        "repetition": 0,
+        "warmup": true,
+        "exit_code": -2,
+        "process_peak_rss_bytes": 210034688,
+        "public_call_rss": {
+          "ACQUIRE_MISSING": {
+            "start_rss_bytes": 96944128,
+            "peak_rss_bytes": 210034688,
+            "samples": 56026,
+            "max_sample_gap_seconds": 0.11442712000280153
+          }
+        },
+        "platform": "macOS-26.6.2-x86_64-i386-64bit-Mach-O",
+        "python": "3.13.7 (main, Sep 18 2025, 19:55:22) [Clang 20.1.4 ]",
+        "worker_sha256": "0e6fda9d980b0874297b8ffd5f16e91b3e4da4a8020ca6def2b4d9b4b8d90a33"
+      },
+      "results": [],
+      "status": "interrupted; no completed full-cohort result"
+    }
+  ],
+  "n2_series_summary": {
+    "original": {
+      "ACQUIRE_MISSING": {
+        "median_seconds": 21.656347656004073,
+        "min_seconds": 21.6045527929964,
+        "max_seconds": 22.03560206900147,
+        "range_over_median_percent": 1.9904061518220217
+      },
+      "RETAINED_ONLY": {
+        "median_seconds": 5.116231271000288,
+        "min_seconds": 5.092906229001528,
+        "max_seconds": 5.238552950999292,
+        "range_over_median_percent": 2.8467579802992016
+      },
+      "REFRESH_ONCE": {
+        "median_seconds": 19.518695762999414,
+        "min_seconds": 19.085909428999003,
+        "max_seconds": 23.30393604499841,
+        "range_over_median_percent": 21.610186803543
+      }
+    },
+    "supplemental": {
+      "ACQUIRE_MISSING": {
+        "median_seconds": 22.700186217996816,
+        "min_seconds": 22.073896298999898,
+        "max_seconds": 23.158536003997142,
+        "range_over_median_percent": 4.778109283250444
+      },
+      "RETAINED_ONLY": {
+        "median_seconds": 5.266700810003385,
+        "min_seconds": 5.163425693004683,
+        "max_seconds": 5.806481952000468,
+        "range_over_median_percent": 12.209849812892088
+      },
+      "REFRESH_ONCE": {
+        "median_seconds": 19.51487174000067,
+        "min_seconds": 19.06555158500123,
+        "max_seconds": 20.355683594003494,
+        "range_over_median_percent": 6.611019668439898
+      }
+    },
+    "pooled": {
+      "ACQUIRE_MISSING": {
+        "median_seconds": 22.054749184000684,
+        "min_seconds": 21.6045527929964,
+        "max_seconds": 23.158536003997142,
+        "range_over_median_percent": 7.046025316524827
+      },
+      "RETAINED_ONLY": {
+        "median_seconds": 5.200989322001988,
+        "min_seconds": 5.092906229001528,
+        "max_seconds": 5.806481952000468,
+        "range_over_median_percent": 13.719999769664337
+      },
+      "REFRESH_ONCE": {
+        "median_seconds": 19.516783751500043,
+        "min_seconds": 19.06555158500123,
+        "max_seconds": 23.30393604499841,
+        "range_over_median_percent": 21.716613320939317
+      }
+    }
+  },
+  "bharatstock": {
+    "separate_environment": true,
+    "protocol_sha256": "db32700acbaa443ef380191765926405fadcac8d074df5924bad35ee02da11e6",
+    "raw_sha256": "976dacc4f6191b7a10e48bb17a0e8960c4b71af39d9ed1449d7a0e97be083bc3",
+    "report_sha256": "a6246f6425e9d06c283077d7806487251cb8345bcac9b0db68cdc7e55f39395c",
+    "limit": "Separate Python3.14.6 one-stock measurement; no comparison with raw Python3.13.7 environment or identical-request V2 reuse claim.",
+    "runs": [
+      {
+        "version": "v1",
+        "mode": "cold",
+        "rep": "warmup",
+        "wall_ns": 439821967,
+        "warmup": true,
+        "seed_setup_excluded": null,
+        "rss_sampler_interval_ms": 5,
+        "rss_sample_count": 72,
+        "rss_max_gap_ms": 7.996194,
+        "rss_baseline_bytes": 86773760,
+        "rss_peak_bytes": 103636992,
+        "rss_incremental_peak_bytes": 16863232,
+        "official_source_gets": 3,
+        "official_urls": [
+          "https://api.upstox.com/v2/market/holidays",
+          "https://www.nseindia.com/api/holiday-master?type=trading&year=2026",
+          "https://assets.upstox.com/market-quote/instruments/exchange/NSE.json.gz"
+        ],
+        "bharatstock_transport_gets": 2,
+        "bharatstock_client_requests_used": 2,
+        "price_response_rows": 2,
+        "price_pages": 1,
+        "transport_retry_observed": false,
+        "client_transport_call_count_matches_requests_used": true,
+        "canonical": {
+          "status": "OBSERVED",
+          "price_action_status": "OBSERVED",
+          "sessions": 2,
+          "reuse_state": "CAPTURED",
+          "price_action": {
+            "candle_direction": "UP",
+            "session_range_state": "NON_FLAT",
+            "close_vs_previous_close": "UP"
+          }
+        }
+      },
+      {
+        "version": "v1",
+        "mode": "cold",
+        "rep": 1,
+        "wall_ns": 381624786,
+        "warmup": false,
+        "seed_setup_excluded": null,
+        "rss_sampler_interval_ms": 5,
+        "rss_sample_count": 63,
+        "rss_max_gap_ms": 7.626435,
+        "rss_baseline_bytes": 101978112,
+        "rss_peak_bytes": 108163072,
+        "rss_incremental_peak_bytes": 6184960,
+        "official_source_gets": 3,
+        "official_urls": [
+          "https://api.upstox.com/v2/market/holidays",
+          "https://www.nseindia.com/api/holiday-master?type=trading&year=2026",
+          "https://assets.upstox.com/market-quote/instruments/exchange/NSE.json.gz"
+        ],
+        "bharatstock_transport_gets": 2,
+        "bharatstock_client_requests_used": 2,
+        "price_response_rows": 2,
+        "price_pages": 1,
+        "transport_retry_observed": false,
+        "client_transport_call_count_matches_requests_used": true,
+        "canonical": {
+          "status": "OBSERVED",
+          "price_action_status": "OBSERVED",
+          "sessions": 2,
+          "reuse_state": "CAPTURED",
+          "price_action": {
+            "candle_direction": "UP",
+            "session_range_state": "NON_FLAT",
+            "close_vs_previous_close": "UP"
+          }
+        }
+      },
+      {
+        "version": "v1",
+        "mode": "cold",
+        "rep": 2,
+        "wall_ns": 379319974,
+        "warmup": false,
+        "seed_setup_excluded": null,
+        "rss_sampler_interval_ms": 5,
+        "rss_sample_count": 62,
+        "rss_max_gap_ms": 7.64762,
+        "rss_baseline_bytes": 105607168,
+        "rss_peak_bytes": 112590848,
+        "rss_incremental_peak_bytes": 6983680,
+        "official_source_gets": 3,
+        "official_urls": [
+          "https://api.upstox.com/v2/market/holidays",
+          "https://www.nseindia.com/api/holiday-master?type=trading&year=2026",
+          "https://assets.upstox.com/market-quote/instruments/exchange/NSE.json.gz"
+        ],
+        "bharatstock_transport_gets": 2,
+        "bharatstock_client_requests_used": 2,
+        "price_response_rows": 2,
+        "price_pages": 1,
+        "transport_retry_observed": false,
+        "client_transport_call_count_matches_requests_used": true,
+        "canonical": {
+          "status": "OBSERVED",
+          "price_action_status": "OBSERVED",
+          "sessions": 2,
+          "reuse_state": "CAPTURED",
+          "price_action": {
+            "candle_direction": "UP",
+            "session_range_state": "NON_FLAT",
+            "close_vs_previous_close": "UP"
+          }
+        }
+      },
+      {
+        "version": "v1",
+        "mode": "cold",
+        "rep": 3,
+        "wall_ns": 376159827,
+        "warmup": false,
+        "seed_setup_excluded": null,
+        "rss_sampler_interval_ms": 5,
+        "rss_sample_count": 60,
+        "rss_max_gap_ms": 8.345836,
+        "rss_baseline_bytes": 110346240,
+        "rss_peak_bytes": 114499584,
+        "rss_incremental_peak_bytes": 4153344,
+        "official_source_gets": 3,
+        "official_urls": [
+          "https://api.upstox.com/v2/market/holidays",
+          "https://www.nseindia.com/api/holiday-master?type=trading&year=2026",
+          "https://assets.upstox.com/market-quote/instruments/exchange/NSE.json.gz"
+        ],
+        "bharatstock_transport_gets": 2,
+        "bharatstock_client_requests_used": 2,
+        "price_response_rows": 2,
+        "price_pages": 1,
+        "transport_retry_observed": false,
+        "client_transport_call_count_matches_requests_used": true,
+        "canonical": {
+          "status": "OBSERVED",
+          "price_action_status": "OBSERVED",
+          "sessions": 2,
+          "reuse_state": "CAPTURED",
+          "price_action": {
+            "candle_direction": "UP",
+            "session_range_state": "NON_FLAT",
+            "close_vs_previous_close": "UP"
+          }
+        }
+      },
+      {
+        "version": "v1",
+        "mode": "warm",
+        "rep": "warmup",
+        "wall_ns": 411103815,
+        "warmup": true,
+        "seed_setup_excluded": {
+          "transport_gets": 2,
+          "client_requests_used": 2,
+          "official_gets": 3,
+          "rows": 2,
+          "result": {
+            "status": "OBSERVED",
+            "price_action_status": "OBSERVED",
+            "sessions": 2,
+            "reuse_state": "CAPTURED",
+            "price_action": {
+              "candle_direction": "UP",
+              "session_range_state": "NON_FLAT",
+              "close_vs_previous_close": "UP"
+            }
+          }
+        },
+        "rss_sampler_interval_ms": 5,
+        "rss_sample_count": 69,
+        "rss_max_gap_ms": 7.954934,
+        "rss_baseline_bytes": 112431104,
+        "rss_peak_bytes": 114442240,
+        "rss_incremental_peak_bytes": 2011136,
+        "official_source_gets": 0,
+        "official_urls": [],
+        "bharatstock_transport_gets": 0,
+        "bharatstock_client_requests_used": 0,
+        "price_response_rows": 0,
+        "price_pages": 0,
+        "transport_retry_observed": false,
+        "client_transport_call_count_matches_requests_used": true,
+        "canonical": {
+          "status": "OBSERVED",
+          "price_action_status": "OBSERVED",
+          "sessions": 2,
+          "reuse_state": "REUSED",
+          "price_action": {
+            "candle_direction": "UP",
+            "session_range_state": "NON_FLAT",
+            "close_vs_previous_close": "UP"
+          }
+        }
+      },
+      {
+        "version": "v1",
+        "mode": "warm",
+        "rep": 1,
+        "wall_ns": 404673629,
+        "warmup": false,
+        "seed_setup_excluded": {
+          "transport_gets": 2,
+          "client_requests_used": 2,
+          "official_gets": 3,
+          "rows": 2,
+          "result": {
+            "status": "OBSERVED",
+            "price_action_status": "OBSERVED",
+            "sessions": 2,
+            "reuse_state": "CAPTURED",
+            "price_action": {
+              "candle_direction": "UP",
+              "session_range_state": "NON_FLAT",
+              "close_vs_previous_close": "UP"
+            }
+          }
+        },
+        "rss_sampler_interval_ms": 5,
+        "rss_sample_count": 64,
+        "rss_max_gap_ms": 7.602447,
+        "rss_baseline_bytes": 114315264,
+        "rss_peak_bytes": 116449280,
+        "rss_incremental_peak_bytes": 2134016,
+        "official_source_gets": 0,
+        "official_urls": [],
+        "bharatstock_transport_gets": 0,
+        "bharatstock_client_requests_used": 0,
+        "price_response_rows": 0,
+        "price_pages": 0,
+        "transport_retry_observed": false,
+        "client_transport_call_count_matches_requests_used": true,
+        "canonical": {
+          "status": "OBSERVED",
+          "price_action_status": "OBSERVED",
+          "sessions": 2,
+          "reuse_state": "REUSED",
+          "price_action": {
+            "candle_direction": "UP",
+            "session_range_state": "NON_FLAT",
+            "close_vs_previous_close": "UP"
+          }
+        }
+      },
+      {
+        "version": "v1",
+        "mode": "warm",
+        "rep": 2,
+        "wall_ns": 407822294,
+        "warmup": false,
+        "seed_setup_excluded": {
+          "transport_gets": 2,
+          "client_requests_used": 2,
+          "official_gets": 3,
+          "rows": 2,
+          "result": {
+            "status": "OBSERVED",
+            "price_action_status": "OBSERVED",
+            "sessions": 2,
+            "reuse_state": "CAPTURED",
+            "price_action": {
+              "candle_direction": "UP",
+              "session_range_state": "NON_FLAT",
+              "close_vs_previous_close": "UP"
+            }
+          }
+        },
+        "rss_sampler_interval_ms": 5,
+        "rss_sample_count": 66,
+        "rss_max_gap_ms": 8.580897,
+        "rss_baseline_bytes": 115539968,
+        "rss_peak_bytes": 117252096,
+        "rss_incremental_peak_bytes": 1712128,
+        "official_source_gets": 0,
+        "official_urls": [],
+        "bharatstock_transport_gets": 0,
+        "bharatstock_client_requests_used": 0,
+        "price_response_rows": 0,
+        "price_pages": 0,
+        "transport_retry_observed": false,
+        "client_transport_call_count_matches_requests_used": true,
+        "canonical": {
+          "status": "OBSERVED",
+          "price_action_status": "OBSERVED",
+          "sessions": 2,
+          "reuse_state": "REUSED",
+          "price_action": {
+            "candle_direction": "UP",
+            "session_range_state": "NON_FLAT",
+            "close_vs_previous_close": "UP"
+          }
+        }
+      },
+      {
+        "version": "v1",
+        "mode": "warm",
+        "rep": 3,
+        "wall_ns": 406304474,
+        "warmup": false,
+        "seed_setup_excluded": {
+          "transport_gets": 2,
+          "client_requests_used": 2,
+          "official_gets": 3,
+          "rows": 2,
+          "result": {
+            "status": "OBSERVED",
+            "price_action_status": "OBSERVED",
+            "sessions": 2,
+            "reuse_state": "CAPTURED",
+            "price_action": {
+              "candle_direction": "UP",
+              "session_range_state": "NON_FLAT",
+              "close_vs_previous_close": "UP"
+            }
+          }
+        },
+        "rss_sampler_interval_ms": 5,
+        "rss_sample_count": 66,
+        "rss_max_gap_ms": 7.59247,
+        "rss_baseline_bytes": 115965952,
+        "rss_peak_bytes": 117911552,
+        "rss_incremental_peak_bytes": 1945600,
+        "official_source_gets": 0,
+        "official_urls": [],
+        "bharatstock_transport_gets": 0,
+        "bharatstock_client_requests_used": 0,
+        "price_response_rows": 0,
+        "price_pages": 0,
+        "transport_retry_observed": false,
+        "client_transport_call_count_matches_requests_used": true,
+        "canonical": {
+          "status": "OBSERVED",
+          "price_action_status": "OBSERVED",
+          "sessions": 2,
+          "reuse_state": "REUSED",
+          "price_action": {
+            "candle_direction": "UP",
+            "session_range_state": "NON_FLAT",
+            "close_vs_previous_close": "UP"
+          }
+        }
+      },
+      {
+        "version": "v1",
+        "mode": "refresh",
+        "rep": "warmup",
+        "wall_ns": 924881382,
+        "warmup": true,
+        "seed_setup_excluded": {
+          "transport_gets": 2,
+          "client_requests_used": 2,
+          "official_gets": 3,
+          "rows": 2,
+          "result": {
+            "status": "OBSERVED",
+            "price_action_status": "OBSERVED",
+            "sessions": 2,
+            "reuse_state": "CAPTURED",
+            "price_action": {
+              "candle_direction": "UP",
+              "session_range_state": "NON_FLAT",
+              "close_vs_previous_close": "UP"
+            }
+          }
+        },
+        "rss_sampler_interval_ms": 5,
+        "rss_sample_count": 147,
+        "rss_max_gap_ms": 9.279748,
+        "rss_baseline_bytes": 116666368,
+        "rss_peak_bytes": 118071296,
+        "rss_incremental_peak_bytes": 1404928,
+        "official_source_gets": 2,
+        "official_urls": [
+          "https://api.upstox.com/v2/market/holidays",
+          "https://www.nseindia.com/api/holiday-master?type=trading&year=2026"
+        ],
+        "bharatstock_transport_gets": 2,
+        "bharatstock_client_requests_used": 2,
+        "price_response_rows": 2,
+        "price_pages": 1,
+        "transport_retry_observed": false,
+        "client_transport_call_count_matches_requests_used": true,
+        "canonical": {
+          "status": "OBSERVED",
+          "price_action_status": "OBSERVED",
+          "sessions": 2,
+          "reuse_state": "REFRESHED",
+          "price_action": {
+            "candle_direction": "UP",
+            "session_range_state": "NON_FLAT",
+            "close_vs_previous_close": "UP"
+          }
+        }
+      },
+      {
+        "version": "v1",
+        "mode": "refresh",
+        "rep": 1,
+        "wall_ns": 936329724,
+        "warmup": false,
+        "seed_setup_excluded": {
+          "transport_gets": 2,
+          "client_requests_used": 2,
+          "official_gets": 3,
+          "rows": 2,
+          "result": {
+            "status": "OBSERVED",
+            "price_action_status": "OBSERVED",
+            "sessions": 2,
+            "reuse_state": "CAPTURED",
+            "price_action": {
+              "candle_direction": "UP",
+              "session_range_state": "NON_FLAT",
+              "close_vs_previous_close": "UP"
+            }
+          }
+        },
+        "rss_sampler_interval_ms": 5,
+        "rss_sample_count": 146,
+        "rss_max_gap_ms": 8.043898,
+        "rss_baseline_bytes": 117096448,
+        "rss_peak_bytes": 118521856,
+        "rss_incremental_peak_bytes": 1425408,
+        "official_source_gets": 2,
+        "official_urls": [
+          "https://api.upstox.com/v2/market/holidays",
+          "https://www.nseindia.com/api/holiday-master?type=trading&year=2026"
+        ],
+        "bharatstock_transport_gets": 2,
+        "bharatstock_client_requests_used": 2,
+        "price_response_rows": 2,
+        "price_pages": 1,
+        "transport_retry_observed": false,
+        "client_transport_call_count_matches_requests_used": true,
+        "canonical": {
+          "status": "OBSERVED",
+          "price_action_status": "OBSERVED",
+          "sessions": 2,
+          "reuse_state": "REFRESHED",
+          "price_action": {
+            "candle_direction": "UP",
+            "session_range_state": "NON_FLAT",
+            "close_vs_previous_close": "UP"
+          }
+        }
+      },
+      {
+        "version": "v1",
+        "mode": "refresh",
+        "rep": 2,
+        "wall_ns": 942514923,
+        "warmup": false,
+        "seed_setup_excluded": {
+          "transport_gets": 2,
+          "client_requests_used": 2,
+          "official_gets": 3,
+          "rows": 2,
+          "result": {
+            "status": "OBSERVED",
+            "price_action_status": "OBSERVED",
+            "sessions": 2,
+            "reuse_state": "CAPTURED",
+            "price_action": {
+              "candle_direction": "UP",
+              "session_range_state": "NON_FLAT",
+              "close_vs_previous_close": "UP"
+            }
+          }
+        },
+        "rss_sampler_interval_ms": 5,
+        "rss_sample_count": 153,
+        "rss_max_gap_ms": 8.544491,
+        "rss_baseline_bytes": 116912128,
+        "rss_peak_bytes": 119111680,
+        "rss_incremental_peak_bytes": 2199552,
+        "official_source_gets": 2,
+        "official_urls": [
+          "https://api.upstox.com/v2/market/holidays",
+          "https://www.nseindia.com/api/holiday-master?type=trading&year=2026"
+        ],
+        "bharatstock_transport_gets": 2,
+        "bharatstock_client_requests_used": 2,
+        "price_response_rows": 2,
+        "price_pages": 1,
+        "transport_retry_observed": false,
+        "client_transport_call_count_matches_requests_used": true,
+        "canonical": {
+          "status": "OBSERVED",
+          "price_action_status": "OBSERVED",
+          "sessions": 2,
+          "reuse_state": "REFRESHED",
+          "price_action": {
+            "candle_direction": "UP",
+            "session_range_state": "NON_FLAT",
+            "close_vs_previous_close": "UP"
+          }
+        }
+      },
+      {
+        "version": "v1",
+        "mode": "refresh",
+        "rep": 3,
+        "wall_ns": 927559272,
+        "warmup": false,
+        "seed_setup_excluded": {
+          "transport_gets": 2,
+          "client_requests_used": 2,
+          "official_gets": 3,
+          "rows": 2,
+          "result": {
+            "status": "OBSERVED",
+            "price_action_status": "OBSERVED",
+            "sessions": 2,
+            "reuse_state": "CAPTURED",
+            "price_action": {
+              "candle_direction": "UP",
+              "session_range_state": "NON_FLAT",
+              "close_vs_previous_close": "UP"
+            }
+          }
+        },
+        "rss_sampler_interval_ms": 5,
+        "rss_sample_count": 145,
+        "rss_max_gap_ms": 8.950138,
+        "rss_baseline_bytes": 117403648,
+        "rss_peak_bytes": 119267328,
+        "rss_incremental_peak_bytes": 1863680,
+        "official_source_gets": 2,
+        "official_urls": [
+          "https://api.upstox.com/v2/market/holidays",
+          "https://www.nseindia.com/api/holiday-master?type=trading&year=2026"
+        ],
+        "bharatstock_transport_gets": 2,
+        "bharatstock_client_requests_used": 2,
+        "price_response_rows": 2,
+        "price_pages": 1,
+        "transport_retry_observed": false,
+        "client_transport_call_count_matches_requests_used": true,
+        "canonical": {
+          "status": "OBSERVED",
+          "price_action_status": "OBSERVED",
+          "sessions": 2,
+          "reuse_state": "REFRESHED",
+          "price_action": {
+            "candle_direction": "UP",
+            "session_range_state": "NON_FLAT",
+            "close_vs_previous_close": "UP"
+          }
+        }
+      },
+      {
+        "version": "v2",
+        "mode": "cold",
+        "rep": "warmup",
+        "wall_ns": 400356314,
+        "warmup": true,
+        "seed_setup_excluded": null,
+        "rss_sampler_interval_ms": 5,
+        "rss_sample_count": 65,
+        "rss_max_gap_ms": 8.041534,
+        "rss_baseline_bytes": 116363264,
+        "rss_peak_bytes": 120655872,
+        "rss_incremental_peak_bytes": 4292608,
+        "official_source_gets": 3,
+        "official_urls": [
+          "https://api.upstox.com/v2/market/holidays",
+          "https://www.nseindia.com/api/holiday-master?type=trading&year=2026",
+          "https://assets.upstox.com/market-quote/instruments/exchange/NSE.json.gz"
+        ],
+        "bharatstock_transport_gets": 2,
+        "bharatstock_client_requests_used": 2,
+        "price_response_rows": 21,
+        "price_pages": 1,
+        "transport_retry_observed": false,
+        "client_transport_call_count_matches_requests_used": true,
+        "canonical": {
+          "status": "READY",
+          "stage": "complete",
+          "code": "QUESTION_READY",
+          "structure_availability": "OBSERVED",
+          "packet_present": true
+        }
+      },
+      {
+        "version": "v2",
+        "mode": "cold",
+        "rep": 1,
+        "wall_ns": 394340494,
+        "warmup": false,
+        "seed_setup_excluded": null,
+        "rss_sampler_interval_ms": 5,
+        "rss_sample_count": 63,
+        "rss_max_gap_ms": 7.683813,
+        "rss_baseline_bytes": 118890496,
+        "rss_peak_bytes": 121327616,
+        "rss_incremental_peak_bytes": 2437120,
+        "official_source_gets": 3,
+        "official_urls": [
+          "https://api.upstox.com/v2/market/holidays",
+          "https://www.nseindia.com/api/holiday-master?type=trading&year=2026",
+          "https://assets.upstox.com/market-quote/instruments/exchange/NSE.json.gz"
+        ],
+        "bharatstock_transport_gets": 2,
+        "bharatstock_client_requests_used": 2,
+        "price_response_rows": 21,
+        "price_pages": 1,
+        "transport_retry_observed": false,
+        "client_transport_call_count_matches_requests_used": true,
+        "canonical": {
+          "status": "READY",
+          "stage": "complete",
+          "code": "QUESTION_READY",
+          "structure_availability": "OBSERVED",
+          "packet_present": true
+        }
+      },
+      {
+        "version": "v2",
+        "mode": "cold",
+        "rep": 2,
+        "wall_ns": 394016023,
+        "warmup": false,
+        "seed_setup_excluded": null,
+        "rss_sampler_interval_ms": 5,
+        "rss_sample_count": 63,
+        "rss_max_gap_ms": 8.284405,
+        "rss_baseline_bytes": 118915072,
+        "rss_peak_bytes": 121356288,
+        "rss_incremental_peak_bytes": 2441216,
+        "official_source_gets": 3,
+        "official_urls": [
+          "https://api.upstox.com/v2/market/holidays",
+          "https://www.nseindia.com/api/holiday-master?type=trading&year=2026",
+          "https://assets.upstox.com/market-quote/instruments/exchange/NSE.json.gz"
+        ],
+        "bharatstock_transport_gets": 2,
+        "bharatstock_client_requests_used": 2,
+        "price_response_rows": 21,
+        "price_pages": 1,
+        "transport_retry_observed": false,
+        "client_transport_call_count_matches_requests_used": true,
+        "canonical": {
+          "status": "READY",
+          "stage": "complete",
+          "code": "QUESTION_READY",
+          "structure_availability": "OBSERVED",
+          "packet_present": true
+        }
+      },
+      {
+        "version": "v2",
+        "mode": "cold",
+        "rep": 3,
+        "wall_ns": 394992647,
+        "warmup": false,
+        "seed_setup_excluded": null,
+        "rss_sampler_interval_ms": 5,
+        "rss_sample_count": 64,
+        "rss_max_gap_ms": 7.789889,
+        "rss_baseline_bytes": 118951936,
+        "rss_peak_bytes": 121614336,
+        "rss_incremental_peak_bytes": 2662400,
+        "official_source_gets": 3,
+        "official_urls": [
+          "https://api.upstox.com/v2/market/holidays",
+          "https://www.nseindia.com/api/holiday-master?type=trading&year=2026",
+          "https://assets.upstox.com/market-quote/instruments/exchange/NSE.json.gz"
+        ],
+        "bharatstock_transport_gets": 2,
+        "bharatstock_client_requests_used": 2,
+        "price_response_rows": 21,
+        "price_pages": 1,
+        "transport_retry_observed": false,
+        "client_transport_call_count_matches_requests_used": true,
+        "canonical": {
+          "status": "READY",
+          "stage": "complete",
+          "code": "QUESTION_READY",
+          "structure_availability": "OBSERVED",
+          "packet_present": true
+        }
+      },
+      {
+        "version": "v2",
+        "mode": "warm",
+        "rep": "warmup",
+        "wall_ns": 351163191,
+        "warmup": true,
+        "seed_setup_excluded": {
+          "transport_gets": 2,
+          "client_requests_used": 2,
+          "official_gets": 3,
+          "rows": 21,
+          "result": {
+            "status": "READY",
+            "stage": "complete",
+            "code": "QUESTION_READY",
+            "structure_availability": "OBSERVED",
+            "packet_present": true
+          }
+        },
+        "rss_sampler_interval_ms": 5,
+        "rss_sample_count": 56,
+        "rss_max_gap_ms": 7.598295,
+        "rss_baseline_bytes": 119283712,
+        "rss_peak_bytes": 119345152,
+        "rss_incremental_peak_bytes": 61440,
+        "official_source_gets": 2,
+        "official_urls": [
+          "https://api.upstox.com/v2/market/holidays",
+          "https://www.nseindia.com/api/holiday-master?type=trading&year=2026"
+        ],
+        "bharatstock_transport_gets": 2,
+        "bharatstock_client_requests_used": 2,
+        "price_response_rows": 21,
+        "price_pages": 1,
+        "transport_retry_observed": false,
+        "client_transport_call_count_matches_requests_used": true,
+        "canonical": {
+          "status": "READY",
+          "stage": "complete",
+          "code": "QUESTION_READY",
+          "structure_availability": "OBSERVED",
+          "packet_present": true
+        }
+      },
+      {
+        "version": "v2",
+        "mode": "warm",
+        "rep": 1,
+        "wall_ns": 350086437,
+        "warmup": false,
+        "seed_setup_excluded": {
+          "transport_gets": 2,
+          "client_requests_used": 2,
+          "official_gets": 3,
+          "rows": 21,
+          "result": {
+            "status": "READY",
+            "stage": "complete",
+            "code": "QUESTION_READY",
+            "structure_availability": "OBSERVED",
+            "packet_present": true
+          }
+        },
+        "rss_sampler_interval_ms": 5,
+        "rss_sample_count": 56,
+        "rss_max_gap_ms": 8.349873,
+        "rss_baseline_bytes": 119623680,
+        "rss_peak_bytes": 119685120,
+        "rss_incremental_peak_bytes": 61440,
+        "official_source_gets": 2,
+        "official_urls": [
+          "https://api.upstox.com/v2/market/holidays",
+          "https://www.nseindia.com/api/holiday-master?type=trading&year=2026"
+        ],
+        "bharatstock_transport_gets": 2,
+        "bharatstock_client_requests_used": 2,
+        "price_response_rows": 21,
+        "price_pages": 1,
+        "transport_retry_observed": false,
+        "client_transport_call_count_matches_requests_used": true,
+        "canonical": {
+          "status": "READY",
+          "stage": "complete",
+          "code": "QUESTION_READY",
+          "structure_availability": "OBSERVED",
+          "packet_present": true
+        }
+      },
+      {
+        "version": "v2",
+        "mode": "warm",
+        "rep": 2,
+        "wall_ns": 361915572,
+        "warmup": false,
+        "seed_setup_excluded": {
+          "transport_gets": 2,
+          "client_requests_used": 2,
+          "official_gets": 3,
+          "rows": 21,
+          "result": {
+            "status": "READY",
+            "stage": "complete",
+            "code": "QUESTION_READY",
+            "structure_availability": "OBSERVED",
+            "packet_present": true
+          }
+        },
+        "rss_sampler_interval_ms": 5,
+        "rss_sample_count": 64,
+        "rss_max_gap_ms": 8.244355,
+        "rss_baseline_bytes": 119738368,
+        "rss_peak_bytes": 119857152,
+        "rss_incremental_peak_bytes": 118784,
+        "official_source_gets": 2,
+        "official_urls": [
+          "https://api.upstox.com/v2/market/holidays",
+          "https://www.nseindia.com/api/holiday-master?type=trading&year=2026"
+        ],
+        "bharatstock_transport_gets": 2,
+        "bharatstock_client_requests_used": 2,
+        "price_response_rows": 21,
+        "price_pages": 1,
+        "transport_retry_observed": false,
+        "client_transport_call_count_matches_requests_used": true,
+        "canonical": {
+          "status": "READY",
+          "stage": "complete",
+          "code": "QUESTION_READY",
+          "structure_availability": "OBSERVED",
+          "packet_present": true
+        }
+      },
+      {
+        "version": "v2",
+        "mode": "warm",
+        "rep": 3,
+        "wall_ns": 350868953,
+        "warmup": false,
+        "seed_setup_excluded": {
+          "transport_gets": 2,
+          "client_requests_used": 2,
+          "official_gets": 3,
+          "rows": 21,
+          "result": {
+            "status": "READY",
+            "stage": "complete",
+            "code": "QUESTION_READY",
+            "structure_availability": "OBSERVED",
+            "packet_present": true
+          }
+        },
+        "rss_sampler_interval_ms": 5,
+        "rss_sample_count": 55,
+        "rss_max_gap_ms": 8.6174,
+        "rss_baseline_bytes": 120201216,
+        "rss_peak_bytes": 120266752,
+        "rss_incremental_peak_bytes": 65536,
+        "official_source_gets": 2,
+        "official_urls": [
+          "https://api.upstox.com/v2/market/holidays",
+          "https://www.nseindia.com/api/holiday-master?type=trading&year=2026"
+        ],
+        "bharatstock_transport_gets": 2,
+        "bharatstock_client_requests_used": 2,
+        "price_response_rows": 21,
+        "price_pages": 1,
+        "transport_retry_observed": false,
+        "client_transport_call_count_matches_requests_used": true,
+        "canonical": {
+          "status": "READY",
+          "stage": "complete",
+          "code": "QUESTION_READY",
+          "structure_availability": "OBSERVED",
+          "packet_present": true
+        }
+      },
+      {
+        "version": "v2",
+        "mode": "refresh",
+        "rep": "warmup",
+        "wall_ns": 350336152,
+        "warmup": true,
+        "seed_setup_excluded": {
+          "transport_gets": 2,
+          "client_requests_used": 2,
+          "official_gets": 3,
+          "rows": 21,
+          "result": {
+            "status": "READY",
+            "stage": "complete",
+            "code": "QUESTION_READY",
+            "structure_availability": "OBSERVED",
+            "packet_present": true
+          }
+        },
+        "rss_sampler_interval_ms": 5,
+        "rss_sample_count": 55,
+        "rss_max_gap_ms": 7.743522,
+        "rss_baseline_bytes": 120401920,
+        "rss_peak_bytes": 120471552,
+        "rss_incremental_peak_bytes": 69632,
+        "official_source_gets": 2,
+        "official_urls": [
+          "https://api.upstox.com/v2/market/holidays",
+          "https://www.nseindia.com/api/holiday-master?type=trading&year=2026"
+        ],
+        "bharatstock_transport_gets": 2,
+        "bharatstock_client_requests_used": 2,
+        "price_response_rows": 21,
+        "price_pages": 1,
+        "transport_retry_observed": false,
+        "client_transport_call_count_matches_requests_used": true,
+        "canonical": {
+          "status": "READY",
+          "stage": "complete",
+          "code": "QUESTION_READY",
+          "structure_availability": "OBSERVED",
+          "packet_present": true
+        }
+      },
+      {
+        "version": "v2",
+        "mode": "refresh",
+        "rep": 1,
+        "wall_ns": 350609530,
+        "warmup": false,
+        "seed_setup_excluded": {
+          "transport_gets": 2,
+          "client_requests_used": 2,
+          "official_gets": 3,
+          "rows": 21,
+          "result": {
+            "status": "READY",
+            "stage": "complete",
+            "code": "QUESTION_READY",
+            "structure_availability": "OBSERVED",
+            "packet_present": true
+          }
+        },
+        "rss_sampler_interval_ms": 5,
+        "rss_sample_count": 56,
+        "rss_max_gap_ms": 8.289892,
+        "rss_baseline_bytes": 120471552,
+        "rss_peak_bytes": 120860672,
+        "rss_incremental_peak_bytes": 389120,
+        "official_source_gets": 2,
+        "official_urls": [
+          "https://api.upstox.com/v2/market/holidays",
+          "https://www.nseindia.com/api/holiday-master?type=trading&year=2026"
+        ],
+        "bharatstock_transport_gets": 2,
+        "bharatstock_client_requests_used": 2,
+        "price_response_rows": 21,
+        "price_pages": 1,
+        "transport_retry_observed": false,
+        "client_transport_call_count_matches_requests_used": true,
+        "canonical": {
+          "status": "READY",
+          "stage": "complete",
+          "code": "QUESTION_READY",
+          "structure_availability": "OBSERVED",
+          "packet_present": true
+        }
+      },
+      {
+        "version": "v2",
+        "mode": "refresh",
+        "rep": 2,
+        "wall_ns": 354394356,
+        "warmup": false,
+        "seed_setup_excluded": {
+          "transport_gets": 2,
+          "client_requests_used": 2,
+          "official_gets": 3,
+          "rows": 21,
+          "result": {
+            "status": "READY",
+            "stage": "complete",
+            "code": "QUESTION_READY",
+            "structure_availability": "OBSERVED",
+            "packet_present": true
+          }
+        },
+        "rss_sampler_interval_ms": 5,
+        "rss_sample_count": 57,
+        "rss_max_gap_ms": 9.696008,
+        "rss_baseline_bytes": 120623104,
+        "rss_peak_bytes": 120688640,
+        "rss_incremental_peak_bytes": 65536,
+        "official_source_gets": 2,
+        "official_urls": [
+          "https://api.upstox.com/v2/market/holidays",
+          "https://www.nseindia.com/api/holiday-master?type=trading&year=2026"
+        ],
+        "bharatstock_transport_gets": 2,
+        "bharatstock_client_requests_used": 2,
+        "price_response_rows": 21,
+        "price_pages": 1,
+        "transport_retry_observed": false,
+        "client_transport_call_count_matches_requests_used": true,
+        "canonical": {
+          "status": "READY",
+          "stage": "complete",
+          "code": "QUESTION_READY",
+          "structure_availability": "OBSERVED",
+          "packet_present": true
+        }
+      },
+      {
+        "version": "v2",
+        "mode": "refresh",
+        "rep": 3,
+        "wall_ns": 352774557,
+        "warmup": false,
+        "seed_setup_excluded": {
+          "transport_gets": 2,
+          "client_requests_used": 2,
+          "official_gets": 3,
+          "rows": 21,
+          "result": {
+            "status": "READY",
+            "stage": "complete",
+            "code": "QUESTION_READY",
+            "structure_availability": "OBSERVED",
+            "packet_present": true
+          }
+        },
+        "rss_sampler_interval_ms": 5,
+        "rss_sample_count": 57,
+        "rss_max_gap_ms": 9.284707,
+        "rss_baseline_bytes": 120684544,
+        "rss_peak_bytes": 120750080,
+        "rss_incremental_peak_bytes": 65536,
+        "official_source_gets": 2,
+        "official_urls": [
+          "https://api.upstox.com/v2/market/holidays",
+          "https://www.nseindia.com/api/holiday-master?type=trading&year=2026"
+        ],
+        "bharatstock_transport_gets": 2,
+        "bharatstock_client_requests_used": 2,
+        "price_response_rows": 21,
+        "price_pages": 1,
+        "transport_retry_observed": false,
+        "client_transport_call_count_matches_requests_used": true,
+        "canonical": {
+          "status": "READY",
+          "stage": "complete",
+          "code": "QUESTION_READY",
+          "structure_availability": "OBSERVED",
+          "packet_present": true
+        }
+      }
+    ],
+    "summary": {
+      "v1_cold": {
+        "median_ms": 379.319974,
+        "min_ms": 376.159827,
+        "max_ms": 381.624786,
+        "price_gets": [
+          2,
+          2,
+          2
+        ],
+        "official_source_gets": [
+          3,
+          3,
+          3
+        ],
+        "maximum_sampled_rss_bytes": 114499584
+      },
+      "v1_warm": {
+        "median_ms": 406.304474,
+        "min_ms": 404.673629,
+        "max_ms": 407.822294,
+        "price_gets": [
+          0,
+          0,
+          0
+        ],
+        "official_source_gets": [
+          0,
+          0,
+          0
+        ],
+        "maximum_sampled_rss_bytes": 117911552
+      },
+      "v1_refresh": {
+        "median_ms": 936.329724,
+        "min_ms": 927.559272,
+        "max_ms": 942.514923,
+        "price_gets": [
+          2,
+          2,
+          2
+        ],
+        "official_source_gets": [
+          2,
+          2,
+          2
+        ],
+        "maximum_sampled_rss_bytes": 119267328
+      },
+      "v2_cold": {
+        "median_ms": 394.340494,
+        "min_ms": 394.016023,
+        "max_ms": 394.992647,
+        "price_gets": [
+          2,
+          2,
+          2
+        ],
+        "official_source_gets": [
+          3,
+          3,
+          3
+        ],
+        "maximum_sampled_rss_bytes": 121614336
+      },
+      "v2_warm": {
+        "median_ms": 350.868953,
+        "min_ms": 350.086437,
+        "max_ms": 361.915572,
+        "price_gets": [
+          2,
+          2,
+          2
+        ],
+        "official_source_gets": [
+          2,
+          2,
+          2
+        ],
+        "maximum_sampled_rss_bytes": 120266752
+      },
+      "v2_refresh": {
+        "median_ms": 352.774557,
+        "min_ms": 350.60953,
+        "max_ms": 354.394356,
+        "price_gets": [
+          2,
+          2,
+          2
+        ],
+        "official_source_gets": [
+          2,
+          2,
+          2
+        ],
+        "maximum_sampled_rss_bytes": 120860672
+      }
+    }
+  }
+}

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import errno
 import gzip
 import json
@@ -36,6 +37,7 @@ from swing_trading_ai_assistant.market_data.instrument_snapshot import (
     InstrumentSnapshotNotFoundError,
     InstrumentSnapshotStoreV1,
     InstrumentSnapshotUnavailableError,
+    SnapshotInstrumentUnsupportedError,
 )
 from swing_trading_ai_assistant.market_data.preview_admission import (
     PreviewAdmissionPolicyV1,
@@ -585,6 +587,32 @@ def test_snapshot_client_fails_closed_for_bad_responses_and_clock() -> None:
         ).fetch()
 
 
+def test_snapshot_client_classifies_overflowing_catalog_number_as_unavailable() -> None:
+    payload = gzip.compress(json.dumps([RELIANCE | {"strike_price": 10**999}]).encode())
+    client = InstrumentSnapshotClientV1(
+        StaticTransport(HttpResponse(200, payload)),
+        clock=lambda: datetime.now(UTC),
+    )
+
+    with pytest.raises(InstrumentSnapshotUnavailableError):
+        client.fetch()
+
+
+def test_snapshot_client_propagates_unexpected_parser_fault(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, _ = _snapshot_client(datetime(2026, 8, 10, 3, 0, tzinfo=UTC))
+    failure = ValueError("synthetic implementation fault")
+    monkeypatch.setattr(
+        snapshot_module.InstrumentCatalog,
+        "from_json_bytes",
+        lambda _value: (_ for _ in ()).throw(failure),
+    )
+    with pytest.raises(ValueError) as raised:
+        client.fetch()
+    assert raised.value is failure
+
+
 def test_snapshot_client_enforces_decompressed_bound(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -781,6 +809,15 @@ def test_snapshot_store_retains_repeated_observations_and_resolves_offline(
         assert len(catalog.list_instrument_snapshots("upstox-bod-nse")) == 2
 
 
+def test_snapshot_resolution_distinguishes_known_non_equity_symbol() -> None:
+    payload = json.dumps(
+        [{**RELIANCE, "instrument_type": "ETF"}], separators=(",", ":")
+    ).encode()
+
+    with pytest.raises(SnapshotInstrumentUnsupportedError):
+        snapshot_module._resolve_equity_in_payload(payload, "NSE_EQ", "RELIANCE")
+
+
 def test_snapshot_catalog_rejects_divergent_existing_row(tmp_path: Path) -> None:
     client, _ = _snapshot_client(datetime(2026, 8, 10, 3, 0, tzinfo=UTC))
     lease_result = StorageRootLease.try_acquire(tmp_path)
@@ -940,6 +977,24 @@ def test_snapshot_store_refuses_divergent_existing_object(tmp_path: Path) -> Non
             store.retain(fetched)
 
 
+def test_snapshot_store_propagates_unexpected_catalog_fault_and_retains_journal(
+    tmp_path: Path,
+) -> None:
+    client, _ = _snapshot_client(datetime(2026, 8, 10, 3, 0, tzinfo=UTC))
+    lease_result = StorageRootLease.try_acquire(tmp_path)
+    assert lease_result.lease is not None
+    with lease_result.lease as lease, DuckDBCatalog(tmp_path) as catalog:
+        with pytest.raises(RuntimeError) as caught:
+            InstrumentSnapshotStoreV1(
+                tmp_path, lease, FailingSnapshotCatalog(catalog)
+            ).retain(client.fetch())
+        assert type(caught.value) is RuntimeError
+        assert catalog.list_instrument_snapshots("upstox-bod-nse") == ()
+    journal = tmp_path / "instrument_snapshots" / "pending-observation-v1.json"
+    assert journal.is_file()
+    assert not list(tmp_path.rglob(".*.tmp"))
+
+
 @pytest.mark.parametrize("temp_state", ("none", "safe", "unsafe"))
 def test_preparation_recovers_pending_observation_before_fetch(
     tmp_path: Path, temp_state: str
@@ -948,14 +1003,11 @@ def test_preparation_recovers_pending_observation_before_fetch(
     fetched = client.fetch()
     lease_result = StorageRootLease.try_acquire(tmp_path)
     assert lease_result.lease is not None
-    with (
-        lease_result.lease as lease,
-        DuckDBCatalog(tmp_path) as catalog,
-        pytest.raises(InstrumentSnapshotCorruptError),
-    ):
-        InstrumentSnapshotStoreV1(
-            tmp_path, lease, FailingSnapshotCatalog(catalog)
-        ).retain(fetched)
+    with lease_result.lease as lease, DuckDBCatalog(tmp_path) as catalog:
+        with pytest.raises(RuntimeError):
+            InstrumentSnapshotStoreV1(
+                tmp_path, lease, FailingSnapshotCatalog(catalog)
+            ).retain(fetched)
         assert catalog.list_instrument_snapshots("upstox-bod-nse") == ()
     journal = tmp_path / "instrument_snapshots" / "pending-observation-v1.json"
     assert journal.is_file()
@@ -1012,7 +1064,7 @@ def test_preparation_preflights_fixed_journal_temp_before_fetch(
         with (
             lease_result.lease as lease,
             DuckDBCatalog(tmp_path) as catalog,
-            pytest.raises(InstrumentSnapshotCorruptError),
+            pytest.raises(RuntimeError),
         ):
             InstrumentSnapshotStoreV1(
                 tmp_path, lease, FailingSnapshotCatalog(catalog)
@@ -1066,7 +1118,7 @@ def test_pending_journal_handles_missing_object_without_fetching_blindly(
     with (
         lease_result.lease as lease,
         DuckDBCatalog(tmp_path) as catalog,
-        pytest.raises(InstrumentSnapshotCorruptError),
+        pytest.raises(RuntimeError),
     ):
         InstrumentSnapshotStoreV1(
             tmp_path, lease, FailingSnapshotCatalog(catalog)
@@ -1132,6 +1184,29 @@ def test_pending_recovery_rejects_corrupt_journal_before_fetch(tmp_path: Path) -
     assert report.failure_code is PreparationFailureCodeV1.INSTRUMENT_SNAPSHOT_CORRUPT
 
 
+def test_snapshot_recovery_propagates_unexpected_parser_fault(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, _ = _snapshot_client(datetime(2026, 8, 10, 3, 0, tzinfo=UTC))
+    lease_result = StorageRootLease.try_acquire(tmp_path)
+    assert lease_result.lease is not None
+    with lease_result.lease as lease, DuckDBCatalog(tmp_path) as catalog:
+        with pytest.raises(RuntimeError):
+            InstrumentSnapshotStoreV1(
+                tmp_path, lease, FailingSnapshotCatalog(catalog)
+            ).retain(client.fetch())
+        journal = tmp_path / "instrument_snapshots" / "pending-observation-v1.json"
+        assert journal.is_file()
+        monkeypatch.setattr(
+            snapshot_module,
+            "_parse_canonical_journal",
+            lambda _value: (_ for _ in ()).throw(KeyError()),
+        )
+        with pytest.raises(KeyError):
+            InstrumentSnapshotStoreV1(tmp_path, lease, catalog).recover_pending()
+        assert journal.is_file()
+
+
 def test_snapshot_store_rejects_ambiguous_latest_observations(tmp_path: Path) -> None:
     retrieved_at = datetime(2026, 8, 10, 3, 0, tzinfo=UTC)
     first, _ = _snapshot_client(retrieved_at)
@@ -1155,9 +1230,131 @@ def test_snapshot_store_rejects_ambiguous_latest_observations(tmp_path: Path) ->
             )
 
 
+def test_snapshot_resolution_propagates_unexpected_resolver_fault(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, _ = _snapshot_client(datetime(2026, 8, 10, 3, 0, tzinfo=UTC))
+    lease_result = StorageRootLease.try_acquire(tmp_path)
+    assert lease_result.lease is not None
+    with lease_result.lease as lease, DuckDBCatalog(tmp_path) as catalog:
+        store = InstrumentSnapshotStoreV1(tmp_path, lease, catalog)
+        metadata = store.retain(client.fetch())
+        monkeypatch.setattr(
+            snapshot_module,
+            "_resolve_equity_in_payload",
+            lambda *_args: (_ for _ in ()).throw(AssertionError()),
+        )
+        with pytest.raises(AssertionError):
+            store.resolve_equity(
+                source=metadata.source,
+                segment="NSE_EQ",
+                symbol="RELIANCE",
+                as_of=datetime(2026, 8, 10, 3, 30, tzinfo=UTC),
+            )
+        assert (tmp_path / metadata.relative_object_path).is_file()
+
+
+def test_snapshot_directory_opening_closes_object_fd_on_interruption(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    acquired = StorageRootLease.try_acquire(tmp_path)
+    assert acquired.lease is not None
+    object_descriptors: list[int] = []
+    original_open_directory = snapshot_module._open_directory
+
+    def interrupt_observations(
+        operation: snapshot_module.StorageRootLeaseOperation,
+        parent_fd: int,
+        name: str,
+        *,
+        create: bool,
+    ) -> int:
+        if name == "observations":
+            raise KeyboardInterrupt
+        descriptor = original_open_directory(operation, parent_fd, name, create=create)
+        if name.startswith("sha256="):
+            object_descriptors.append(descriptor)
+        return descriptor
+
+    with acquired.lease as lease, lease.root_operation(tmp_path) as operation:
+        monkeypatch.setattr(snapshot_module, "_open_directory", interrupt_observations)
+        with pytest.raises(KeyboardInterrupt):
+            snapshot_module._open_snapshot_directories(operation, "a" * 64, create=True)
+
+    assert len(object_descriptors) == 1
+    with pytest.raises(OSError):
+        os.fstat(object_descriptors[0])
+
+
+def test_snapshot_retain_preserves_primary_fault_and_closes_all_directories(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, _ = _snapshot_client(datetime(2026, 8, 10, 3, 0, tzinfo=UTC))
+    acquired = StorageRootLease.try_acquire(tmp_path)
+    assert acquired.lease is not None
+    failure = KeyError("primary")
+    directories: list[tuple[int, int]] = []
+    roots: list[int] = []
+    closed: list[int] = []
+    original_open_directories = snapshot_module._open_snapshot_directories
+    original_open_root = snapshot_module._open_snapshot_root
+    original_publish = snapshot_module._publish_exact
+    real_close = snapshot_module.os.close
+
+    def record_directories(*args: object, **kwargs: object) -> tuple[int, int]:
+        pair = original_open_directories(*args, **kwargs)  # type: ignore[arg-type]
+        directories.append(pair)
+        return pair
+
+    def record_root(
+        operation: snapshot_module.StorageRootLeaseOperation, *, create: bool
+    ) -> int:
+        descriptor = original_open_root(operation, create=create)
+        roots.append(descriptor)
+        return descriptor
+
+    def fail_object_publish(
+        operation: snapshot_module.StorageRootLeaseOperation,
+        parent_fd: int,
+        temp_name: str,
+        final_name: str,
+        value: bytes,
+    ) -> None:
+        if directories and parent_fd == directories[0][0]:
+            raise failure
+        original_publish(operation, parent_fd, temp_name, final_name, value)
+
+    def close_then_fail(descriptor: int) -> None:
+        real_close(descriptor)
+        if directories and roots and descriptor in (*directories[0], roots[0]):
+            closed.append(descriptor)
+            raise OSError("injected close failure")
+
+    with acquired.lease as lease, DuckDBCatalog(tmp_path) as catalog:
+        store = InstrumentSnapshotStoreV1(tmp_path, lease, catalog)
+        monkeypatch.setattr(
+            snapshot_module, "_open_snapshot_directories", record_directories
+        )
+        monkeypatch.setattr(snapshot_module, "_open_snapshot_root", record_root)
+        monkeypatch.setattr(snapshot_module, "_publish_exact", fail_object_publish)
+        monkeypatch.setattr(snapshot_module.os, "close", close_then_fail)
+        with pytest.raises(KeyError) as raised:
+            store.retain(client.fetch())
+
+    assert raised.value is failure
+    assert len(directories) == 1
+    assert len(roots) == 2
+    assert closed == [directories[0][1], directories[0][0], roots[0]]
+    for descriptor in (*directories[0], roots[0]):
+        with pytest.raises(OSError):
+            os.fstat(descriptor)
+
+
 def test_invalid_schedule_fails_before_lock_or_storage_mutation(tmp_path: Path) -> None:
     policy = PreviewAdmissionPolicyV1("NSE_EQ", "RELIANCE")
-    schedule_source = StaticScheduleSource(ValueError("invalid schedule"))
+    schedule_source = StaticScheduleSource(
+        preparation_module.ScheduleEvidenceValidationError("invalid schedule")
+    )
     client, _ = _snapshot_client(datetime(2026, 8, 10, 3, 0, tzinfo=UTC))
     snapshot_source = CountingSnapshotSource(client)
     service = DownloadPreparationServiceV1(policy, schedule_source, snapshot_source)
@@ -1294,6 +1491,41 @@ def test_preparation_maps_snapshot_unavailability_without_leaking_response(
         report.failure_code is PreparationFailureCodeV1.INSTRUMENT_SNAPSHOT_UNAVAILABLE
     )
     assert report.prepared is None
+
+
+def test_preparation_propagates_unexpected_snapshot_source_fault(
+    tmp_path: Path,
+) -> None:
+    failure = ValueError("synthetic implementation fault")
+
+    class FailingSnapshotSource:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def fetch(self) -> object:
+            self.calls += 1
+            raise failure
+
+    source = FailingSnapshotSource()
+    service = DownloadPreparationServiceV1(
+        PreviewAdmissionPolicyV1("NSE_EQ", "RELIANCE"),
+        StaticScheduleSource(_schedule_input()),
+        source,  # type: ignore[arg-type]
+    )
+    with pytest.raises(ValueError) as raised:
+        service.prepare(
+            DownloadPreparationRequestV1(
+                "NSE_EQ",
+                "RELIANCE",
+                date(2026, 7, 1),
+                date(2026, 7, 31),
+                tmp_path,
+                datetime(2026, 8, 10, 4, 0, tzinfo=UTC),
+            )
+        )
+    assert raised.value is failure
+    assert source.calls == 1
+    assert not (tmp_path / "instrument_snapshots").exists()
 
 
 def test_preparation_contracts_and_schedule_retention_failure_fail_closed(
@@ -1663,3 +1895,262 @@ def test_preparation_rejects_incomplete_or_future_schedule_evidence(
     )
     assert report.failure_code is PreparationFailureCodeV1.SCHEDULE_UNAVAILABLE
     assert list(tmp_path.iterdir()) == []
+
+
+def _inject_unknown_snapshot_file_fault(
+    monkeypatch: pytest.MonkeyPatch, fault: str
+) -> tuple[AssertionError, list[int | str]]:
+    primary = AssertionError(f"{fault} primary")
+    cleanup_attempts: list[int | str] = []
+    journal_names = {
+        "pending-observation-v1.json",
+        ".pending-observation-v1.json.tmp",
+    }
+    if fault in ("read", "write"):
+        _inject_snapshot_io_fault(
+            monkeypatch, fault, journal_names, primary, cleanup_attempts
+        )
+    else:
+        _inject_snapshot_link_fault(
+            monkeypatch, journal_names, primary, cleanup_attempts
+        )
+    return primary, cleanup_attempts
+
+
+def _inject_snapshot_io_fault(
+    monkeypatch: pytest.MonkeyPatch,
+    fault: str,
+    journal_names: set[str],
+    primary: AssertionError,
+    cleanup_attempts: list[int | str],
+) -> None:
+    real_open = snapshot_module.os.open
+    real_close = snapshot_module.os.close
+    target_descriptors: set[int] = set()
+    faulted_descriptors: set[int] = set()
+
+    def track_journal_descriptor(
+        name: str | Path, flags: int, *args: object, **kwargs: object
+    ) -> int:
+        descriptor = real_open(name, flags, *args, **kwargs)
+        if name in journal_names:
+            target_descriptors.add(descriptor)
+        return descriptor
+
+    def close_after_primary(descriptor: int) -> None:
+        real_close(descriptor)
+        target_descriptors.discard(descriptor)
+        if descriptor in faulted_descriptors:
+            faulted_descriptors.remove(descriptor)
+            cleanup_attempts.append(descriptor)
+            raise OSError("secondary close failure")
+
+    monkeypatch.setattr(snapshot_module.os, "open", track_journal_descriptor)
+    monkeypatch.setattr(snapshot_module.os, "close", close_after_primary)
+    if fault == "read":
+
+        def fail_read(descriptor: int, size: int) -> bytes:
+            if descriptor not in target_descriptors:
+                return real_read(descriptor, size)
+            faulted_descriptors.add(descriptor)
+            raise primary
+
+        real_read = snapshot_module.os.read
+        monkeypatch.setattr(snapshot_module.os, "read", fail_read)
+    else:
+
+        def fail_write(descriptor: int, value: bytes) -> int:
+            if descriptor not in target_descriptors:
+                return real_write(descriptor, value)
+            faulted_descriptors.add(descriptor)
+            raise primary
+
+        real_write = snapshot_module.os.write
+        monkeypatch.setattr(snapshot_module.os, "write", fail_write)
+
+
+def _inject_snapshot_link_fault(
+    monkeypatch: pytest.MonkeyPatch,
+    journal_names: set[str],
+    primary: AssertionError,
+    cleanup_attempts: list[int | str],
+) -> None:
+    real_link = snapshot_module.os.link
+    real_unlink = snapshot_module.os.unlink
+
+    def fail_link(
+        src: str,
+        dst: str,
+        *,
+        src_dir_fd: int,
+        dst_dir_fd: int,
+        follow_symlinks: bool,
+    ) -> None:
+        if dst not in journal_names:
+            real_link(
+                src,
+                dst,
+                src_dir_fd=src_dir_fd,
+                dst_dir_fd=dst_dir_fd,
+                follow_symlinks=follow_symlinks,
+            )
+            return
+        raise primary
+
+    def unlink_after_primary(name: str, *, dir_fd: int | None = None) -> None:
+        real_unlink(name, dir_fd=dir_fd)
+        if name in journal_names:
+            cleanup_attempts.append(name)
+            raise OSError("secondary unlink failure")
+
+    monkeypatch.setattr(snapshot_module.os, "link", fail_link)
+    monkeypatch.setattr(snapshot_module.os, "unlink", unlink_after_primary)
+
+
+@pytest.mark.parametrize("fault", ("read", "write", "link"))
+def test_snapshot_store_preserves_unknown_file_fault_over_cleanup(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fault: str
+) -> None:
+    primary, cleanup_attempts = _inject_unknown_snapshot_file_fault(monkeypatch, fault)
+    client, _ = _snapshot_client(datetime(2026, 8, 10, 3, 0, tzinfo=UTC))
+    fetched = client.fetch()
+    lease_result = StorageRootLease.try_acquire(tmp_path)
+    assert lease_result.lease is not None
+
+    with lease_result.lease as lease, DuckDBCatalog(tmp_path) as catalog:
+        with pytest.raises(AssertionError) as raised:
+            InstrumentSnapshotStoreV1(tmp_path, lease, catalog).retain(fetched)
+
+        assert raised.value is primary
+        assert cleanup_attempts
+        assert catalog.list_instrument_snapshots("upstox-bod-nse") == ()
+
+    assert not (
+        tmp_path / "instrument_snapshots" / "pending-observation-v1.json"
+    ).exists()
+
+
+@pytest.mark.parametrize("fault", ("read", "write", "link"))
+def test_preparation_does_not_succeed_after_unknown_snapshot_file_fault(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fault: str
+) -> None:
+    primary, cleanup_attempts = _inject_unknown_snapshot_file_fault(monkeypatch, fault)
+    client, _ = _snapshot_client(datetime(2026, 8, 10, 3, 0, tzinfo=UTC))
+    source = CountingSnapshotSource(client)
+    with pytest.raises(AssertionError) as raised:
+        DownloadPreparationServiceV1(
+            PreviewAdmissionPolicyV1("NSE_EQ", "RELIANCE"),
+            StaticScheduleSource(_schedule_input()),
+            source,
+        ).prepare(
+            DownloadPreparationRequestV1(
+                "NSE_EQ",
+                "RELIANCE",
+                date(2026, 7, 1),
+                date(2026, 7, 31),
+                tmp_path,
+                datetime(2026, 8, 10, 4, 0, tzinfo=UTC),
+            )
+        )
+
+    assert cleanup_attempts
+    assert source.calls == 1
+    assert raised.value is primary
+    assert not (
+        tmp_path / "instrument_snapshots" / "pending-observation-v1.json"
+    ).exists()
+
+
+def test_schedule_source_preserves_read_failure_over_close_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    path = tmp_path / "schedule.json"
+    path.write_bytes(_schedule_input().canonical_bytes)
+    path.chmod(0o600)
+    primary = AssertionError("primary schedule read failure")
+    faulted_descriptors: set[int] = set()
+    closed_descriptors: set[int] = set()
+    real_close = preparation_module.os.close
+
+    def fail_read(descriptor: int, _size: int) -> bytes:
+        faulted_descriptors.add(descriptor)
+        raise primary
+
+    def close_after_failure(descriptor: int) -> None:
+        real_close(descriptor)
+        if descriptor in faulted_descriptors:
+            closed_descriptors.add(descriptor)
+            raise OSError("secondary schedule close failure")
+
+    monkeypatch.setattr(preparation_module.os, "read", fail_read)
+    monkeypatch.setattr(preparation_module.os, "close", close_after_failure)
+    with pytest.raises(AssertionError) as raised:
+        CanonicalFileScheduleSourceV1(path).load()
+
+    assert raised.value is primary
+    assert faulted_descriptors
+    assert closed_descriptors == faulted_descriptors
+
+
+def test_snapshot_directory_opening_keeps_recycled_descriptor_open_after_close_fault(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    acquired = StorageRootLease.try_acquire(tmp_path)
+    assert acquired.lease is not None
+    primary = AssertionError("post-close snapshot traversal fault")
+    target: int | None = None
+    replacement: int | None = None
+    object_descriptors: list[int] = []
+    real_open_root = snapshot_module._open_snapshot_root
+    real_open_directory = snapshot_module._open_directory
+    real_open = snapshot_module.os.open
+    real_close = snapshot_module.os.close
+
+    def track_root(
+        operation: snapshot_module.StorageRootLeaseOperation, *, create: bool
+    ) -> int:
+        nonlocal target
+        target = real_open_root(operation, create=create)
+        return target
+
+    def track_directory(
+        operation: snapshot_module.StorageRootLeaseOperation,
+        parent_fd: int,
+        name: str,
+        *,
+        create: bool,
+    ) -> int:
+        descriptor = real_open_directory(operation, parent_fd, name, create=create)
+        if name.startswith("sha256="):
+            object_descriptors.append(descriptor)
+        return descriptor
+
+    def release_then_fail(descriptor: int) -> None:
+        nonlocal replacement
+        if descriptor == target and replacement is None:
+            real_close(descriptor)
+            replacement = real_open(os.devnull, os.O_RDONLY)
+            assert replacement == descriptor
+            raise primary
+        real_close(descriptor)
+
+    try:
+        with acquired.lease as lease, lease.root_operation(tmp_path) as operation:
+            with monkeypatch.context() as scoped:
+                scoped.setattr(snapshot_module, "_open_snapshot_root", track_root)
+                scoped.setattr(snapshot_module, "_open_directory", track_directory)
+                scoped.setattr(snapshot_module.os, "close", release_then_fail)
+                with pytest.raises(AssertionError) as raised:
+                    snapshot_module._open_snapshot_directories(
+                        operation, "a" * 64, create=True
+                    )
+                assert raised.value is primary
+            assert replacement is not None
+            os.fstat(replacement)
+            assert len(object_descriptors) == 1
+            with pytest.raises(OSError):
+                os.fstat(object_descriptors[0])
+    finally:
+        if replacement is not None:
+            with contextlib.suppress(OSError):
+                os.close(replacement)

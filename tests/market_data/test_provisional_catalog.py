@@ -8,6 +8,7 @@ import pytest
 import swing_trading_ai_assistant.market_data.catalog as catalog_module
 from swing_trading_ai_assistant.market_data.catalog import (
     CatalogConflictError,
+    CatalogPersistenceError,
     CatalogSchemaError,
     DuckDBCatalog,
 )
@@ -93,11 +94,13 @@ def test_current_schema_is_created_and_v3_upgrade_is_atomic(tmp_path) -> None:
         catalog.connection.execute("DELETE FROM schema_migrations WHERE version >= 4")
 
     broken = DuckDBCatalog(tmp_path)
+    failure = RuntimeError()
     broken._after_provisional_migration = lambda: (_ for _ in ()).throw(  # type: ignore[method-assign]
-        RuntimeError("injected migration failure")
+        failure
     )
-    with pytest.raises(CatalogSchemaError):
+    with pytest.raises(RuntimeError) as raised:
         broken.__enter__()
+    assert raised.value is failure
 
     with DuckDBCatalog(tmp_path) as upgraded:
         assert upgraded.connection.execute(
@@ -130,13 +133,14 @@ def test_v5_populated_migration_preserves_legacy_row_and_path(tmp_path) -> None:
         )
         catalog.connection.execute("DROP TABLE provisional_partitions_v6")
         catalog.connection.execute("DELETE FROM schema_migrations WHERE version = 6")
-
     broken = DuckDBCatalog(tmp_path)
+    failure = RuntimeError()
     broken._after_content_addressed_provisional_migration = (  # type: ignore[method-assign]
-        lambda: (_ for _ in ()).throw(RuntimeError("injected v6 failure"))
+        lambda: (_ for _ in ()).throw(failure)
     )
-    with pytest.raises(CatalogSchemaError):
+    with pytest.raises(RuntimeError) as raised:
         broken.__enter__()
+    assert raised.value is failure
     connection = catalog_module.duckdb.connect(str(tmp_path / "catalog.duckdb"))
     try:
         assert connection.execute(
@@ -296,6 +300,50 @@ def test_latest_public_identity_selection_is_bounded_and_cutoff_aware(tmp_path) 
         assert selected == earlier
 
 
+def test_latest_security_id_selection_reuses_an_admitted_physical_alias(
+    tmp_path,
+) -> None:
+    alias = replace(_metadata(cutoff_minute=58), symbol="RELIANCEOLD")
+    current = _metadata(cutoff_minute=59)
+    with DuckDBCatalog(tmp_path) as catalog:
+        catalog.save_provisional_partition(alias)
+        catalog.save_provisional_partition(current)
+
+        assert (
+            catalog.latest_provisional_partition_for_security_id(
+                segment="NSE_EQ",
+                security_id="INE002A01018",
+                year=2026,
+                month=8,
+                cutoff_lte=alias.cutoff,
+                published_at_lte=alias.published_at,
+            )
+            == alias
+        )
+        assert (
+            catalog.latest_provisional_partition_for_security_id(
+                segment="NSE_EQ",
+                security_id="INE002A01018",
+                year=2026,
+                month=8,
+                cutoff_lte=current.cutoff,
+                published_at_lte=current.published_at,
+            )
+            == current
+        )
+        assert (
+            catalog.latest_provisional_partition_for_security_id(
+                segment="NSE_EQ",
+                security_id="INE002A01026",
+                year=2026,
+                month=8,
+                cutoff_lte=alias.cutoff,
+                published_at_lte=alias.published_at,
+            )
+            is None
+        )
+
+
 def test_latest_symbol_selection_has_total_order_across_physical_aliases(
     tmp_path,
 ) -> None:
@@ -367,3 +415,189 @@ def test_official_equity_symbol_grammar_round_trips_provisional_metadata(
 def test_provisional_metadata_rejects_noncanonical_equity_symbols(symbol: str) -> None:
     with pytest.raises(ValueError):
         replace(_metadata(), symbol=symbol)
+
+
+@pytest.mark.parametrize(
+    "query",
+    (
+        lambda catalog: catalog.list_provisional_partitions(_plan()),
+        lambda catalog: catalog.latest_provisional_partition(_plan()),
+        lambda catalog: catalog.latest_provisional_partition_for_symbol(
+            segment="NSE_EQ",
+            symbol="RELIANCE",
+            year=2026,
+            month=8,
+            cutoff_lte=_metadata().cutoff,
+            published_at_lte=_metadata().published_at,
+        ),
+    ),
+)
+@pytest.mark.parametrize(
+    "fault_type",
+    (
+        AssertionError,
+        KeyError,
+        RuntimeError,
+        TypeError,
+        ValueError,
+        Exception,
+        catalog_module.duckdb.ParserException,
+        catalog_module.duckdb.BinderException,
+    ),
+)
+def test_provisional_catalog_queries_preserve_unknown_execution_fault_identity(
+    tmp_path, monkeypatch, query, fault_type: type[Exception]
+) -> None:
+    failure = fault_type()
+
+    class FaultingConnection:
+        def execute(self, *_args: object, **_kwargs: object) -> object:
+            raise failure
+
+    with DuckDBCatalog(tmp_path) as catalog:
+        connection = catalog._connection
+        monkeypatch.setattr(catalog, "_connection", FaultingConnection())
+        try:
+            with pytest.raises(fault_type) as raised:
+                query(catalog)
+            assert raised.value is failure
+        finally:
+            catalog._connection = connection
+
+
+@pytest.mark.parametrize(
+    "query",
+    (
+        lambda catalog: catalog.list_provisional_partitions(_plan()),
+        lambda catalog: catalog.latest_provisional_partition(_plan()),
+        lambda catalog: catalog.latest_provisional_partition_for_symbol(
+            segment="NSE_EQ",
+            symbol="RELIANCE",
+            year=2026,
+            month=8,
+            cutoff_lte=_metadata().cutoff,
+            published_at_lte=_metadata().published_at,
+        ),
+    ),
+)
+def test_provisional_catalog_queries_classify_operational_duckdb_faults(
+    tmp_path, monkeypatch, query
+) -> None:
+    class FaultingConnection:
+        def execute(self, *_args: object, **_kwargs: object) -> object:
+            raise catalog_module.duckdb.IOException("catalog unavailable")
+
+    with DuckDBCatalog(tmp_path) as catalog:
+        connection = catalog._connection
+        monkeypatch.setattr(catalog, "_connection", FaultingConnection())
+        try:
+            with pytest.raises(CatalogPersistenceError):
+                query(catalog)
+        finally:
+            catalog._connection = connection
+
+
+@pytest.mark.parametrize(
+    "query",
+    (
+        lambda catalog: catalog.list_provisional_partitions(_plan()),
+        lambda catalog: catalog.latest_provisional_partition(_plan()),
+        lambda catalog: catalog.latest_provisional_partition_for_symbol(
+            segment="NSE_EQ",
+            symbol="RELIANCE",
+            year=2026,
+            month=8,
+            cutoff_lte=_metadata().cutoff,
+            published_at_lte=_metadata().published_at,
+        ),
+    ),
+)
+def test_provisional_catalog_queries_classify_malformed_rows(
+    tmp_path, monkeypatch, query
+) -> None:
+    class InvalidRows:
+        def fetchall(self) -> list[tuple[object, ...]]:
+            return [()]
+
+        def fetchone(self) -> tuple[object, ...]:
+            return ()
+
+    class FaultingConnection:
+        def execute(self, *_args: object, **_kwargs: object) -> InvalidRows:
+            return InvalidRows()
+
+    with DuckDBCatalog(tmp_path) as catalog:
+        connection = catalog._connection
+        monkeypatch.setattr(catalog, "_connection", FaultingConnection())
+        try:
+            with pytest.raises(CatalogSchemaError):
+                query(catalog)
+        finally:
+            catalog._connection = connection
+
+
+@pytest.mark.parametrize(
+    "query",
+    (
+        lambda catalog: catalog.list_provisional_partitions(_plan()),
+        lambda catalog: catalog.latest_provisional_partition(_plan()),
+        lambda catalog: catalog.latest_provisional_partition_for_symbol(
+            segment="NSE_EQ",
+            symbol="RELIANCE",
+            year=2026,
+            month=8,
+            cutoff_lte=_metadata().cutoff,
+            published_at_lte=_metadata().published_at,
+        ),
+    ),
+)
+@pytest.mark.parametrize(
+    "fault_type",
+    (
+        AssertionError,
+        KeyError,
+        RuntimeError,
+        TypeError,
+        ValueError,
+        Exception,
+        catalog_module.duckdb.ParserException,
+        catalog_module.duckdb.BinderException,
+    ),
+)
+def test_provisional_catalog_queries_preserve_unknown_decoder_fault_identity(
+    tmp_path, monkeypatch, query, fault_type: type[Exception]
+) -> None:
+    failure = fault_type()
+
+    class Rows:
+        def fetchall(self) -> list[tuple[object, ...]]:
+            return [()]
+
+        def fetchone(self) -> tuple[object, ...]:
+            return ()
+
+    class QueryConnection:
+        def __init__(self) -> None:
+            self.query_count = 0
+
+        def execute(self, *_args: object, **_kwargs: object) -> Rows:
+            self.query_count += 1
+            return Rows()
+
+    def fail_decoder(_row: tuple[object, ...]) -> object:
+        raise failure
+
+    with DuckDBCatalog(tmp_path) as catalog:
+        connection = catalog._connection
+        query_connection = QueryConnection()
+        monkeypatch.setattr(catalog, "_connection", query_connection)
+        monkeypatch.setattr(
+            catalog_module, "_provisional_metadata_from_row", fail_decoder
+        )
+        try:
+            with pytest.raises(fault_type) as raised:
+                query(catalog)
+            assert raised.value is failure
+            assert query_connection.query_count == 1
+        finally:
+            catalog._connection = connection

@@ -1,6 +1,6 @@
 # Current supplied-cohort market-data contract
 
-Status: **LOCAL IMPLEMENTATION — exact-revision review and publication pending for GitHub Issue #121**
+Status: **DELIVERED — Issue #121 closed through [PR #123](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/123), merged 2026-08-17 at `640f523ce084467bdbf0d925bdd95b4da9031b33`. The versioned contract below is preserved.**
 Contract revision: `current-supplied-cohort-market-data@v1`
 Risk: **R3** — current market-data integrity, provider effects, and research boundary
 
@@ -287,3 +287,9 @@ immutable archive, not a substituted retrospective claim.
    feature/instrument/interval instead of reconstructing unavailable history.
 5. Decision: **accepted** — require immutable archive and the closed
    availability ledger, subject to separate provider/source execution authority.
+
+## Issue #187 successor crosswalk
+
+Issue #187 consumes separately admitted BharatStock 1/2/21 completed-session
+windows through a V2 projection. This Plan's retained raw-current cohort,
+whole-result insufficiency and archive/reader semantics remain unchanged.

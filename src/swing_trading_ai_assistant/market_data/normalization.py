@@ -78,7 +78,10 @@ def _required_text(value: object) -> str:
 def _finite_number(value: object) -> float:
     if isinstance(value, bool) or not isinstance(value, Real):
         raise CandleSchemaError("numeric candle field has an invalid type")
-    number = float(value)
+    try:
+        number = float(value)
+    except OverflowError:
+        raise CandleSchemaError("numeric candle field must be finite") from None
     if not math.isfinite(number):
         raise CandleSchemaError("numeric candle field must be finite")
     return number

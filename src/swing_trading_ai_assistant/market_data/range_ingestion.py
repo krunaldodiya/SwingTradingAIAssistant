@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Protocol, cast
 from uuid import uuid4
 
-from .catalog import DuckDBCatalog
+from .catalog import CatalogError, DuckDBCatalog
 from .historical import (
     AccountRateLimiter,
     CancellableSleeper,
@@ -32,7 +32,9 @@ from .manifest_lifecycle import FailureCategory, ManifestState, PartitionManifes
 from .monthly_request_planner import PlannedInstrumentMonth, plan_upstox_equity_months
 from .partition_ingestion import (
     PartitionCatalogFailure,
+    PartitionClockFailure,
     PartitionIngestionExecutor,
+    PartitionLifecycleConflict,
     PartitionLifecycleOutcome,
     PartitionLifecycleResult,
 )
@@ -51,12 +53,18 @@ from .schedule_evidence import (
     ExpectedSessionSchedule,
     ScheduleEvidenceResult,
     ScheduleEvidenceStore,
+    ScheduleEvidenceValidationError,
     ScheduleOutcome,
     canonical_schedule_bytes,
     schedule_covers_full_calendar_range,
     schedule_digest,
 )
-from .storage_root_lease import LeaseOutcome, LeaseResult, StorageRootLease
+from .storage_root_lease import (
+    LeaseOutcome,
+    LeaseResult,
+    StorageRootLease,
+    StorageRootLeaseError,
+)
 from .validation import EquityMonthValidationPolicy
 from .workflow_coordination import PublicationGateV1
 
@@ -391,7 +399,7 @@ class _NoopLimiter:
 
 class _UnavailableSessionFactory:
     def open(self) -> HistoricalProviderSession:
-        raise RuntimeError()
+        raise ProviderSessionAuthenticationError()
 
 
 class _RangeFetcher:
@@ -558,7 +566,7 @@ class IngestionCoordinator:
                 if type(report) is IngestionReport:
                     return report
                 raise RuntimeError
-        except Exception:
+        except (CatalogError, StorageRootLeaseError, OSError):
             return self._report(
                 IngestionRunOutcome.FAILED,
                 RunFailureCode.CATALOG_UNAVAILABLE,
@@ -577,7 +585,7 @@ class IngestionCoordinator:
         plans, policy = prepared
         try:
             if type(lease) is not StorageRootLease:
-                raise RuntimeError
+                raise StorageRootLeaseError
             with lease.root_operation(command.storage_root) as operation:
                 operation.ensure_live()
             if self._publication_gate is not None:
@@ -588,7 +596,7 @@ class IngestionCoordinator:
             if type(report) is IngestionReport:
                 return report
             raise RuntimeError
-        except Exception:
+        except (CatalogError, StorageRootLeaseError, OSError):
             return self._report(
                 IngestionRunOutcome.FAILED,
                 RunFailureCode.CATALOG_UNAVAILABLE,
@@ -611,7 +619,7 @@ class IngestionCoordinator:
             )
         try:
             plans = _canonical_plans(command)
-        except Exception:
+        except ValueError:
             return self._report(
                 IngestionRunOutcome.REJECTED,
                 RunFailureCode.SCHEDULE_UNSUPPORTED,
@@ -641,7 +649,7 @@ class IngestionCoordinator:
             )
         try:
             policy = EquityMonthValidationPolicy(command.validation_policy_version)
-        except Exception:
+        except ValueError:
             return self._report(
                 IngestionRunOutcome.REJECTED,
                 RunFailureCode.SCHEDULE_UNSUPPORTED,
@@ -667,7 +675,7 @@ class IngestionCoordinator:
         try:
             schedule_store = self._schedule_store_factory(command.storage_root, lease)
             schedule = schedule_store.retain(command.expected_sessions)
-        except Exception:
+        except ScheduleEvidenceValidationError:
             return self._report(
                 IngestionRunOutcome.REJECTED,
                 RunFailureCode.SCHEDULE_UNSUPPORTED,
@@ -862,12 +870,7 @@ class IngestionCoordinator:
     ) -> tuple[PartitionRecoveryResult, ...]:
         results: list[PartitionRecoveryResult] = []
         for plan in plans:
-            try:
-                result = observer.observe(plan)
-            except Exception:
-                # The child owns diagnostic translation; the coordinator emits
-                # only its stable run-level category at this boundary.
-                result = _synthetic_recovery_failure(plan, "CATALOG_UNAVAILABLE")
+            result = observer.observe(plan)
             results.append(result)
             if _recovery_stops_run(result):
                 break
@@ -1040,7 +1043,12 @@ class IngestionCoordinator:
                 None,
                 run_id,
             )
-        except Exception as error:
+        except (
+            PartitionCatalogFailure,
+            PartitionClockFailure,
+            PartitionLifecycleConflict,
+            _LifecycleResultUnsupported,
+        ) as error:
             attempts = _attempt_delta(remaining_before, fetcher.remaining_attempts)
             manifest = _current_run_manifest(catalog, decision.plan, run_id)
             result, fatal = _partition_from_lifecycle_exception(
@@ -1063,25 +1071,20 @@ class IngestionCoordinator:
             return None, RunFailureCode.AUTHENTICATION_FAILED
         except ProviderSessionAuthorizationError:
             return None, RunFailureCode.AUTHORIZATION_FAILED
-        except Exception:
-            return None, RunFailureCode.AUTHENTICATION_FAILED
-        try:
-            return (
-                HistoricalRequestExecutor(
-                    session=session,
-                    limiter=self._limiter,
-                    retry_policy=command.retry_policy,
-                    clock=self._clock,
-                    sleeper=self._sleeper,
-                    jitter=self._jitter,
-                    cancellation=self._cancellation,
-                    event_sink=self._event_sink,
-                    run_id=self._run_id_factory(),
-                ),
-                RunFailureCode.NONE,
-            )
-        except Exception:
-            return None, RunFailureCode.AUTHENTICATION_FAILED
+        return (
+            HistoricalRequestExecutor(
+                session=session,
+                limiter=self._limiter,
+                retry_policy=command.retry_policy,
+                clock=self._clock,
+                sleeper=self._sleeper,
+                jitter=self._jitter,
+                cancellation=self._cancellation,
+                event_sink=self._event_sink,
+                run_id=self._run_id_factory(),
+            ),
+            RunFailureCode.NONE,
+        )
 
     def _safe_acquire_lease(self, storage_root: Path) -> LeaseResult | None:
         try:
@@ -1094,7 +1097,7 @@ class IngestionCoordinator:
             ):
                 return None
             return result
-        except Exception:
+        except StorageRootLeaseError:
             return None
 
     def _finish_fatal(
@@ -1210,22 +1213,16 @@ class IngestionCoordinator:
         )
 
     def _now(self) -> datetime:
-        try:
-            value = self._clock.now()
-            if type(value) is datetime and value.tzinfo is not None:
-                return value.astimezone(UTC)
-        except Exception:
-            return datetime.now(UTC)
+        value = self._clock.now()
+        if type(value) is datetime and value.tzinfo is not None:
+            return value.astimezone(UTC)
         return datetime.now(UTC)
 
     def _local_date(self) -> date:
         return self._now().astimezone(_IST).date()
 
     def _is_cancelled(self) -> bool:
-        try:
-            return self._cancellation.is_cancelled()
-        except Exception:
-            return True
+        return self._cancellation.is_cancelled()
 
 
 _FATAL_CODES = frozenset(
@@ -1299,7 +1296,7 @@ def _is_exact_command_schedule(
             and evidence.relative_path == f"calendar-schedules/sha256/{digest}.json"
             and canonical_schedule_bytes(evidence.schedule) == canonical
         )
-    except Exception:
+    except ScheduleEvidenceValidationError:
         return False
 
 
@@ -1360,19 +1357,8 @@ def _run_code(code: str | None) -> RunFailureCode | None:
 
 
 def _recovery_stops_run(result: object) -> bool:
-    try:
-        code = _run_code(result.error_code)  # type: ignore[union-attr]
-        return code is RunFailureCode.CANCELLED or code in _FATAL_CODES
-    except Exception:
-        return True
-
-
-def _synthetic_recovery_failure(
-    plan: PlannedInstrumentMonth, code: str
-) -> PartitionRecoveryResult:
-    return PartitionRecoveryResult(
-        plan, PartitionRecoveryOutcome.FAILED, None, None, None, code, None
-    )
+    code = _run_code(result.error_code)  # type: ignore[union-attr]
+    return code is RunFailureCode.CANCELLED or code in _FATAL_CODES
 
 
 def _failed_partition_result(
@@ -1421,16 +1407,21 @@ def _partition_from_lifecycle_exception(
             ),
             RunFailureCode.CATALOG_UNAVAILABLE,
         )
-    result = _failed_partition_result(
-        plan,
-        reasons,
-        ingestion_run_id=ingestion_run_id,
-        provider_attempts=provider_attempts,
-        final_manifest=final_manifest,
-        failure_category=failure_category,
-    )
+    if type(error) not in {
+        PartitionClockFailure,
+        PartitionLifecycleConflict,
+        _LifecycleResultUnsupported,
+    }:
+        raise error
     return (
-        result,
+        _failed_partition_result(
+            plan,
+            reasons,
+            ingestion_run_id=ingestion_run_id,
+            provider_attempts=provider_attempts,
+            final_manifest=final_manifest,
+            failure_category=failure_category,
+        ),
         RunFailureCode.PARTITION_FAILURE
         if provider_attempts or type(error) is _LifecycleResultUnsupported
         else None,
@@ -1456,7 +1447,7 @@ def _current_run_manifest(
             and manifest.ingestion_run_id == run_id
         ):
             return manifest
-    except Exception:
+    except CatalogError:
         return None
     return None
 

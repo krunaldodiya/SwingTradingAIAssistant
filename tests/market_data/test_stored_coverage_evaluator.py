@@ -759,6 +759,185 @@ def test_evaluator_rejects_row_bound_and_validation_policy_drift(
     assert policy.months[0].coverage_state is CoverageStateV1.CORRUPT
 
 
+def test_evaluator_propagates_internal_policy_fault_without_mutating_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _seed(tmp_path)
+    before = _bytes(tmp_path)
+
+    class FaultingPolicy:
+        def __init__(self, _policy: str) -> None:
+            pass
+
+        def validate(self, *_args: object) -> object:
+            raise KeyError("internal-policy-fault")
+
+    monkeypatch.setattr(coverage_module, "EquityMonthValidationPolicy", FaultingPolicy)
+
+    with pytest.raises(KeyError, match="internal-policy-fault"):
+        StoredCoverageEvaluatorV1().evaluate(_request(tmp_path), NOW)
+
+    assert _bytes(tmp_path) == before
+
+
+def test_partition_reader_propagates_internal_decode_fault_and_releases_admission(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, relative_path = _seed(tmp_path)
+    assert relative_path is not None
+    before = _bytes(tmp_path)
+
+    def fail_decode(_file_descriptor: int) -> tuple[str, tuple[CanonicalCandle, ...]]:
+        raise RuntimeError("internal-decode-fault")
+
+    monkeypatch.setattr(coverage_module, "_decode_partition", fail_decode)
+    evaluator = StoredCoverageEvaluatorV1()
+    with (
+        evaluator.admit(tmp_path) as admission,
+        pytest.raises(RuntimeError, match="internal-decode-fault"),
+    ):
+        coverage_module.read_partition_under_lease(
+            tmp_path, admission.lease, relative_path
+        )
+
+    assert _bytes(tmp_path) == before
+    with evaluator.admit(tmp_path) as admission:
+        admission.ensure_live(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "failure_type",
+    (AssertionError, KeyError, RuntimeError, Exception, TypeError, ValueError),
+)
+def test_partition_stream_construction_fault_releases_all_reader_descriptors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_type: type[Exception],
+) -> None:
+    _, relative_path = _seed(tmp_path)
+    assert relative_path is not None
+    before = _bytes(tmp_path)
+    primary = failure_type("stream construction defect")
+    original_dup = coverage_module.os.dup
+    duplicates: list[int] = []
+    leaked: list[int] = []
+
+    def tracked_dup(source: int) -> int:
+        duplicate = original_dup(source)
+        duplicates.append(duplicate)
+        return duplicate
+
+    evaluator = StoredCoverageEvaluatorV1()
+    with evaluator.admit(tmp_path) as admission, monkeypatch.context() as patch:
+        patch.setattr(coverage_module.os, "dup", tracked_dup)
+        patch.setattr(
+            coverage_module.os,
+            "fdopen",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(primary),
+        )
+        try:
+            with pytest.raises(failure_type) as raised:
+                coverage_module.read_partition_under_lease(
+                    tmp_path, admission.lease, relative_path
+                )
+            assert raised.value is primary
+        finally:
+            for duplicate in duplicates:
+                try:
+                    coverage_module.os.fstat(duplicate)
+                except OSError:
+                    continue
+                leaked.append(duplicate)
+                coverage_module.os.close(duplicate)
+    assert not leaked
+    assert _bytes(tmp_path) == before
+
+
+@pytest.mark.parametrize(
+    "failure_type",
+    (None, AssertionError, KeyError, RuntimeError, Exception, TypeError, ValueError),
+)
+def test_partition_stream_close_does_not_reclassify_an_active_decode_fault(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_type: type[Exception] | None,
+) -> None:
+    _, relative_path = _seed(tmp_path)
+    assert relative_path is not None
+    before = _bytes(tmp_path)
+    primary = failure_type("decode defect") if failure_type else None
+    original_open = coverage_module.os.fdopen
+    closed: list[object] = []
+
+    def open_stream(descriptor: int, *args: object, **kwargs: object) -> object:
+        stream = original_open(descriptor, *args, **kwargs)
+        original_close = stream.close
+
+        def close_then_fail() -> None:
+            original_close()
+            closed.append(stream)
+            raise OSError("secondary close failure")
+
+        monkeypatch.setattr(stream, "close", close_then_fail)
+        return stream
+
+    monkeypatch.setattr(coverage_module.os, "fdopen", open_stream)
+    if primary is not None:
+        monkeypatch.setattr(
+            coverage_module,
+            "iter_candles_from_parquet",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(primary),
+        )
+    evaluator = StoredCoverageEvaluatorV1()
+    with (
+        evaluator.admit(tmp_path) as admission,
+        pytest.raises(failure_type or coverage_module.PartitionReadFailureV1) as raised,
+    ):
+        coverage_module.read_partition_under_lease(
+            tmp_path, admission.lease, relative_path
+        )
+    if primary is not None:
+        assert raised.value is primary
+    else:
+        assert isinstance(raised.value, coverage_module.PartitionReadFailureV1)
+        assert raised.value.category is FailureCategory.PATH_INVALID_OR_MISMATCHED
+    assert len(closed) == 1
+    assert _bytes(tmp_path) == before
+
+
+@pytest.mark.parametrize(
+    "failure",
+    (
+        pa.ArrowMemoryError("synthetic resource exhaustion"),
+        pa.ArrowCancelled("synthetic cancellation"),
+    ),
+)
+def test_partition_resource_failure_does_not_assert_corrupt_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: Exception
+) -> None:
+    _, relative_path = _seed(tmp_path)
+    assert relative_path is not None
+    before = _bytes(tmp_path)
+
+    def fail_decode(_file_descriptor: int) -> tuple[str, tuple[CanonicalCandle, ...]]:
+        raise failure
+
+    monkeypatch.setattr(coverage_module, "_decode_partition", fail_decode)
+    evaluator = StoredCoverageEvaluatorV1()
+    with (
+        evaluator.admit(tmp_path) as admission,
+        pytest.raises(type(failure)) as raised,
+    ):
+        coverage_module.read_partition_under_lease(
+            tmp_path, admission.lease, relative_path
+        )
+
+    assert raised.value is failure
+    assert _bytes(tmp_path) == before
+    with evaluator.admit(tmp_path) as admission:
+        admission.ensure_live(tmp_path)
+
+
 def test_evaluator_revalidates_scheduled_minutes_and_point_in_time_freshness(
     tmp_path: Path,
 ) -> None:
@@ -810,3 +989,75 @@ def test_evaluator_rejects_future_and_temporally_contradictory_provenance(
     schedule = StoredCoverageEvaluatorV1().evaluate(_request(schedule_root), NOW)
     assert schedule.months[0].coverage_state is CoverageStateV1.CORRUPT
     assert schedule.verified_partitions == ()
+
+
+@pytest.mark.parametrize(
+    "reader", ("_snapshot_metadata_from_row", "_manifest_from_row")
+)
+def test_catalog_row_fault_preserves_unknown_exception(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reader: str
+) -> None:
+    _seed(tmp_path)
+    failure = AssertionError()
+
+    def fail(*_args: object) -> None:
+        raise failure
+
+    monkeypatch.setattr(
+        f"swing_trading_ai_assistant.market_data.catalog.{reader}", fail
+    )
+    with pytest.raises(AssertionError) as raised:
+        StoredCoverageEvaluatorV1().evaluate(_request(tmp_path), NOW)
+    assert raised.value is failure
+
+
+@pytest.mark.parametrize("surface", ("internal", "cli"))
+def test_schedule_serializer_fault_is_not_coverage_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    surface: str,
+) -> None:
+    _seed(tmp_path)
+    before = _bytes(tmp_path)
+    failure = ValueError("private-schedule-implementation-fault")
+
+    def fail(_schedule: object) -> bytes:
+        raise failure
+
+    monkeypatch.setattr(
+        "swing_trading_ai_assistant.market_data.validation.canonical_schedule_bytes",
+        fail,
+    )
+    if surface == "internal":
+        with pytest.raises(ValueError) as raised:
+            StoredCoverageEvaluatorV1().evaluate(_request(tmp_path), NOW)
+        assert raised.value is failure
+    else:
+        exit_code = main(
+            [
+                "coverage",
+                "--segment",
+                "NSE_EQ",
+                "--symbol",
+                "RELIANCE",
+                "--from",
+                "2026-07-01",
+                "--to",
+                "2026-07-31",
+                "--storage-root",
+                str(tmp_path),
+                "--output",
+                "json",
+            ]
+        )
+        captured = capsys.readouterr()
+        output = json.loads(captured.out)
+        assert exit_code == 5
+        assert output["status"] == "FAILED"
+        assert output["failure"]["code"] == "UNCLASSIFIED_FAILURE"
+        assert output["payload"] is None
+        assert output["provider_attempt_count"] == 0
+        assert "private-schedule-implementation-fault" not in captured.out
+        assert captured.err == ""
+    assert _bytes(tmp_path) == before

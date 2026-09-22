@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Final, Protocol, cast
 from uuid import uuid4
 
-from .catalog import DuckDBCatalog
+from .catalog import CatalogError, DuckDBCatalog
 from .instrument_snapshot import (
     InstrumentSnapshotCorruptError,
     InstrumentSnapshotNotFoundError,
@@ -43,7 +43,7 @@ from .public_contract import (
 )
 from .public_query import QueryRequestV1
 from .runtime_identity_manifest import MARKET_DATA_RUNTIME_SOURCE_SHA256_V1
-from .storage_root_lease import LeaseOutcome, StorageRootLease
+from .storage_root_lease import LeaseOutcome, StorageRootLease, StorageRootLeaseError
 from .universe_snapshot import (
     Nifty50UniverseStoreV1,
     UniverseSnapshotAmbiguousError,
@@ -807,14 +807,30 @@ class CurrentCohortRetainedQueryPortV1:
         current_request = replace(request, from_date=month_start)
         prior_request = replace(request, to_date=month_start - timedelta(days=1))
         current_report = self.current_aware.query_under_lease(current_request, lease)
+        _raise_if_unclassified_query_failure(current_report)
         prior_report = self.current_aware.query_under_lease(prior_request, lease)
+        _raise_if_unclassified_query_failure(prior_report)
         if _successful_minute_payload(prior_report) is None:
             prior_report = self.prior_provisional.query_under_lease(
                 prior_request, lease
             )
+            _raise_if_unclassified_query_failure(prior_report)
         return _merge_current_cohort_query_reports(
             request, prior_report, current_report
         )
+
+
+def _is_unclassified_query_failure(report: QueryReportV1) -> bool:
+    return (
+        report.status is PublicCommandStatusV1.FAILED
+        and report.failure is not None
+        and report.failure.code is PublicFailureCodeV1.UNCLASSIFIED_FAILURE
+    )
+
+
+def _raise_if_unclassified_query_failure(report: QueryReportV1) -> None:
+    if _is_unclassified_query_failure(report):
+        raise _UnclassifiedQueryExecutionFailure
 
 
 def _query_payload(report: object) -> QueryPayloadV1 | None:
@@ -1279,6 +1295,7 @@ class ImmutableCurrentFactArchiveV1:
                     os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
                     dir_fd=operation.descriptor,
                 )
+                publication_failed = False
                 try:
                     if not current_fact_archive_directory_matches_v1(
                         operation.descriptor, directory
@@ -1290,9 +1307,16 @@ class ImmutableCurrentFactArchiveV1:
                     return published and current_fact_archive_directory_matches_v1(
                         operation.descriptor, directory
                     )
+                except BaseException:
+                    publication_failed = True
+                    raise
                 finally:
-                    os.close(directory)
-        except Exception:
+                    if publication_failed:
+                        with suppress(BaseException):
+                            os.close(directory)
+                    else:
+                        os.close(directory)
+        except (OSError, StorageRootLeaseError):
             return False
 
 
@@ -1364,6 +1388,7 @@ def _publish_archive_object(parent: int, name: str, raw: bytes) -> bool:
     temporary = f".{name}.{uuid4().hex}.tmp"
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC
     descriptor: int | None = None
+    publication_failed = False
     try:
         descriptor = os.open(temporary, flags, 0o600, dir_fd=parent)
         offset = 0
@@ -1374,8 +1399,9 @@ def _publish_archive_object(parent: int, name: str, raw: bytes) -> bool:
             offset += written
         os.fchmod(descriptor, 0o400)
         os.fsync(descriptor)
-        os.close(descriptor)
+        closed_descriptor = descriptor
         descriptor = None
+        os.close(closed_descriptor)
         with suppress(FileExistsError):
             os.link(
                 temporary,
@@ -1387,11 +1413,21 @@ def _publish_archive_object(parent: int, name: str, raw: bytes) -> bool:
         os.unlink(temporary, dir_fd=parent)
         os.fsync(parent)
         return _archive_object_matches(parent, name, raw)
+    except BaseException:
+        publication_failed = True
+        raise
     finally:
-        if descriptor is not None:
-            os.close(descriptor)
-        with suppress(FileNotFoundError):
-            os.unlink(temporary, dir_fd=parent)
+        if publication_failed:
+            if descriptor is not None:
+                with suppress(BaseException):
+                    os.close(descriptor)
+            with suppress(BaseException):
+                os.unlink(temporary, dir_fd=parent)
+        else:
+            if descriptor is not None:
+                os.close(descriptor)
+            with suppress(FileNotFoundError):
+                os.unlink(temporary, dir_fd=parent)
 
 
 def _archive_object_matches(parent: int, name: str, expected: bytes) -> bool:
@@ -1400,6 +1436,7 @@ def _archive_object_matches(parent: int, name: str, expected: bytes) -> bool:
         os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK,
         dir_fd=parent,
     )
+    inspection_failed = False
     try:
         opened = os.fstat(descriptor)
         named = os.stat(name, dir_fd=parent, follow_symlinks=False)
@@ -1438,8 +1475,15 @@ def _archive_object_matches(parent: int, name: str, expected: bytes) -> bool:
             and opened_after.st_uid == named_after.st_uid
             and opened_after.st_nlink == named_after.st_nlink
         )
+    except BaseException:
+        inspection_failed = True
+        raise
     finally:
-        os.close(descriptor)
+        if inspection_failed:
+            with suppress(BaseException):
+                os.close(descriptor)
+        else:
+            os.close(descriptor)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1479,8 +1523,6 @@ def _cohort_scope_reasons(
         UniverseSnapshotNotFoundError,
     ):
         return dict.fromkeys(members, CurrentCohortReasonV1.COHORT_INVALID)
-    except Exception:
-        return dict.fromkeys(members, CurrentCohortReasonV1.COHORT_INVALID)
     return {
         member: CurrentCohortReasonV1.OUT_OF_COHORT
         for member in members
@@ -1502,8 +1544,6 @@ def _identity_admission_reason(
     except InstrumentSnapshotCorruptError:
         return None, CurrentCohortReasonV1.IDENTITY_STALE
     except (InstrumentSnapshotNotFoundError, SnapshotInstrumentNotFoundError):
-        return None, CurrentCohortReasonV1.IDENTITY_UNRESOLVED
-    except Exception:
         return None, CurrentCohortReasonV1.IDENTITY_UNRESOLVED
     if resolved is None:
         return None, CurrentCohortReasonV1.IDENTITY_UNRESOLVED
@@ -1552,12 +1592,12 @@ class CurrentCohortMarketDataServiceV1:
         try:
             report = self._evaluate_under_lease(request, acquired.lease)
         except BaseException:
-            with suppress(RuntimeError):
+            with suppress(BaseException):
                 acquired.lease.close()
             raise
         try:
             acquired.lease.close()
-        except RuntimeError:
+        except StorageRootLeaseError:
             return self._insufficient(
                 request, {CurrentCohortReasonV1.PROVIDER_UNAVAILABLE}
             )
@@ -1648,13 +1688,10 @@ class CurrentCohortMarketDataServiceV1:
         PartialCurrentSessionSnapshotV1 | None,
         CurrentCohortReasonV1 | None,
     ]:
-        try:
-            query_report = self.query_port.query_under_lease(
-                self.query_factory(member, request.invocation_cutoff),
-                lease,
-            )
-        except Exception:
-            return None, None, CurrentCohortReasonV1.PROVIDER_UNAVAILABLE
+        query_report = self.query_port.query_under_lease(
+            self.query_factory(member, request.invocation_cutoff),
+            lease,
+        )
         partial = (
             _partial_snapshot(member, query_report, request.invocation_cutoff)
             if request.include_partial_current_session
@@ -1764,6 +1801,8 @@ def _query_failure_reason(report: QueryReportV1) -> CurrentCohortReasonV1:
         and report.failure.code is PublicFailureCodeV1.QUERY_BOUNDS_EXCEEDED
     ):
         return CurrentCohortReasonV1.REQUEST_BOUND_EXCEEDED
+    if _is_unclassified_query_failure(report):
+        raise _UnclassifiedQueryExecutionFailure
     if report.status in {
         PublicCommandStatusV1.UNAVAILABLE,
         PublicCommandStatusV1.FAILED,
@@ -1772,6 +1811,10 @@ def _query_failure_reason(report: QueryReportV1) -> CurrentCohortReasonV1:
     if report.status is PublicCommandStatusV1.REJECTED:
         return CurrentCohortReasonV1.DAILY_BAR_INVALID
     return CurrentCohortReasonV1.DAILY_BAR_MISSING
+
+
+class _UnclassifiedQueryExecutionFailure(RuntimeError):
+    """Prevent a generic V1 query execution failure becoming market evidence."""
 
 
 def _completed_fact(
@@ -1968,15 +2011,18 @@ def _retained_evidence_times(
             if month_number == 12
             else date(year, month_number + 1, 1)
         )
-        plan = plan_upstox_equity_months(
-            instrument,
-            month_start,
-            next_month - timedelta(days=1),
-            "1m",
-        )[0]
+    except ValueError:
+        return None
+    plan = plan_upstox_equity_months(
+        instrument,
+        month_start,
+        next_month - timedelta(days=1),
+        "1m",
+    )[0]
+    try:
         with DuckDBCatalog(storage_root, read_only=True, lease=lease) as catalog:
             manifest = catalog.get_manifest(plan)
-    except Exception:
+    except CatalogError:
         return None
     if (
         manifest is None

@@ -37,10 +37,36 @@ this boundary. Migration is incremental and versioned under
 [Plan 23](plans/23-instrument-agnostic-feature-boundary-and-coupling-audit.md);
 there is no big-bang rename or reinterpretation of frozen evidence.
 
+## Owner decision: BharatStock migration
+
+On 2026-09-10 the owner approved
+[Issue #184](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/184):
+replace active yfinance daily acquisition with direct BharatStock access,
+without a separate service or mixed-provider fallback. The
+[provider migration record](roadmap.md#bharatstock-migration-direction)
+owns the scope, measured data-check limits and unresolved prerequisites.
+The source-preserving runtime and #183 isolation were delivered through
+[PR #185](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/185)
+on September 11, 2026, at merge `65bec9e6e8256f047a253a76d165e3b51a438692`.
+Yahoo-specific evidence keeps its original provider, basis, identities and
+observation times; versioned successors do not reinterpret it.
+Upstox raw/current behavior remains separate. Neither the provider decision nor
+the 100-stock input-data check closes
+[#183](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/183).
+The later [accepted as-provided decision](roadmap.md#accepted-as-provided-ohlcv-decision-and-member-isolation)
+selects unchanged provider OHLCV, assuming its adjustment is correct for the
+declared current workflow. After the provider reported a correction and warned
+against multiplying OHLC by its factor, the owner
+[retired the optional transformation](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/184#issuecomment-5623802210).
+Adjustment fields remain separate; volume is source-reported and unchanged.
+The provider's report is not independent post-deployment verification or proof
+of uniformly adjusted historical OHLC. Earlier evidence, strict predecessor
+readers and independent review/release requirements remain intact.
+
 ## Delivery priority overlay
 
-The architecture, locked modules, pipeline, exclusions, and historical plan
-below remain intact. The owner has changed delivery priority only:
+The module responsibilities, exclusions and accepted historical capabilities
+remain intact. The current/live priority and #172 dependency migration require:
 
 1. make the current/live research path usable first through current
    price/volume, Market Regime, Sector Analysis, news/events, and one integrated
@@ -50,22 +76,32 @@ below remain intact. The owner has changed delivery priority only:
 3. complete the deferred historical store and backtest validation after the
    current packet is usable.
 
-This ordering removes no feature or gate. Historical work is deferred, not
-deleted. [Upcoming Sprints Overview](upcoming_sprints_overview.md) owns the
-current delivery sequence; it does not change the module order or authorize
-autonomous signals, recommendations, or broker execution. Sprint 15 / #120,
+This ordering removes no feature or claim-specific gate. Historical work is
+deferred, not deleted. [Upcoming Sprints Overview](upcoming_sprints_overview.md)
+owns delivery sequencing, while versioned feature contracts own actual execution
+dependencies. Neither authorizes autonomous signals, recommendations or broker
+execution. Sprint 15 / #120,
 Sprint 16 / #122, Sprint 18 / #148, and Sprint 19 / #152 are
-closed/completed. Sprint 17 / #147 is an open waiting historical lane at
-`1/4`; its three unavailable future-session captures do not block
-current/live work. Sprint 19 Price Action delivered through PR #153. Closed
-Issue #154 and accepted Plan 33 own only the bounded source decision, benchmark,
-and contract for efficient current Nifty 50 plus Nifty Next 50 adjusted capture;
-PR #157 merged that planning record without changing runtime. Issue #155 owns
-the exact reviewed Plan 30 runtime delivery; its governing merge installs that
-prerequisite without closing #147. Open Project **Todo** Issue #156 then owns
-the separately bounded Plan 33 implementation. Owner-prioritized maintenance
-Issue #145 follows #156 before another product module starts. Issue #147
-remains a parallel `1/4` temporal-evidence lane.
+closed/completed. Sprint 17 / #147 retained all `4/4` predeclared
+completed-session captures, passed unchanged Plan 29 for `OHLCV_ONLY`, and
+closed/completed through PR #166; its Delivery Project item is **Done**.
+Sprint 19 Price Action delivered through PR #153. Closed Issue #154 and
+accepted Plan 33 own only the bounded source decision, benchmark, and contract
+for efficient current Nifty 50 plus Nifty Next 50 adjusted capture; PR #157
+merged that planning record without changing runtime. Issue #155 delivered the
+exact reviewed Plan 30 runtime prerequisite. Closed Issue #156 owns the
+separately bounded Plan 33 implementation. The original owner instruction
+required its security follow-up after #145 and before #172 implementation.
+That stopped probe remains **INVALID / NO VERDICT**. The owner withdrew the
+old scheduling dependency and separately authorized ordinary current reviews;
+PR #185 completed those reviews without resuming the historical probe.
+The owner authorized starting #172 on September 11 after #183/#184 delivery;
+the [accepted start record](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/172#issuecomment-5630961537)
+owns that current sequencing. No refusal retry, review substitution or release
+waiver is implied. Protected release requirements remain.
+Owner-prioritized maintenance Issue #145 owns the cross-module internal-error
+policy below. It changes execution-failure handling, not the product-module
+sequence or the separately bounded scope of #156.
 [Plan 34](plans/34-swing-research-feature-map.md)
 freezes the necessary-only feature taxonomy: no later Price Action, Volume,
 Relative Strength, or Liquidity/SMC candidate starts without proving a distinct
@@ -402,7 +438,44 @@ It must never:
 - generate opinions; or
 - perform LLM-style reasoning.
 
-## Locked pipeline
+## Dynamic stock-list and eligibility boundary
+
+Index, sector, Industry, thematic, watchlist, and explicit caller inputs are
+selection policies. Each produces an exact dynamic canonical stock list; none
+defines a separate Market Regime, Sector Analysis, Market Structure, Price
+Action, Volume, Relative Strength, or Risk algorithm. A reusable feature core
+consumes the list and its declared evidence capabilities without importing an
+index resolver or requiring category membership.
+
+The official [NSE Indices sectoral catalogue](https://www.niftyindices.com/indices/equity/sectoral-indices)
+and [NSE sectoral-indices page](https://www.nseindia.com/static/products-services/indices-sectoral)
+demonstrate why this separation is mandatory. Nifty Bank, Private Bank, PSU
+Bank, Financial Services, Financial Services Ex-Bank, NBFC, Housing Finance,
+Insurance, and MidSmall Financial Services are overlapping named index
+methodologies, not one mutually exclusive taxonomy. A Bank research list may
+come from any one authorized selector, an explicit union/intersection/difference,
+or a caller-supplied list. The tool preserves that exact list identity and
+provenance; it never infers or hard-codes the category from its members.
+
+The default product selector remains point-in-time Nifty 100. Nifty 500 is at
+most a carefully screened discovery universe, not blanket feature admission,
+and the product does not target every NSE listing. Selection is followed by a
+separate objective, versioned stock-eligibility boundary covering sufficient
+listing/history evidence, canonical identity and provider mappings, data
+quality, liquidity/turnover, price integrity, event risk, and every
+feature-specific requirement. Newly listed, very small-cap,
+penny/very-low-priced, thinly traded, or otherwise
+manipulation-susceptible stocks fail closed when an applicable evidence-backed
+gate is unsatisfied. Category membership never bypasses those gates, and price
+or capitalization alone never proves manipulation.
+
+Every feature owns a finite resource bound rather than a magic index
+cardinality. Oversized lists may be partitioned only through a versioned
+orchestrator that preserves exact whole-list semantics and one selection
+identity. Per-batch verdicts must not be averaged or combined when the feature
+depends on the complete cohort.
+
+## Module responsibility flow
 
 ```text
 Higher-level universe policy
@@ -425,6 +498,22 @@ Structured research facts
   -> AI reasoning
   -> Explainable recommendation or no-trade decision
 ```
+
+This flow is not a universal all-module admission gate.
+[The linked #172 slices](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/172#issuecomment-5631137469)
+migrate execution to explicit capability dependencies while preserving every
+module responsibility below. Foundational identity, time, storage authority and
+price-integrity failures still invalidate all dependent facts. A missing
+question-specific requirement withholds that conclusion; unavailable optional
+context does not erase independent observations.
+
+The first working successor (#186, delivered through PR #191) uses the existing
+NSE/Upstox calendar policy, retained Upstox BOD equity mapping and source-reported
+BharatStock two-session capture. It exposes the existing feature-local Price
+Action result, not an observed whole Packet, corporate-action qualification,
+strategy effectiveness or trade eligibility. The authorized PNB observation is
+limited to the #186 completion evidence. The frozen Upstox raw/Plan-21/
+21-session Structure and Price Action contracts remain distinct.
 
 ## Locked modules
 
@@ -516,6 +605,100 @@ successful fact.
 
 A module advances only after its requirements and validation are complete.
 
-Prior repositories are non-authoritative references. Their concepts may be
-studied, but logic must be independently specified, tested, and validated for
-this project's equity-only scope before adoption.
+Previously supplied external trading repositories are withdrawn from this
+project's reference scope. Do not consult, copy, adapt, or derive trading
+concepts or test oracles from them. Official provider/dependency documentation,
+approved books, and verified project code remain admissible.
+
+## Internal errors and operator diagnostics
+
+[Issue #145](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/145)
+freezes the maintenance contract for shared market-data execution failures.
+An implementation defect is not evidence that a market input is malformed,
+unsupported, missing, corrupt, conflicting, invalid, or historically unavailable.
+
+- Shared schedule, instrument-snapshot, stored-coverage, partition-read,
+  daily-query, and retained-source internals propagate unexpected exceptions
+  after cleanup. Plain `TypeError` or `ValueError` from execution is not blanket
+  evidence rejection. Known validation and decoder errors are converted only at
+  their narrow input/data boundary.
+  Interpreter-limit failures while decoding actual retained JSON integers remain
+  typed corruption; an unrelated decoder `ValueError` still propagates.
+  Schedule consumers, partition recovery, range ingestion, and current-cohort
+  dependencies follow the same distinction: an execution fault stops the invocation
+  without invalidating or quarantining retained evidence. Cleanup preserves
+  an active primary failure when cleanup also fails; an unexpected standalone
+  cleanup failure propagates.
+  Descriptor ownership is relinquished before a standalone close: a close failure
+  may follow release and reuse of that descriptor number, so cleanup must not retry
+  it. Other owned resources are still closed, and existing quarantine and journal
+  safeguards preserve uncertain objects.
+- Expected schedule, snapshot, and cohort-selection validation signals retain
+  `ValueError` compatibility through explicit subclasses. Expected lease-authority failures
+  use `StorageRootLeaseError`, a `RuntimeError` subclass. Partition rejection
+  uses `PartitionReadFailureV1` with the existing finite failure categories;
+  an unrelated exception's attributes do not establish an evidence finding.
+  Canonical universe-file loading, corporate-action availability, and prospective
+  readiness catch only their owned validation or documented I/O failures. A lower
+  decoder or catalog defect does not produce a `CORRUPT` evidence state or reason.
+- Recognized malformed/unsupported Arrow data signals remain data failures.
+  Native resource exhaustion and cancellation do not assert corrupt evidence.
+  Query timeout/resource outcomes remain distinct; unexpected SQL implementation
+  faults propagate, and catalog transactions roll back before propagation.
+- Existing V1 public coverage/query adapters retain the closed
+  `FAILED / UNCLASSIFIED_FAILURE` execution-failure envelope, without partial
+  rows or evidence payloads. That envelope is not a market-evidence state and
+  retains the delivered CLI exit code `5`.
+  Point-in-time read wrappers do not call a decoder or factory defect missing
+  catalog evidence or invalid membership. Bounded wrappers retain their generic
+  `FAILED` result with no member results when setup fails unexpectedly.
+  Clock and cancellation callback execution faults are not cancellation evidence.
+  Current same-pass completed-grid consumers stop a generic query execution failure before
+  completion-time or raw-evidence reduction; it is not missing, invalid,
+  conflicted, or future-known raw evidence. Supported-data failures retain their
+  existing precedence. The optional partial-capability boundary remains
+  explicitly nonfatal under [Plan 27](plans/27-current-same-pass-market-regime-contract.md#optional-partial_current_session):
+  query and projection faults produce `UNAVAILABLE` partial snapshots with no
+  rows, without invalidating independently valid completed facts.
+  The separate prerequisite-manifest service and CLI keep
+  their sanitized no-manifest failure boundary: exit code `3`, empty stdout, and
+  the fixed unavailable diagnostic.
+- Before a completed public response, the `market-data` CLI maps an unexpected
+  exception to exit code `2`, empty stdout, and exactly `internal_error\n` on
+  stderr. Parser rejection is exactly `request_invalid\n`; existing bounded
+  command-admission diagnostics remain distinct. Recognized probe failures use
+  exactly `probe_failed\n`, not dynamic exception-class names.
+- A completed valid V1 terminal report retains its existing output and exit
+  behavior. Request admission, execution, exit-code validation, and output
+  publication are ordered so an execution defect is not called an invalid
+  request and no partial success is printed.
+
+The closed public failure code or fixed CLI diagnostic is the operator signal.
+No logger, telemetry backend, or persistent diagnostic file is added. Never
+print or log exception messages, representations, dynamic class names, chained
+exceptions, stacks, private paths, credentials, source payloads, or raw provider
+responses. Applications calling shared internals directly must supply this
+bounded operator boundary rather than exposing propagated exceptions.
+
+On an internal error, stop that invocation without relabeling or deleting its
+evidence. Preserve private inputs; report only the command name, software version,
+and fixed code. A separate authorized debugging session may investigate the
+implementation. There is no automatic provider fallback or evidence acquisition.
+
+Delivered Sprint 10–15 result schemas, evidence enums, supported-input
+precedence, persisted formats, and historical exact-read identities remain
+unchanged. Source-at-rest manifests are refreshed from formatted code, including
+transitively bound manifests; old revisions retain their original writer and
+evidence identities. Current boundary regressions, exact independent review,
+repository gates, and installed-artifact proof are recorded with Issue #145.
+
+## Issue #187 additive current-research successor
+
+Issue #187, delivered through PR #196, added `bharatstock-retained-research-packet@v2` and the thin
+`current-supplied-cohort-research-packet@v5` envelope. V2 independently admits
+one-, two- and 21-completed-session BharatStock windows: candle geometry needs
+one bar, previous-close comparison needs two and Structure reuses the exact
+existing 21-session mathematics. V5 preserves ordered selection identity,
+separate canonical cohort identity, per-feature coverage/provenance and
+question readiness. V1/V4 contracts, archival claims, Upstox raw evidence and
+independent context acquisition remain unchanged.

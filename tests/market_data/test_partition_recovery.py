@@ -8,9 +8,7 @@ from pathlib import Path
 import pytest
 
 import swing_trading_ai_assistant.market_data.partition_recovery as partition_recovery_module
-from swing_trading_ai_assistant.market_data.historical import (
-    CancellationSignal as HistoricalCancellationSignal,
-)
+from swing_trading_ai_assistant.market_data.catalog import CatalogPersistenceError
 from swing_trading_ai_assistant.market_data.historical import CancellationToken
 from swing_trading_ai_assistant.market_data.manifest_lifecycle import (
     FailureCategory,
@@ -465,7 +463,7 @@ def test_catalog_read_failure_is_typed_and_provider_free(tmp_path: Path) -> None
         def get_manifest(
             self, _plan: PlannedInstrumentMonth
         ) -> PartitionManifest | None:
-            raise RuntimeError("private catalog details")
+            raise CatalogPersistenceError("private catalog details")
 
     result = _observer(
         tmp_path, BrokenCatalog(), _ScheduleStore(_schedule_evidence())
@@ -858,12 +856,11 @@ def test_parquet_read_stops_at_row_ceiling_plus_one_and_closes_reader(
             yield (candle,) * 65_536
             self.batches += 1
             yield (candle, candle)
+            raise AssertionError("reader consumed beyond the permitted row bound")
 
     reader = _BoundedReader()
-    requested_batch_sizes: list[int] = []
 
-    def fake_reader(_stream: object, *, batch_size: int = 8_192) -> _BoundedReader:
-        requested_batch_sizes.append(batch_size)
+    def fake_reader(_stream: object, **_kwargs: object) -> _BoundedReader:
         return reader
 
     monkeypatch.setattr(
@@ -871,12 +868,13 @@ def test_parquet_read_stops_at_row_ceiling_plus_one_and_closes_reader(
     )
     observer = _observer(tmp_path, _Catalog(), _ScheduleStore(_schedule_evidence()))
 
-    artifact = observer._read_artifact(plan)  # noqa: SLF001
+    result = observer.observe(plan)
 
-    assert requested_batch_sizes == [65_536]
     assert reader.closed
-    assert artifact.candles is not None
-    assert len(artifact.candles) == 65_537
+    assert result.outcome is PartitionRecoveryOutcome.REQUEST_REQUIRED
+    assert result.failure_category is FailureCategory.SCHEMA_UNSUPPORTED_OR_INCOMPATIBLE
+    assert result.quarantine_path is not None
+    assert not target.exists()
     assert reader.batches == 2
 
 
@@ -1150,7 +1148,7 @@ def test_catalog_transition_failure_is_sanitized(tmp_path: Path, state: str) -> 
         def transition_manifest(
             self, current: PartitionManifest, target: PartitionManifest
         ) -> None:
-            raise RuntimeError("catalog secret")
+            raise CatalogPersistenceError("catalog secret")
 
     if state == "in_progress":
         catalog = _BrokenCatalog(_in_progress(plan))
@@ -1569,14 +1567,14 @@ def test_catalog_transition_failures_are_sanitized(
     class BrokenCatalog(_Catalog):
         def create_manifest(self, manifest: PartitionManifest) -> None:
             if failure_method == "create_manifest":
-                raise RuntimeError("private catalog details")
+                raise CatalogPersistenceError("private catalog details")
             super().create_manifest(manifest)
 
         def transition_manifest(
             self, current: PartitionManifest, target: PartitionManifest
         ) -> None:
             if failure_method == "transition_manifest":
-                raise RuntimeError("private catalog details")
+                raise CatalogPersistenceError("private catalog details")
             super().transition_manifest(current, target)
 
     current = (
@@ -1608,7 +1606,7 @@ def test_terminal_verification_transition_failure_is_sanitized_after_create_or_r
             self, current: PartitionManifest, target: PartitionManifest
         ) -> None:
             if target.state is ManifestState.VERIFIED:
-                raise RuntimeError("private catalog details")
+                raise CatalogPersistenceError("private catalog details")
             super().transition_manifest(current, target)
 
     current = _failed(plan, schedule) if has_failed_manifest else None
@@ -1804,7 +1802,307 @@ def test_public_result_rejects_contradictory_failed_shape() -> None:
         )
 
 
-def test_recovery_cancellation_port_is_not_owned_by_historical_adapter() -> None:
-    assert (
-        partition_recovery_module.CancellationSignal is not HistoricalCancellationSignal
+def _assert_verified_partition_unchanged(
+    catalog: _Catalog, verified: PartitionManifest, target: Path, original: bytes
+) -> None:
+    assert catalog.current is verified
+    assert catalog.transitions == []
+    assert target.read_bytes() == original
+    assert not list(target.parent.glob(".quarantine-*.parquet"))
+
+
+def test_unknown_catalog_read_fault_propagates_without_mutating_verified_evidence(
+    tmp_path: Path,
+) -> None:
+    plan = _plan()
+    target, checksum = _write_final(tmp_path, plan)
+    original = target.read_bytes()
+    schedule = _schedule_evidence()
+    verified = _verified(
+        plan, checksum, policy="nse-equity-month@v1+sessions-sha256:" + schedule.digest
     )
+    fault = RuntimeError("unexpected catalog fault")
+
+    class BrokenCatalog(_Catalog):
+        def get_manifest(
+            self, _plan: PlannedInstrumentMonth
+        ) -> PartitionManifest | None:
+            raise fault
+
+    catalog = BrokenCatalog(verified)
+    with pytest.raises(RuntimeError) as raised:
+        _observer(tmp_path, catalog, _ScheduleStore(schedule)).observe(plan)
+
+    assert raised.value is fault
+    _assert_verified_partition_unchanged(catalog, verified, target, original)
+
+
+def test_unknown_lease_fault_propagates_without_mutating_verified_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plan = _plan()
+    target, checksum = _write_final(tmp_path, plan)
+    original = target.read_bytes()
+    schedule = _schedule_evidence()
+    verified = _verified(
+        plan, checksum, policy="nse-equity-month@v1+sessions-sha256:" + schedule.digest
+    )
+    catalog = _Catalog(verified)
+    fault = RuntimeError("unexpected lease fault")
+
+    def fail_root_operation(*_args: object, **_kwargs: object) -> object:
+        raise fault
+
+    monkeypatch.setattr(
+        partition_recovery_module.StorageRootLease,
+        "root_operation",
+        fail_root_operation,
+    )
+    with pytest.raises(RuntimeError) as raised:
+        _observer(tmp_path, catalog, _ScheduleStore(schedule)).observe(plan)
+
+    assert raised.value is fault
+    _assert_verified_partition_unchanged(catalog, verified, target, original)
+
+
+def test_unknown_schedule_fault_propagates_without_mutating_verified_evidence(
+    tmp_path: Path,
+) -> None:
+    plan = _plan()
+    target, checksum = _write_final(tmp_path, plan)
+    original = target.read_bytes()
+    schedule = _schedule_evidence()
+    verified = _verified(
+        plan, checksum, policy="nse-equity-month@v1+sessions-sha256:" + schedule.digest
+    )
+    fault = RuntimeError("unexpected schedule fault")
+
+    class BrokenScheduleStore(_ScheduleStore):
+        def resolve(self, digest: str) -> ScheduleEvidenceResult:
+            raise fault
+
+    catalog = _Catalog(verified)
+    with pytest.raises(RuntimeError) as raised:
+        _observer(tmp_path, catalog, BrokenScheduleStore(schedule)).observe(plan)
+
+    assert raised.value is fault
+    _assert_verified_partition_unchanged(catalog, verified, target, original)
+
+
+def test_unknown_parquet_fault_propagates_without_mutating_verified_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plan = _plan()
+    target, checksum = _write_final(tmp_path, plan)
+    original = target.read_bytes()
+    schedule = _schedule_evidence()
+    verified = _verified(
+        plan, checksum, policy="nse-equity-month@v1+sessions-sha256:" + schedule.digest
+    )
+    catalog = _Catalog(verified)
+    fault = KeyError("unexpected parquet fault")
+
+    def fail_parquet_read(*_args: object, **_kwargs: object) -> object:
+        raise fault
+
+    monkeypatch.setattr(
+        partition_recovery_module, "iter_candles_from_parquet", fail_parquet_read
+    )
+    with pytest.raises(KeyError) as raised:
+        _observer(tmp_path, catalog, _ScheduleStore(schedule)).observe(plan)
+
+    assert raised.value is fault
+    _assert_verified_partition_unchanged(catalog, verified, target, original)
+
+
+def test_unknown_validator_fault_propagates_without_mutating_verified_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plan = _plan()
+    target, checksum = _write_final(tmp_path, plan)
+    original = target.read_bytes()
+    schedule = _schedule_evidence()
+    verified = _verified(
+        plan, checksum, policy="nse-equity-month@v1+sessions-sha256:" + schedule.digest
+    )
+    catalog = _Catalog(verified)
+    fault = Exception("unexpected validator fault")
+
+    def fail_validation(*_args: object, **_kwargs: object) -> object:
+        raise fault
+
+    monkeypatch.setattr(EquityMonthValidationPolicy, "validate", fail_validation)
+    with pytest.raises(Exception) as raised:
+        _observer(tmp_path, catalog, _ScheduleStore(schedule)).observe(plan)
+
+    assert raised.value is fault
+    _assert_verified_partition_unchanged(catalog, verified, target, original)
+
+
+def test_unknown_recovery_cancellation_fault_propagates_without_relabeling(
+    tmp_path: Path,
+) -> None:
+    plan = _plan()
+    target, _ = _write_final(tmp_path, plan)
+    original = target.read_bytes()
+    fault = RuntimeError("unexpected cancellation fault")
+
+    class BrokenCancellation:
+        def is_cancelled(self) -> bool:
+            raise fault
+
+    catalog = _Catalog()
+    with pytest.raises(RuntimeError) as raised:
+        _observer(
+            tmp_path,
+            catalog,
+            _ScheduleStore(_schedule_evidence()),
+            BrokenCancellation(),  # type: ignore[arg-type]
+        ).observe(plan)
+
+    assert raised.value is fault
+    assert catalog.current is None
+    assert catalog.transitions == []
+    assert target.read_bytes() == original
+    assert not list(target.parent.glob(".quarantine-*.parquet"))
+
+
+def test_unknown_invalidation_transition_fault_preserves_verified_evidence(
+    tmp_path: Path,
+) -> None:
+    plan = _plan()
+    target, checksum = _write_final(tmp_path, plan)
+    original = target.read_bytes()
+    schedule = _schedule_evidence()
+    verified = replace(
+        _verified(
+            plan,
+            checksum,
+            policy="nse-equity-month@v1+sessions-sha256:" + schedule.digest,
+        ),
+        canonical_path="wrong/path.parquet",
+    )
+    fault = RuntimeError("unexpected transition fault")
+
+    class BrokenCatalog(_Catalog):
+        def transition_manifest(
+            self, current: PartitionManifest, target: PartitionManifest
+        ) -> None:
+            raise fault
+
+    catalog = BrokenCatalog(verified)
+    with pytest.raises(RuntimeError) as raised:
+        _observer(tmp_path, catalog, _ScheduleStore(schedule)).observe(plan)
+
+    assert raised.value is fault
+    _assert_verified_partition_unchanged(catalog, verified, target, original)
+
+
+def test_typed_catalog_failure_remains_sanitized_and_provider_free(
+    tmp_path: Path,
+) -> None:
+    class BrokenCatalog(_Catalog):
+        def get_manifest(
+            self, _plan: PlannedInstrumentMonth
+        ) -> PartitionManifest | None:
+            raise CatalogPersistenceError("catalog unavailable")
+
+    result = _observer(
+        tmp_path, BrokenCatalog(), _ScheduleStore(_schedule_evidence())
+    ).observe(_plan())
+
+    assert result.outcome is PartitionRecoveryOutcome.FAILED
+    assert result.error_code == "CATALOG_UNAVAILABLE"
+    assert result.provider_requests == 0
+
+
+def test_artifact_open_fault_survives_secondary_descriptor_cleanup_fault(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plan = _plan()
+    target, checksum = _write_final(tmp_path, plan)
+    original = target.read_bytes()
+    schedule = _schedule_evidence()
+    verified = _verified(
+        plan, checksum, policy="nse-equity-month@v1+sessions-sha256:" + schedule.digest
+    )
+    catalog = _Catalog(verified)
+    observer = _observer(tmp_path, catalog, _ScheduleStore(schedule))
+    primary = AssertionError("private artifact-open defect")
+    secondary = RuntimeError("private artifact-cleanup defect")
+    failed_descriptors: set[int] = set()
+    real_close = partition_recovery_module.os.close
+
+    def fail_stream_open(descriptor: int, *_args: object, **_kwargs: object) -> object:
+        failed_descriptors.add(descriptor)
+        raise primary
+
+    def fail_descriptor_cleanup(descriptor: int) -> None:
+        real_close(descriptor)
+        if descriptor in failed_descriptors:
+            failed_descriptors.remove(descriptor)
+            raise secondary
+
+    with monkeypatch.context() as patch:
+        patch.setattr(partition_recovery_module.os, "fdopen", fail_stream_open)
+        patch.setattr(partition_recovery_module.os, "close", fail_descriptor_cleanup)
+        with pytest.raises(AssertionError) as raised:
+            observer.observe(plan)
+
+    assert raised.value is primary
+    assert failed_descriptors == set()
+    _assert_verified_partition_unchanged(catalog, verified, target, original)
+
+
+@pytest.mark.parametrize(
+    "failure_type",
+    (None, AssertionError, KeyError, RuntimeError, Exception, TypeError, ValueError),
+)
+def test_artifact_decode_primary_survives_stream_close_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_type: type[Exception] | None,
+) -> None:
+    plan = _plan()
+    target, checksum = _write_final(tmp_path, plan)
+    original = target.read_bytes()
+    schedule = _schedule_evidence()
+    verified = _verified(
+        plan, checksum, policy="nse-equity-month@v1+sessions-sha256:" + schedule.digest
+    )
+    catalog = _Catalog(verified)
+    observer = _observer(tmp_path, catalog, _ScheduleStore(schedule))
+    primary = failure_type("artifact decoding defect") if failure_type else None
+    real_open = partition_recovery_module.os.fdopen
+    descriptors: list[int] = []
+
+    def open_stream(descriptor: int, *args: object, **kwargs: object) -> object:
+        stream = real_open(descriptor, *args, **kwargs)
+        descriptors.append(descriptor)
+        original_close = stream.close
+
+        def close_then_fail() -> None:
+            original_close()
+            raise OSError("secondary close failure")
+
+        monkeypatch.setattr(stream, "close", close_then_fail)
+        return stream
+
+    monkeypatch.setattr(partition_recovery_module.os, "fdopen", open_stream)
+    if primary is None:
+        result = observer.observe(plan)
+        assert result.outcome is PartitionRecoveryOutcome.FAILED
+        assert result.error_code == "LOCAL_REPAIR_BLOCKED"
+    else:
+        monkeypatch.setattr(
+            partition_recovery_module,
+            "iter_candles_from_parquet",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(primary),
+        )
+        with pytest.raises(type(primary)) as raised:
+            observer.observe(plan)
+        assert raised.value is primary
+    for descriptor in descriptors:
+        with pytest.raises(OSError):
+            partition_recovery_module.os.fstat(descriptor)
+    _assert_verified_partition_unchanged(catalog, verified, target, original)

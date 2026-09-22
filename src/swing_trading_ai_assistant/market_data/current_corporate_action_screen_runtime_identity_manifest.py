@@ -3,11 +3,11 @@
 from typing import Final
 
 CORPORATE_ACTION_SCREEN_RUNTIME_SOURCE_SHA256_V1: Final = {
-    "catalog.py": "794f0382813dd7a5d10b14a4f6c3f487f68d777b2911fcf477dd455bdcd1fb4c",
-    "corporate_actions.py": "b19f0e9f89a8750ec0fe8211c18ab16a3c6580726164214606878308e5687cd9",
-    "current_cohort.py": "d58bd58551f3e33289628ceba0037c32c688cc806a04d4e0e167f9c62aeef832",
-    "current_corporate_action_screen.py": "f3d866a662a8bb44eb04e57b8297c89cee7a2a9005cf0b37716fdf99261fe9b3",
-    "schedule_evidence.py": "0abde4536d131e04d21534b1688c8aa1640bb80e1dc2700d650fd28b1c9d3ff2",
-    "storage_root_lease.py": "a20d2e4e68b0788bcd3118a8ffb3e15b53b99e181a800c353a1e3a4b7b5ae942",
-    "universe_snapshot.py": "f37c9763860240617685c339934ede38ada2cadafe79ae629a78cb169cf90a30",
+    "catalog.py": "ae17eac5475a39d5ff08173e9b2154c0cf33778f573e7d894656a2ba685294ac",
+    "corporate_actions.py": "1d74c5cc7e94470452377491d5fa6ead801833bb4f17b4bae3305e73058cd9cc",
+    "current_cohort.py": "50d5e3198908a006be93ff4314fe7ceb5350785b1eb52bbb6dcf2fd468770bea",
+    "current_corporate_action_screen.py": "32f6d2b8b954ca64006308f6af7370fd6489614db172297d818cf2422b946724",
+    "schedule_evidence.py": "2894a34356c7d12c71cf2a9cb133d0a5d7aaa83a83d7ac43549a13e7b9081801",
+    "storage_root_lease.py": "c1a11745e5800561cbee17063142ee72f534b4d3f7f6ccda028441d762256612",
+    "universe_snapshot.py": "d579f6dcd2a24f2e07448258d9d723b55a8cfa42e4a6d9852c1f8edea9ab9e53",
 }

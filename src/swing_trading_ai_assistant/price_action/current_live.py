@@ -54,14 +54,14 @@ _RUNTIME_MANIFEST: Final = (
 )
 _RUNTIME_SOURCES: Final = (
     "src/swing_trading_ai_assistant/market_data/current_corporate_action_screen.py",
-    "src/swing_trading_ai_assistant/market_data/current_same_pass_daily.py",
+    "src/swing_trading_ai_assistant/market_data/current_same_pass_daily_v4.py",
     "src/swing_trading_ai_assistant/market_data/runtime_source_verifier.py",
     "src/swing_trading_ai_assistant/market_structure/__init__.py",
     "src/swing_trading_ai_assistant/market_structure/current_live.py",
-    "src/swing_trading_ai_assistant/market_structure/current_same_pass.py",
+    "src/swing_trading_ai_assistant/market_structure/current_same_pass_v4.py",
     "src/swing_trading_ai_assistant/price_action/__init__.py",
     "src/swing_trading_ai_assistant/price_action/current_live.py",
-    "src/swing_trading_ai_assistant/price_action/current_same_pass.py",
+    "src/swing_trading_ai_assistant/price_action/current_same_pass_v4.py",
 )
 
 PRICE_ACTION_REASON_ORDER_V1: Final = (
@@ -248,7 +248,7 @@ def _runtime_source_sha(relative: str) -> str:
             "swing_trading_ai_assistant.market_data.current_corporate_action_screen"
         ),
         _RUNTIME_SOURCES[1]: (
-            "swing_trading_ai_assistant.market_data.current_same_pass_daily"
+            "swing_trading_ai_assistant.market_data.current_same_pass_daily_v4"
         ),
         _RUNTIME_SOURCES[2]: (
             "swing_trading_ai_assistant.market_data.runtime_source_verifier"
@@ -256,12 +256,12 @@ def _runtime_source_sha(relative: str) -> str:
         _RUNTIME_SOURCES[3]: "swing_trading_ai_assistant.market_structure",
         _RUNTIME_SOURCES[4]: "swing_trading_ai_assistant.market_structure.current_live",
         _RUNTIME_SOURCES[5]: (
-            "swing_trading_ai_assistant.market_structure.current_same_pass"
+            "swing_trading_ai_assistant.market_structure.current_same_pass_v4"
         ),
         _RUNTIME_SOURCES[6]: "swing_trading_ai_assistant.price_action",
         _RUNTIME_SOURCES[7]: __name__,
         _RUNTIME_SOURCES[8]: (
-            "swing_trading_ai_assistant.price_action.current_same_pass"
+            "swing_trading_ai_assistant.price_action.current_same_pass_v4"
         ),
         _RUNTIME_MANIFEST: _RUNTIME_MANIFEST_MODULE,
     }

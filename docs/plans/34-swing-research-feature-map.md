@@ -80,23 +80,19 @@ unacceptable collapse in usable opportunities. The accepted strategy contract
 must define that tradeoff; Plan 34 does not invent a universal threshold. If the
 simpler rule is adequate, keep it simple and reject the extra filter.
 
-## Current delivery lanes
+## Current delivery status
 
-Issue #155's governing merge completes the reviewed adjusted-capture runtime
-delivery prerequisite without claiming historical closure. The remaining
-ordered current/live delivery lane is:
+The current/live ordered lane is governed by
+[Issue #172](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/172).
+Slices #186–#189 are delivered and closed through PRs #191, #196, #197 and #200;
+#190, measured acquisition efficiency, remains open. This supersedes the earlier
+#156-then-#145 delivery sequence; both issues are closed and their records remain
+historical authority for their delivered scope.
 
-1. Issue #156 — implement bounded current-at-retrieval Nifty 100 adjusted
-   capture under Plan 33; and
-2. Issue #145 — define the cross-module internal-error taxonomy and privacy-safe
-   operator diagnostics before another product module starts.
-
-Issue #147 remains a separate parallel temporal-evidence lane at `1/4`. Its
-three remaining future completed-session captures run when valid sessions and
-predeclared cutoffs permit. It does not wait behind the ordered lane and does
-not block that lane while external evidence is unavailable.
-
-No possible feature in this plan automatically enters either lane.
+Issue #147 completed its separate temporal-evidence lane at `4/4`, passed
+unchanged Plan 29 for `OHLCV_ONLY`, and closed through PR #166. That historical
+result remains separate. Plan 34 defines the necessary-only feature taxonomy;
+no possible feature in this plan automatically enters implementation.
 
 ## Delivered factual boundaries
 

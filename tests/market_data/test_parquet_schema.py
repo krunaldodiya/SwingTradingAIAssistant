@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import fields
 from datetime import UTC, date, datetime
 from pathlib import Path
 
@@ -8,6 +9,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
+import swing_trading_ai_assistant.market_data.parquet as parquet_module
 from swing_trading_ai_assistant.market_data.parquet import (
     CANDLE_ARROW_SCHEMA,
     CANDLE_SCHEMA_VERSION_METADATA_KEY,
@@ -300,6 +302,18 @@ def test_reader_rejects_nullable_required_field_and_accepts_optional_null(
     assert list(iter_candles_from_parquet(optional_null_path)) == [(candle,)]
 
 
+def test_parquet_metadata_programming_fault_propagates_unchanged() -> None:
+    class FaultingMetadata:
+        @property
+        def num_rows(self) -> int:
+            raise AssertionError("internal-metadata-fault")
+
+    with pytest.raises(AssertionError, match="internal-metadata-fault"):
+        parquet_module._validate_parquet_resource_bounds(
+            FaultingMetadata(), max_rows=1, max_uncompressed_bytes=None
+        )
+
+
 def test_reader_rejects_versions_and_incompatible_schema_before_rows(
     tmp_path: Path,
 ) -> None:
@@ -421,3 +435,93 @@ def test_conversion_errors_are_distinct(tmp_path: Path) -> None:
 
     with pytest.raises(CandleParquetConversionError):
         list(iter_candles_from_parquet(path))
+
+
+def test_arrow_columns_match_canonical_constructor_order() -> None:
+    assert CANDLE_ARROW_SCHEMA.names == [
+        field.name for field in fields(CanonicalCandle)
+    ]
+
+
+def test_empty_record_batch_converts_to_empty_tuple() -> None:
+    batch = pa.RecordBatch.from_pylist([], schema=CANDLE_ARROW_SCHEMA)
+    assert parquet_module._canonical_candles_from_record_batch(batch) == ()
+
+
+@pytest.mark.parametrize("batch_size", [1, 2, 3])
+def test_column_conversion_preserves_complete_rows(
+    tmp_path: Path, batch_size: int
+) -> None:
+    candles = [
+        _candle(),
+        _candle(
+            provider="other-provider",
+            instrument_key="NSE_FO|123456",
+            security_id="123456",
+            symbol="NIFTY_OPTION",
+            segment="NSE_FO",
+            instrument_type="OPT",
+            underlying_id="NSE_INDEX:NIFTY 50",
+            expiry=date(2026, 8, 27),
+            strike=25000.125,
+            option_type="CE",
+            ts=datetime(2026, 8, 3, 3, 46, tzinfo=UTC),
+            open=1.125,
+            high=3.875,
+            low=0.625,
+            close=2.375,
+            volume=9_223_372_036_854_775_807,
+            oi=42.25,
+            ingested_at=datetime(2026, 8, 5, 4, 31, 12, 345678, tzinfo=UTC),
+            source_version="different-version",
+        ),
+        _candle(ts=datetime(2026, 8, 3, 3, 47, tzinfo=UTC), volume=7),
+    ]
+    path = tmp_path / "distinct-columns.parquet"
+    write_candles_parquet(path, candles)
+    with iter_candles_from_parquet(path, batch_size=batch_size) as reader:
+        assert [candle for batch in reader for candle in batch] == candles
+    assert reader.closed
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("interval", "5m"), ("open", float("nan")), ("volume", -1), ("symbol", "")],
+)
+def test_invalid_later_row_rejects_whole_batch(
+    tmp_path: Path, field: str, value: object
+) -> None:
+    path = tmp_path / "invalid-later-row.parquet"
+    rows = [_arrow_row(_candle()), {**_arrow_row(_candle()), field: value}]
+    pq.write_table(pa.Table.from_pylist(rows, schema=CANDLE_ARROW_SCHEMA), path)
+    reader = iter_candles_from_parquet(path, batch_size=2)
+    with pytest.raises(
+        CandleParquetConversionError, match="row conversion"
+    ) as exc_info:
+        next(reader)
+    assert isinstance(exc_info.value.__cause__, ValueError)
+    assert reader.closed
+    assert list(reader) == []
+
+
+@pytest.mark.parametrize(
+    "bound",
+    [
+        "max_rows",
+        "max_uncompressed_bytes",
+        "max_batch_decoded_bytes",
+        "max_text_field_bytes",
+    ],
+)
+def test_resource_refusal_precedes_invalid_row_conversion(
+    tmp_path: Path, bound: str
+) -> None:
+    path = tmp_path / "over-limit.parquet"
+    row = {**_arrow_row(_candle()), "interval": "5m"}
+    pq.write_table(pa.Table.from_pylist([row, row], schema=CANDLE_ARROW_SCHEMA), path)
+    # Conversion would reject the interval; the applicable resource guard wins first.
+    with (
+        pytest.raises(CandleParquetConversionError, match="ceiling exceeded"),
+        iter_candles_from_parquet(path, **{bound: 1}) as reader,
+    ):
+        next(reader)

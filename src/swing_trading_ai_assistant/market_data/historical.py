@@ -42,6 +42,10 @@ _V3_INTERVAL_LIMITS = {
 _MAX_PROVIDER_JSON_NESTING = 64
 
 
+class HistoricalPayloadError(ValueError):
+    """A provider success response failed historical payload validation."""
+
+
 def _empty_headers() -> HttpResponseHeaders:
     return HttpResponseHeaders()
 
@@ -174,6 +178,13 @@ def _reject_nonstandard_json_constant(value: str) -> NoReturn:
     raise _RejectedProviderJSON
 
 
+def _parse_provider_json_int(value: str) -> int:
+    try:
+        return int(value)
+    except ValueError:
+        raise _RejectedProviderJSON from None
+
+
 def _decode_success_candles(
     body: bytes,
 ) -> tuple[_SuccessDecodeStatus, list[list[object]]]:
@@ -184,8 +195,14 @@ def _decode_success_candles(
             body,
             object_pairs_hook=_unique_json_object,
             parse_constant=_reject_nonstandard_json_constant,
+            parse_int=_parse_provider_json_int,
         )
-    except (Exception, MemoryError):
+    except (
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        _RejectedProviderJSON,
+        RecursionError,
+    ):
         return _SuccessDecodeStatus.MALFORMED_JSON, []
     if type(payload) is not dict:
         return _SuccessDecodeStatus.INVALID_ENVELOPE, []
@@ -234,15 +251,19 @@ def _json_nesting_within_limit(value: bytes) -> bool:
 
 
 def _raise_malformed_historical_json() -> NoReturn:
-    raise ValueError("historical response is not valid JSON") from None
+    raise HistoricalPayloadError("historical response is not valid JSON") from None
 
 
 def _raise_invalid_success_envelope() -> NoReturn:
-    raise ValueError("historical response is not a valid success envelope") from None
+    raise HistoricalPayloadError(
+        "historical response is not a valid success envelope"
+    ) from None
 
 
 def _raise_invalid_candles_array() -> NoReturn:
-    raise ValueError("historical response does not contain a candles array") from None
+    raise HistoricalPayloadError(
+        "historical response does not contain a candles array"
+    ) from None
 
 
 def _raise_body_too_large() -> NoReturn:
@@ -539,13 +560,8 @@ class _SystemSleeper:
     def sleep(self, delay: timedelta, cancellation: CancellationSignal) -> None:
         deadline = time.monotonic() + delay.total_seconds()
         while True:
-            try:
-                if cancellation.is_cancelled():
-                    raise CancellationRequested
-            except CancellationRequested:
-                raise
-            except Exception:
-                raise CancellationRequested from None
+            if cancellation.is_cancelled():
+                raise CancellationRequested
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 return
@@ -821,10 +837,6 @@ class HistoricalRequestExecutor:
             return consumed_wait, self._failure(
                 HistoricalFetchCode.RETRY_WAIT_BOUND_EXCEEDED, attempt - 1
             )
-        except Exception:
-            return consumed_wait, self._failure(
-                HistoricalFetchCode.PROVIDER_CONTRACT, attempt - 1
-            )
 
     def _send(
         self, request: HistoricalRequest
@@ -835,9 +847,11 @@ class HistoricalRequestExecutor:
             category = error.category
             del error
             return None, category, False
-        except (HttpResponseBodyTooLarge, HttpResponseHeadersInvalid, ValueError):
-            return None, None, True
-        except Exception:
+        except (
+            HistoricalPayloadError,
+            HttpResponseBodyTooLarge,
+            HttpResponseHeadersInvalid,
+        ):
             return None, None, True
         return response, None, False
 
@@ -902,16 +916,7 @@ class HistoricalRequestExecutor:
             if retry_after is _INVALID_RETRY_AFTER
             else cast(timedelta, retry_after)
         )
-        try:
-            local_delay = self._local_delay(attempt)
-        except Exception:
-            return (
-                None,
-                timedelta(0),
-                self._failure(
-                    HistoricalFetchCode.PROVIDER_CONTRACT, attempt, status_class
-                ),
-            )
+        local_delay = self._local_delay(attempt)
         effective_delay = max(local_delay, retry_after_value or timedelta(0))
         total_wait = consumed_wait + effective_delay
         if total_wait > self._retry_policy.max_total_wait:
@@ -942,10 +947,6 @@ class HistoricalRequestExecutor:
             )
         except CancellationRequested:
             return consumed_wait, self._cancelled(attempt)
-        except Exception:
-            return consumed_wait, self._failure(
-                HistoricalFetchCode.PROVIDER_CONTRACT, attempt, status_class
-            )
         if self._is_cancelled():
             return consumed_wait, self._cancelled(attempt)
         return consumed_wait, None
@@ -990,14 +991,6 @@ class HistoricalRequestExecutor:
                 timedelta(0),
                 self._failure(
                     HistoricalFetchCode.RETRY_WAIT_BOUND_EXCEEDED, attempt, status_class
-                ),
-            )
-        except Exception:
-            return (
-                consumed_wait,
-                timedelta(0),
-                self._failure(
-                    HistoricalFetchCode.PROVIDER_CONTRACT, attempt, status_class
                 ),
             )
 
@@ -1074,10 +1067,7 @@ class HistoricalRequestExecutor:
         return self._failure(HistoricalFetchCode.CANCELLED, attempts)
 
     def _is_cancelled(self) -> bool:
-        try:
-            return self._cancellation.is_cancelled()
-        except Exception:
-            return True
+        return self._cancellation.is_cancelled()
 
     def _emit(
         self, attempt: int, category: str, status_class: str | None
@@ -1085,24 +1075,18 @@ class HistoricalRequestExecutor:
         sink = self._event_sink
         if sink is None:
             return None
-        try:
-            event = ProviderEvent(
-                self._run_id,
-                attempt,
-                category,
-                status_class,
-                self._clock.now(),
-            )
-            sink(event)
-        except Exception:
-            return self._failure(HistoricalFetchCode.PROVIDER_CONTRACT, attempt)
+        event = ProviderEvent(
+            self._run_id,
+            attempt,
+            category,
+            status_class,
+            self._clock.now(),
+        )
+        sink(event)
         return None
 
     def _clock_now(self) -> datetime | None:
-        try:
-            return _utc_datetime(self._clock.now())
-        except Exception:
-            return None
+        return _utc_datetime(self._clock.now())
 
     @staticmethod
     def _response_category(response: object) -> ProviderErrorCategory | None:

@@ -1,4 +1,4 @@
-"""Import-safe console bootstrap for capture-forward adjusted OHLCV."""
+"""Import-safe console bootstrap for private BharatStock V2 capture."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import sys
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Load the owner-private capture CLI inside its sanitized boundary."""
+    """Load the private V2 capture CLI inside its sanitized boundary."""
 
     try:
         from ..market_data.capture_forward_adjusted_ohlcv_cli import (  # noqa: PLC0415

@@ -11,6 +11,15 @@ insufficient-evidence result.
 The objective is capital preservation, consistency, low drawdown, explainable
 high-quality setups, and repeatability—not maximum returns or frequent trades.
 
+## Developing with an AI agent
+
+Start with [AGENTS.md](AGENTS.md) and the [mandatory project instructions](docs/mandatory-agent-instructions.md).
+The [portable development workflow](docs/agent-workflow.md) applies to Pi,
+Oh My Pi, Codex, OpenCode, and other capable harnesses. If your harness does not
+auto-load repository instructions, explicitly read those links before work.
+No particular harness, model, terminal manager, or unrestricted permission mode
+is required.
+
 ## What this project is—and is not
 
 The product has two strict layers:
@@ -29,7 +38,7 @@ supplied listed stocks outside the Nifty 100 may use a capability only when
 their canonical identity and that capability's required evidence are supported;
 they are not the primary roadmap, qualification, or default-workflow focus.
 
-## Locked research pipeline
+## Research responsibilities and dependencies
 
 ```text
 Higher-level universe policy
@@ -53,6 +62,13 @@ Structured research facts
   -> Explainable recommendation or no-trade decision
 ```
 
+The diagram describes product responsibilities, not a requirement that every
+module succeed before any fact is visible.
+[Issue #172](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/172)
+governs the versioned migration to question-specific dependencies. Each fact
+still requires its own identity, data, time, authority and integrity evidence;
+unrelated missing context must not suppress an independently admitted result.
+
 Universe selection and point-in-time index membership are higher-level policy.
 Reusable feature cores consume explicit bounded canonical equity identities and
 declare their required data capabilities; they return unsupported or
@@ -62,13 +78,109 @@ The planned product includes reproducible market-data ingestion, deterministic
 research modules, bias-aware backtesting, risk validation, structured facts,
 and read-only monitoring of supported listed-equity holdings. Default discovery,
 research qualification, and validation concentrate on the point-in-time Nifty
-100. Each module is specified, implemented, and validated separately in
-pipeline order.
+100. Each module is specified, implemented, and validated separately; its
+actual evidence dependencies govern execution rather than a universal chain.
 
 ## Current implementation status
 
-The repository contains the Nifty 50 market-data foundation and the first two
-provider-free research cores. Delivered behavior includes:
+**Current delivery baseline:** [PR #185](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/185)
+merged on September 11, 2026; #183 and #184 are closed/completed. It delivered
+source-preserving BharatStock acquisition, exact capture reuse and independently
+available member/feature facts. Historical Yahoo records below remain historical
+delivery evidence, not an active Yahoo acquisition path.
+
+**Delivered current-research slices:**
+[#187](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/187)
+delivered the explicit V2 current-stock research result through PR #196. It keeps
+the unversioned V1 command while independently admitting one-, two- and
+21-session BharatStock evidence into an integrated V5 envelope. Fresh regime,
+Industry and event context are not acquired by this command. Issues #188 and
+#189 delivered separate raw-price-context and bounded-refresh contracts;
+#190 remains open for measured acquisition efficiency. Parent #172 remains open.
+The separately recorded #186 PNB observation supports only its stated
+capture-to-Price-Action scope, not V2 live-provider qualification or trading returns.
+
+Use V2 only with an explicit closed question:
+
+```bash
+market-data research-current --symbol PNB \
+  --storage-root /absolute/private/research-root \
+  --contract-version v2 --question PRICE_BEHAVIOR --output json
+```
+
+`LATEST_COMPLETED_CANDLE` requires one completed official session;
+`PRICE_BEHAVIOR` requires geometry plus two consecutive completed official
+sessions; `CURRENT_STRUCTURE` requires exactly 21 completed official sessions;
+and `INTEGRATED_CURRENT_RESEARCH` requires all of those price facts plus
+independently retained Event, Market Regime, and Industry evidence. Missing
+context or a local long-window failure makes only its dependent question/fact
+not ready. V2 emits readiness facts, not a recommendation; it preserves the
+invocation selection time separately from later evidence acquisition time.
+
+## Current raw price context (Issue #188 delivered)
+
+The additive `current-price-context@v1` command, delivered through PR #197,
+accepts an owner-private closed request for an explicit 1–50 canonical NSE-equity cohort:
+
+```bash
+market-data price-context-current \
+  --input-file /absolute/private/current-price-context-request.json \
+  --storage-root /absolute/private/research-root \
+  --output json
+```
+
+The equivalent SDK is
+`research_current_price_context_v1(request, storage_root, acquire_missing=False)`.
+Both the absolute request file and the existing absolute owner-private storage
+root are required; neither belongs in a public repository or command output.
+Retained-only is the default and does not read credentials or call a provider.
+`--acquire-missing` is the explicit, serial, bounded opt-in; it still requires
+already-retained exact calendar coverage for the selected 21 sessions and the
+physical download plan, otherwise it returns a typed calendar-prerequisite
+outcome before any provider or credential effect. Results use only retained
+Upstox raw completed-session provenance (`UPSTOX / RAW / 1d-derived-from-retained-1m`),
+not BharatStock or adjusted prices. Literal `INDUSTRY` participation is local:
+missing or unsupported retained Industry evidence does not suppress independent
+raw facts. The command emits research facts, never an analytic recommendation,
+live/provider proof, or a claim that missing evidence is neutral.
+
+## Bounded current price-context refresh (Issue #189 delivered)
+
+The additive `current-price-context@v2` boundary, delivered through PR #200, is selected only by
+`--contract-version v2`; V1 remains the CLI default. V2 is still exactly one
+bounded request/response pass—not polling, streaming, subscription, background
+refresh, or a service. Its closed request owns one of `RETAINED_ONLY`,
+`ACQUIRE_MISSING`, or `REFRESH_ONCE` and whether separately labelled
+current-session evidence is included:
+
+```bash
+market-data price-context-current \
+  --input-file /absolute/private/current-price-context-v2-request.json \
+  --storage-root /absolute/private/research-root \
+  --contract-version v2 --output json
+```
+
+The SDK is
+`research_current_price_context_v2(request, storage_root, clock=None,
+cancellation=None)`. `RETAINED_ONLY` has zero provider effects;
+`ACQUIRE_MISSING` fills only admissible missing evidence; and `REFRESH_ONCE`
+adds at most one requested Intraday V3 current-session pass per member after
+missing completed evidence is handled. It does not force-refresh reusable
+Calendar, Mapping, historical, corporate-action, or Industry evidence. The
+result preserves an exact V1 completed-session result, keeps provisional
+current-session observations separate, and publishes a bounded sanitized
+per-source freshness ledger with immutable digests, closed states and exact
+provider-call accounting. V1 schemas, canonical bytes, retained evidence, and
+the default CLI remain compatible. The only V1 reader change is narrow and
+additive: current-month provisional lookup uses canonical security ID so an old
+alias can be read, but still requires the current mapping's exact provider
+instrument key and the existing data/knowledge cutoffs. It performs no migration
+or dual write. See
+[Plan 36](docs/plans/36-bounded-current-price-context-refresh-contract.md) for
+temporal, cancellation, conflict, and correction rules.
+
+The repository contains the Nifty 50 market-data foundation and provider-free
+research cores. Delivered behavior includes:
 
 - the persistent downloader-v1 workflow for one, several, or all retained
   point-in-time Nifty 50 members, with Upstox raw historical/current candles,
@@ -288,24 +400,84 @@ positive, mandatory market-hours `RELIANCE` positive, and genuine IRCTC
 negative. The two positive modes remain separate; neither substitutes for the
 other. The two PR #140 P2 blockers are fixed. All exact-current local gates pass. PR #140 is merged; exact reviews and hosted gates passed; Issue #119 is closed/completed; its Delivery Project item is Done; Sprint 14 is delivered/closed as the research-only milestone, with no autonomous trading or financial-advice claim.
 
+**BharatStock source path — #184 / #183:**
+[Issue #184](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/184)
+governs the complete daily-provider cutover;
+[Issue #183](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/183)
+governs independent member outcomes.
+[PR #185](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/185)
+records exact-byte review, verification and delivery evidence.
+The commands below describe source behavior, not a claimed PyPI publication.
+See the [migration scope and evidence limits](docs/roadmap.md#bharatstock-migration-direction).
+Historical Yahoo evidence retains its original labels and supported readers.
+
 Upstox remains primary for live/raw OHLCV and retained corporate-action
-screening. yfinance is a separate adjusted-daily research provider, not a
-silent fallback, live broker feed, or strict point-in-time authority.
+screening. Direct BharatStock acquisition supplies separately labelled daily
+prices under the accepted as-provided assumption, not a silent fallback, live
+broker feed, total-return series, or strict point-in-time authority.
 `NSE_EQ` is an Upstox exchange-segment identifier, not a second NSE API
 integration. A caller-supplied canonical universe snapshot establishes
 historical Nifty 50 membership and sector provenance; it does not supply prices
 or make network requests.
 
-The package has no built-in exchange-calendar feed. Persistent market-data
-workflows require provenance-complete supplied NSE schedule evidence and fail
-closed when it is unavailable. Strategy rules, recommendations, and broker
+Legacy persistent market-data commands require provenance-complete supplied NSE
+schedule evidence and fail closed when it is unavailable. Current evidence
+acquisition uses the explicitly approved NSE/Upstox composition policy, not a
+generic exchange-calendar fallback. Strategy rules, recommendations, and broker
 execution are not implemented.
+
+## Single-stock current research
+
+[#186](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/186) delivered
+`current-stock-research@v1` through PR #191. Its completion evidence includes one
+authorized real PNB capture-to-Price-Action observation, with no claim of general
+provider qualification, trade eligibility or a new current result.
+Use an existing empty owner-private directory (`0700`), or an admitted private
+storage root. The command does not create the root or repair permissions:
+
+```bash
+market-data research-current \
+  --symbol PNB \
+  --storage-root /absolute/private/research-root \
+  --output json
+```
+
+A cold invocation acquires the approved official calendar and Upstox BOD
+mapping, then verifies the canonical stock through BharatStock. PNB is an
+example, not a claim that its current evidence or trade eligibility is admitted.
+The command selects the latest two officially completed sessions at invocation
+time within a 32-calendar-day lookback. Its acquisition/publication ceiling is
+30 minutes, capped before the next IST date; that future deadline never selects
+a future close and is not a latency promise or forcible-cancellation guarantee.
+
+Warm reuse validates exact retained evidence, current source/configuration
+identities, same-day mapping/calendar freshness and the unchanged session
+window before price access. `--refresh` forces the full two-session price
+refresh. A changed day/window revalidates the bounded requirement; this is not
+suffix-only incremental acquisition. Immutable captures and receipts survive
+replacement of the private current-result locator.
+
+JSON contains feature-local Price Action, source/basis labels, exact references,
+actual knowledge times and scoped reasons—not raw bars, an observed whole
+report, a corporate-action qualification or a trade recommendation. Exit `0`
+means observed Price Action; `1` means a structured unavailable/insufficient
+result. Invalid arguments or an unexpected internal failure return `2` with a
+sanitized stderr code. Live provider use and real-stock validation still require
+their exact authority; deterministic synthetic checks do not establish them.
 
 ## Structured daily OHLCV downloader
 
-The installed distribution exposes one `equity_data_downloader` implementation
-for bounded daily yfinance acquisition. Its CLI and Python API are adapters over
-the same core; they do not create separate data sources. Parquet is the sole
+**Accepted operating assumption — 2026-09-10.** Use supplied BharatStock OHLCV
+unchanged by default, assuming for now that the provider has adjusted it
+correctly. The [owner decision](docs/roadmap.md#accepted-as-provided-ohlcv-decision-and-member-isolation)
+supersedes waiting for field clarification before implementing this mode.
+The earlier extra-factor finding remains historical evidence, not proof that
+unchanged provider prices are wrong. Current review and delivery status belongs
+to PR #185; independent review and release gates remain required.
+
+This source revision exposes one `equity_data_downloader`
+implementation for bounded direct BharatStock daily acquisition. Its CLI and
+Python API use the same core. Parquet is the sole
 persisted OHLCV source of truth. Persistent output never uses `Downloads` or an
 arbitrary caller-selected file. Every invocation writes beneath one configured
 structured-data root, whose default is:
@@ -317,16 +489,16 @@ structured-data root, whose default is:
 The derived layout is:
 
 ```text
-adjusted_daily/provider=yfinance/request=<request-sha256>/data.parquet
+adjusted_daily/provider=bharatstock/request=<request-sha256>/data.parquet
 ```
 
 DuckDB is the SQL query engine over those Parquet files; it is not a second
 OHLCV copy. PyArrow is only the Parquet reader/writer library. Feather is not
-used. yfinance's internal cookie/timezone SQLite cache is redirected beneath
-`<storage-root>/.cache/yfinance`; it is auxiliary provider state, never an OHLCV
-source or research input. The utility accepts between 1 and 100
-explicit provider symbols and one inclusive date range in a multi-ticker
-request. It does not infer exchange calendars, canonical mappings, decision
+used. There is no Yahoo cookie/timezone cache or Yahoo fallback. The utility
+accepts between 1 and 100 explicit canonical ISIN/exchange/effective-symbol
+identities and one inclusive date range. Each stock uses an identity lookup
+followed by bounded price pages; acquisition is serial and does not retry.
+It does not infer exchange calendars, canonical mappings, decision
 cutoffs, capture revisions, or project evidence, so the resulting dataset
 remains transport/research data rather than automatically qualified
 capture-forward evidence.
@@ -341,18 +513,20 @@ revalidates its exact physical digest and full table before returning.
 Publication never renames or unlinks a path, so canonical-name substitution
 fails without moving or deleting another file.
 
-Install from PyPI:
+Run from this source checkout with its locked dependencies:
 
 ```bash
-python -m pip install swing-trading-ai-assistant
+uv sync
 ```
 
-Download one or several stocks. Repeat `--symbol` for each provider symbol:
+Provide the authorized account key through `BHARATSTOCK_API_KEY`; do not put
+credentials in request files, command arguments, retained evidence, or logs.
+Repeat `--instrument ISIN:EXCHANGE:SYMBOL` for each stock:
 
 ```bash
-equity-data-download \
-  --symbol SBIN.NS \
-  --symbol RELIANCE.NS \
+uv run equity-data-download \
+  --instrument INE062A01020:NSE:SBIN \
+  --instrument INE002A01018:NSE:RELIANCE \
   --start 2026-08-01 \
   --end 2026-08-28
 ```
@@ -363,10 +537,19 @@ invoking user with mode `0700`; relative, symlinked, shared, or extra-linked
 storage is rejected before any provider call. The complete derived dataset
 remains under that root; there is no arbitrary output-file option.
 
-Prices use yfinance's auto-adjusted OHLC semantics, while volume remains the
-source-reported volume. The exact request identity binds normalized symbols and
-dates, adjusted basis, yfinance release, fixed provider-call configuration, and
-the exact Parquet schema/contract version. An existing dataset is reused only
+The downloader preserves supplied OHLCV unchanged and labels prices
+`BHARATSTOCK_SOURCE_REPORTED_OHLC`. It does not apply `adjustment_factor` to
+OHLC or volume. The former `apply_adjustment` API argument and
+`--apply-adjustment` CLI flag are retired, not accepted as ignored options.
+Original OHLC and separate optional adjustment fields remain retained as exact
+decimal strings in the `source_*` columns. Processed OHLC columns use float64;
+reuse validates them against the exact original source values.
+The single volume field is never rescaled and is labelled `SOURCE_REPORTED`;
+this does not certify exchange-raw units. No total-return equivalence is claimed.
+The exact request identity binds ordered canonical instruments, dates,
+provider `bharatstock-api@v1`, source-preserving configuration, and
+schema/contract V5. Earlier schema identities cannot be reused as this contract.
+An existing dataset is reused only
 after its owner, permissions, singleton identity, metadata, complete schema, and
 all OHLCV values pass validation; `REUSED` performs zero provider requests and
 zero file writes. A different or expanded request, provider version, call
@@ -379,17 +562,32 @@ The same behavior is available as a Python API:
 from datetime import date
 
 from equity_data_downloader import download_daily_ohlcv
+from swing_trading_ai_assistant.market_data.bharatstock import BharatStockInstrument
 
 receipt = download_daily_ohlcv(
-    ("SBIN.NS", "RELIANCE.NS"),
+    (
+        BharatStockInstrument("INE062A01020", "NSE", "SBIN"),
+        BharatStockInstrument("INE002A01018", "NSE", "RELIANCE"),
+    ),
     date(2026, 8, 1),
     date(2026, 8, 28),
 )
 ```
 
-The receipt reports the normalized symbols, request identity, requested period,
-row count, per-symbol row counts, provider version, retrieval time, and derived
-Parquet path under the shared root.
+The receipt reports canonical instruments, request identity, requested period,
+row count, per-instrument row counts, provider version, retrieval time, and
+derived Parquet path. A member-local missing history contributes zero rows;
+shared authentication, authorization, quota, transport, or provider failures
+stop the run. This transport receipt is not a claim of complete research.
+
+Existing Yahoo V2 Parquet remains readable through
+`equity_data_downloader.read_retained_yahoo_daily_ohlcv_v2(symbols, start, end,
+storage_root=None, *, provider_version="1.6.0")`. Supply the original symbol
+tuple, inclusive dates, storage root, and provider version. Its distinct
+`RetainedYahooDatasetReceiptV2` preserves the original request identity, Yahoo
+price/volume labels, retrieval time, counts, and path. This is a read-only
+operation: no provider client, cache creation, download, repair, conversion, or
+BharatStock identity is involved. Missing or corrupt evidence fails closed.
 
 
 
@@ -559,8 +757,20 @@ Use `uv run market-data probe-upstox --help` for the current options.
 
 The diagnostic keeps candles in memory and emits only HTTP status, row count,
 first/last timestamp, and schema validity. It never prints the token or writes
-candle data. Provider and credential failures are intentionally reduced to a
-sanitized `probe_failed:<ErrorType>` message.
+candle data. Recognized provider, payload, and credential failures produce only
+`probe_failed` on stderr and exit code `2`; exception-class suffixes are not
+published. An unexpected implementation failure produces only `internal_error`
+on stderr, empty stdout, and exit code `2`. Argument-parser rejection produces
+only `request_invalid`; existing command-specific admission diagnostics remain
+sanitized.
+
+An internal error does not mean that retained market evidence is missing or
+corrupt. Do not delete or relabel evidence, silently switch providers, or publish
+a partial result. Preserve the private inputs and report only the command name,
+software version, and fixed failure code—not arguments, paths, exception text,
+tracebacks, credentials, or provider payloads. The complete
+[internal-error policy](docs/architecture-freeze-v1.md#internal-errors-and-operator-diagnostics)
+also defines the unchanged V1 coverage/query generic-failure envelope.
 
 Credentials, broker sessions, generated datasets, and private market data must never be committed.
 

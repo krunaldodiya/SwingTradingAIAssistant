@@ -242,6 +242,205 @@ def test_leased_writable_catalog_never_writes_replacement_root(tmp_path: Path) -
     acquired.lease.close()
 
 
+@pytest.mark.parametrize(
+    "publication_helper",
+    ("_copy_exact_catalog", "_publish_catalog_entry_conditionally"),
+)
+def test_leased_catalog_propagates_unknown_publication_fault_after_cleanup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, publication_helper: str
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir(mode=0o700)
+    acquired = StorageRootLease.try_acquire(root)
+    assert acquired.lease is not None
+    initial_entries = frozenset(root.iterdir())
+    failure = AssertionError()
+
+    def fail_publication(*_args: object, **_kwargs: object) -> None:
+        raise failure
+
+    with acquired.lease, DuckDBCatalog(root, lease=acquired.lease) as catalog:
+        catalog.create_manifest(_in_progress())
+        assert catalog._snapshot_directory is not None
+        snapshot_directory = Path(catalog._snapshot_directory.name)
+        connection = catalog.connection
+        monkeypatch.setattr(catalog_module, publication_helper, fail_publication)
+        with pytest.raises(AssertionError) as raised:
+            catalog.close()
+        assert raised.value is failure
+        with pytest.raises(duckdb.ConnectionException):
+            connection.execute("SELECT 1")
+        assert not snapshot_directory.exists()
+        assert frozenset(root.iterdir()) == initial_entries
+
+
+@pytest.mark.parametrize("close_target", ("target", "snapshot"))
+def test_catalog_publication_close_fault_preserves_recycled_descriptor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, close_target: str
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir(mode=0o700)
+    acquired = StorageRootLease.try_acquire(root)
+    assert acquired.lease is not None
+    primary = AssertionError("publication close fault")
+    selected: int | None = None
+    replacement: int | None = None
+    replacement_owned = False
+    owned: set[int] = set()
+    real_open, real_close = os.open, os.close
+
+    with acquired.lease, DuckDBCatalog(root, lease=acquired.lease) as catalog:
+        catalog.create_manifest(_in_progress())
+        snapshot_path = catalog._snapshot_path
+        assert catalog._snapshot_directory is not None
+        snapshot_directory = Path(catalog._snapshot_directory.name)
+
+        def track_open(
+            path: str | Path,
+            flags: int,
+            mode: int = 0o777,
+            *,
+            dir_fd: int | None = None,
+        ) -> int:
+            nonlocal selected
+            descriptor = real_open(path, flags, mode, dir_fd=dir_fd)
+            owned.add(descriptor)
+            if selected is None and (
+                (
+                    close_target == "target"
+                    and str(path).startswith(".catalog.duckdb.")
+                    and str(path).endswith(".tmp")
+                )
+                or (close_target == "snapshot" and path == snapshot_path)
+            ):
+                selected = descriptor
+            return descriptor
+
+        def close_with_fault(descriptor: int) -> None:
+            nonlocal replacement, replacement_owned
+            owned.discard(descriptor)
+            if descriptor == replacement:
+                replacement_owned = False
+            real_close(descriptor)
+            if replacement is None and selected is not None and descriptor == selected:
+                replacement = real_open("/dev/null", os.O_RDONLY | os.O_CLOEXEC)
+                replacement_owned = True
+                assert replacement == descriptor
+                raise primary
+
+        try:
+            with monkeypatch.context() as scoped:
+                scoped.setattr(os, "open", track_open)
+                scoped.setattr(os, "close", close_with_fault)
+                with pytest.raises(AssertionError) as raised:
+                    catalog.close()
+                assert raised.value is primary
+            assert not owned
+            assert replacement is not None
+            assert replacement_owned
+            os.fstat(replacement)
+            assert not snapshot_directory.exists()
+        finally:
+            for descriptor in owned:
+                real_close(descriptor)
+            if replacement_owned and replacement is not None:
+                real_close(replacement)
+
+
+def test_leased_catalog_close_fault_propagates_without_publication(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir(mode=0o700)
+    acquired = StorageRootLease.try_acquire(root)
+    assert acquired.lease is not None
+    initial_entries = frozenset(root.iterdir())
+    failure = AssertionError()
+    with acquired.lease, DuckDBCatalog(root, lease=acquired.lease) as catalog:
+        catalog.create_manifest(_in_progress())
+        assert catalog._snapshot_directory is not None
+        snapshot_directory = Path(catalog._snapshot_directory.name)
+        connection = catalog.connection
+
+        class ConnectionCloseProxy:
+            def close(self) -> None:
+                connection.close()
+                raise failure
+
+        catalog._connection = ConnectionCloseProxy()
+        with pytest.raises(AssertionError) as raised:
+            catalog.close()
+        assert raised.value is failure
+        with pytest.raises(duckdb.ConnectionException):
+            connection.execute("SELECT 1")
+        assert not snapshot_directory.exists()
+        assert frozenset(root.iterdir()) == initial_entries
+
+
+def test_leased_catalog_operational_close_fault_propagates_without_publication(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir(mode=0o700)
+    acquired = StorageRootLease.try_acquire(root)
+    assert acquired.lease is not None
+    initial_entries = frozenset(root.iterdir())
+    failure = duckdb.IOException("injected native close failure")
+    with acquired.lease:
+        catalog = DuckDBCatalog(root, lease=acquired.lease)
+        with pytest.raises(duckdb.IOException) as raised, catalog:
+            catalog.create_manifest(_in_progress())
+            assert catalog._snapshot_directory is not None
+            snapshot_directory = Path(catalog._snapshot_directory.name)
+            connection = catalog.connection
+
+            class ConnectionCloseProxy:
+                def close(self) -> None:
+                    connection.close()
+                    raise failure
+
+            catalog._connection = ConnectionCloseProxy()
+        assert raised.value is failure
+        with pytest.raises(duckdb.ConnectionException):
+            connection.execute("SELECT 1")
+        assert not snapshot_directory.exists()
+        assert frozenset(root.iterdir()) == initial_entries
+
+
+@pytest.mark.parametrize("close_fault", (False, True))
+def test_leased_catalog_failed_body_discards_staged_change_despite_close_fault(
+    tmp_path: Path, close_fault: bool
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir(mode=0o700)
+    acquired = StorageRootLease.try_acquire(root)
+    assert acquired.lease is not None
+    initial_entries = frozenset(root.iterdir())
+    body_failure = ValueError()
+    cleanup_failure = duckdb.IOException("injected close failure")
+    with acquired.lease:
+        catalog = DuckDBCatalog(root, lease=acquired.lease)
+        with pytest.raises(ValueError) as raised, catalog:
+            catalog.create_manifest(_in_progress())
+            assert catalog._snapshot_directory is not None
+            snapshot_directory = Path(catalog._snapshot_directory.name)
+            connection = catalog.connection
+
+            class ConnectionCloseProxy:
+                def close(self) -> None:
+                    connection.close()
+                    raise cleanup_failure
+
+            if close_fault:
+                catalog._connection = ConnectionCloseProxy()
+            raise body_failure
+        assert raised.value is body_failure
+        with pytest.raises(duckdb.ConnectionException):
+            connection.execute("SELECT 1")
+        assert not snapshot_directory.exists()
+        assert frozenset(root.iterdir()) == initial_entries
+
+
 @pytest.mark.parametrize("existing_source", (False, True))
 def test_leased_catalog_conditional_publish_never_overwrites_final_race(
     tmp_path: Path,
@@ -369,6 +568,155 @@ def test_leased_catalog_publish_keeps_previous_generation_readable_during_swap(
     acquired.lease.close()
 
     assert observed == [initial, initial]
+
+
+@pytest.mark.parametrize("fault", ("identity", "copy"))
+def test_read_only_catalog_admission_failure_closes_owned_source_descriptor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fault: str
+) -> None:
+    with DuckDBCatalog(tmp_path) as writable:
+        writable.create_manifest(_in_progress())
+    acquired = StorageRootLease.try_acquire(tmp_path)
+    assert acquired.lease is not None
+    real_open = catalog_module.os.open
+    real_fstat = catalog_module.os.fstat
+    opened: list[int] = []
+    failure = AssertionError("admission fault")
+
+    def capture_open(*args: object, **kwargs: object) -> int:
+        descriptor = real_open(*args, **kwargs)  # type: ignore[arg-type]
+        if args[0] == "catalog.duckdb":
+            opened.append(descriptor)
+        return descriptor
+
+    monkeypatch.setattr(catalog_module.os, "open", capture_open)
+    if fault == "identity":
+
+        def fail_identity(descriptor: int) -> os.stat_result:
+            if descriptor in opened:
+                raise failure
+            return real_fstat(descriptor)
+
+        monkeypatch.setattr(catalog_module.os, "fstat", fail_identity)
+    else:
+        monkeypatch.setattr(
+            DuckDBCatalog,
+            "_copy_catalog_snapshot",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(failure),
+        )
+
+    with (
+        acquired.lease,
+        pytest.raises(AssertionError) as caught,
+        DuckDBCatalog(tmp_path, read_only=True, lease=acquired.lease),
+    ):
+        pass
+
+    assert caught.value is failure
+    for descriptor in opened:
+        with pytest.raises(OSError):
+            real_fstat(descriptor)
+
+
+def test_catalog_descriptor_cleanup_oserror_is_not_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with DuckDBCatalog(tmp_path) as writable:
+        writable.create_manifest(_in_progress())
+    acquired = StorageRootLease.try_acquire(tmp_path)
+    assert acquired.lease is not None
+    catalog = DuckDBCatalog(tmp_path, read_only=True, lease=acquired.lease)
+
+    with acquired.lease:
+        catalog.__enter__()
+        descriptor = catalog._database_descriptor  # pyright: ignore[reportPrivateUsage]
+        assert descriptor is not None
+        real_close = catalog_module.os.close
+        with monkeypatch.context() as scoped:
+
+            def close_then_fail(value: int) -> None:
+                real_close(value)
+                if value == descriptor:
+                    raise OSError("injected descriptor cleanup failure")
+
+            scoped.setattr(catalog_module.os, "close", close_then_fail)
+            with pytest.raises(CatalogStorageError):
+                catalog.close()
+
+        with pytest.raises(OSError):
+            os.fstat(descriptor)
+        catalog.close()
+
+
+def test_catalog_snapshot_cleanup_oserror_is_not_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with DuckDBCatalog(tmp_path) as writable:
+        writable.create_manifest(_in_progress())
+    acquired = StorageRootLease.try_acquire(tmp_path)
+    assert acquired.lease is not None
+    catalog = DuckDBCatalog(tmp_path, read_only=True, lease=acquired.lease)
+
+    with acquired.lease:
+        catalog.__enter__()
+        snapshot_directory = (
+            catalog._snapshot_directory  # pyright: ignore[reportPrivateUsage]
+        )
+        assert snapshot_directory is not None
+        with monkeypatch.context() as scoped:
+
+            def fail_cleanup() -> None:
+                raise OSError("injected snapshot cleanup failure")
+
+            scoped.setattr(snapshot_directory, "cleanup", fail_cleanup)
+            with pytest.raises(CatalogStorageError):
+                catalog.close()
+
+        assert Path(snapshot_directory.name).is_dir()
+        catalog.close()
+        assert not Path(snapshot_directory.name).exists()
+
+
+def test_catalog_cleanup_preserves_body_primary_and_attempts_every_cleanup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with DuckDBCatalog(tmp_path) as writable:
+        writable.create_manifest(_in_progress())
+    acquired = StorageRootLease.try_acquire(tmp_path)
+    assert acquired.lease is not None
+    catalog = DuckDBCatalog(tmp_path, read_only=True, lease=acquired.lease)
+    failure = AssertionError("body primary")
+    descriptor_closed = False
+
+    with acquired.lease, monkeypatch.context() as scoped:
+        real_close = catalog_module.os.close
+        with pytest.raises(AssertionError) as caught, catalog:
+            descriptor = catalog._database_descriptor
+            snapshot_directory = catalog._snapshot_directory
+            assert descriptor is not None
+            assert snapshot_directory is not None
+            real_cleanup = snapshot_directory.cleanup
+
+            def fail_descriptor_close(value: int) -> None:
+                nonlocal descriptor_closed
+                real_close(value)
+                if value == descriptor and not descriptor_closed:
+                    descriptor_closed = True
+                    raise OSError("injected descriptor cleanup failure")
+
+            def fail_snapshot_cleanup() -> None:
+                real_cleanup()
+                raise OSError("injected snapshot cleanup failure")
+
+            scoped.setattr(catalog_module.os, "close", fail_descriptor_close)
+            scoped.setattr(snapshot_directory, "cleanup", fail_snapshot_cleanup)
+            raise failure
+        assert caught.value is failure
+
+    with pytest.raises(OSError):
+        os.fstat(descriptor)
+    assert not Path(snapshot_directory.name).exists()
+    catalog.close()
 
 
 def test_read_only_catalog_never_creates_or_migrates(tmp_path) -> None:
@@ -513,11 +861,13 @@ def test_valid_populated_v1_upgrades_atomically_and_preserves_domain_rows(
     connection.close()
 
     catalog = DuckDBCatalog(tmp_path)
+    failure = RuntimeError("injected migration failure")
     catalog._after_snapshot_migration = lambda: (_ for _ in ()).throw(  # type: ignore[method-assign]
-        RuntimeError("injected migration failure")
+        failure
     )
-    with pytest.raises(CatalogSchemaError):
+    with pytest.raises(RuntimeError) as raised:
         catalog.__enter__()
+    assert raised.value is failure
     connection = duckdb.connect(str(database_path))
     assert connection.execute("SHOW TABLES").fetchall() == [
         ("ingestion_runs",),
@@ -584,8 +934,295 @@ def test_snapshot_catalog_boundaries_fail_closed(tmp_path) -> None:
             catalog.list_instrument_snapshots("upstox-bod-nse")
     with pytest.raises(CatalogSchemaError):
         catalog_module._expected_table_columns("unsupported")
-    with pytest.raises(ValueError):
+    with pytest.raises(CatalogSchemaError):
         catalog_module._snapshot_metadata_from_row((1,))
+    with pytest.raises(CatalogSchemaError):
+        catalog_module._manifest_from_row((1,))
+
+
+@pytest.mark.parametrize("fault_type", (AssertionError, duckdb.ParserException))
+def test_snapshot_catalog_preserves_unknown_query_fault_identity(
+    tmp_path, monkeypatch, fault_type: type[Exception]
+) -> None:
+    catalog = DuckDBCatalog(tmp_path)
+    failure = fault_type()
+
+    class FaultingConnection:
+        def execute(self, *_args: object) -> None:
+            raise failure
+
+    monkeypatch.setattr(catalog, "_connection", FaultingConnection())
+
+    with pytest.raises(fault_type) as raised:
+        catalog.list_instrument_snapshots("upstox-bod-nse")
+    assert raised.value is failure
+
+
+@pytest.mark.parametrize(
+    "query",
+    (
+        lambda catalog: catalog.list_universe_snapshots(),
+        lambda catalog: catalog.resolve_universe_snapshots(
+            as_of=date(2024, 6, 1),
+            knowledge_cutoff=datetime(2024, 6, 1, tzinfo=UTC),
+        ),
+        lambda catalog: catalog.has_universe_snapshot_coverage(as_of=date(2024, 6, 1)),
+        lambda catalog: catalog.latest_corporate_action_snapshots(
+            isin="INE062A01020",
+            knowledge_cutoff=datetime(2024, 6, 1, tzinfo=UTC),
+        ),
+        lambda catalog: catalog.has_corporate_action_snapshots(isin="INE062A01020"),
+    ),
+)
+@pytest.mark.parametrize(
+    "fault_type",
+    (
+        AssertionError,
+        KeyError,
+        RuntimeError,
+        TypeError,
+        ValueError,
+        Exception,
+        duckdb.ParserException,
+        duckdb.BinderException,
+    ),
+)
+def test_retained_catalog_queries_preserve_unknown_execution_fault_identity(
+    tmp_path, monkeypatch, query, fault_type: type[Exception]
+) -> None:
+    failure = fault_type()
+
+    class FaultingConnection:
+        def execute(self, *_args: object, **_kwargs: object) -> object:
+            raise failure
+
+    with DuckDBCatalog(tmp_path) as catalog:
+        connection = catalog._connection
+        monkeypatch.setattr(catalog, "_connection", FaultingConnection())
+        try:
+            with pytest.raises(fault_type) as raised:
+                query(catalog)
+            assert raised.value is failure
+        finally:
+            catalog._connection = connection
+
+
+@pytest.mark.parametrize(
+    "query",
+    (
+        lambda catalog: catalog.list_universe_snapshots(),
+        lambda catalog: catalog.resolve_universe_snapshots(
+            as_of=date(2024, 6, 1),
+            knowledge_cutoff=datetime(2024, 6, 1, tzinfo=UTC),
+        ),
+        lambda catalog: catalog.has_universe_snapshot_coverage(as_of=date(2024, 6, 1)),
+        lambda catalog: catalog.latest_corporate_action_snapshots(
+            isin="INE062A01020",
+            knowledge_cutoff=datetime(2024, 6, 1, tzinfo=UTC),
+        ),
+        lambda catalog: catalog.has_corporate_action_snapshots(isin="INE062A01020"),
+    ),
+)
+def test_retained_catalog_queries_classify_operational_duckdb_faults(
+    tmp_path, monkeypatch, query
+) -> None:
+    class FaultingConnection:
+        def execute(self, *_args: object, **_kwargs: object) -> object:
+            raise duckdb.IOException("catalog unavailable")
+
+    with DuckDBCatalog(tmp_path) as catalog:
+        connection = catalog._connection
+        monkeypatch.setattr(catalog, "_connection", FaultingConnection())
+        try:
+            with pytest.raises(CatalogPersistenceError):
+                query(catalog)
+        finally:
+            catalog._connection = connection
+
+
+@pytest.mark.parametrize(
+    "query",
+    (
+        lambda catalog: catalog.list_universe_snapshots(),
+        lambda catalog: catalog.resolve_universe_snapshots(
+            as_of=date(2024, 6, 1),
+            knowledge_cutoff=datetime(2024, 6, 1, tzinfo=UTC),
+        ),
+        lambda catalog: catalog.latest_corporate_action_snapshots(
+            isin="INE062A01020",
+            knowledge_cutoff=datetime(2024, 6, 1, tzinfo=UTC),
+        ),
+    ),
+)
+def test_retained_catalog_queries_classify_malformed_rows(
+    tmp_path, monkeypatch, query
+) -> None:
+    class InvalidRows:
+        def fetchall(self) -> list[tuple[object, ...]]:
+            return [()]
+
+    class FaultingConnection:
+        def execute(self, *_args: object, **_kwargs: object) -> InvalidRows:
+            return InvalidRows()
+
+    with DuckDBCatalog(tmp_path) as catalog:
+        connection = catalog._connection
+        monkeypatch.setattr(catalog, "_connection", FaultingConnection())
+        try:
+            with pytest.raises(CatalogSchemaError):
+                query(catalog)
+        finally:
+            catalog._connection = connection
+
+
+@pytest.mark.parametrize(
+    ("query", "decoder"),
+    (
+        (
+            lambda catalog: catalog.list_universe_snapshots(),
+            "_universe_metadata_from_row",
+        ),
+        (
+            lambda catalog: catalog.resolve_universe_snapshots(
+                as_of=date(2024, 6, 1),
+                knowledge_cutoff=datetime(2024, 6, 1, tzinfo=UTC),
+            ),
+            "_universe_metadata_from_row",
+        ),
+        (
+            lambda catalog: catalog.latest_corporate_action_snapshots(
+                isin="INE062A01020",
+                knowledge_cutoff=datetime(2024, 6, 1, tzinfo=UTC),
+            ),
+            "_corporate_action_metadata_from_row",
+        ),
+    ),
+)
+@pytest.mark.parametrize(
+    "fault_type",
+    (
+        AssertionError,
+        KeyError,
+        RuntimeError,
+        TypeError,
+        ValueError,
+        Exception,
+        duckdb.ParserException,
+        duckdb.BinderException,
+    ),
+)
+def test_retained_catalog_queries_preserve_unknown_decoder_fault_identity(
+    tmp_path, monkeypatch, query, decoder: str, fault_type: type[Exception]
+) -> None:
+    failure = fault_type()
+
+    class Rows:
+        def fetchall(self) -> list[tuple[object, ...]]:
+            return [()]
+
+    class QueryConnection:
+        def __init__(self) -> None:
+            self.query_count = 0
+
+        def execute(self, *_args: object, **_kwargs: object) -> Rows:
+            self.query_count += 1
+            return Rows()
+
+    def fail_decoder(_row: tuple[object, ...]) -> object:
+        raise failure
+
+    with DuckDBCatalog(tmp_path) as catalog:
+        connection = catalog._connection
+        query_connection = QueryConnection()
+        monkeypatch.setattr(catalog, "_connection", query_connection)
+        monkeypatch.setattr(catalog_module, decoder, fail_decoder)
+        try:
+            with pytest.raises(fault_type) as raised:
+                query(catalog)
+            assert raised.value is failure
+            assert query_connection.query_count == 1
+        finally:
+            catalog._connection = connection
+
+
+def test_catalog_initialization_preserves_unknown_fault_after_cleanup(
+    tmp_path, monkeypatch
+) -> None:
+    catalog = DuckDBCatalog(tmp_path)
+    failure = AssertionError()
+
+    def fail_initialization() -> None:
+        raise failure
+
+    monkeypatch.setattr(catalog, "_initialize_schema", fail_initialization)
+
+    with pytest.raises(AssertionError) as raised:
+        catalog.__enter__()
+    assert raised.value is failure
+    with pytest.raises(CatalogStorageError):
+        _ = catalog.connection
+
+
+def test_initialize_schema_preserves_parser_exception_identity(
+    tmp_path, monkeypatch
+) -> None:
+    catalog = DuckDBCatalog(tmp_path)
+    failure = duckdb.ParserException("injected parser failure")
+    monkeypatch.setattr(
+        catalog,
+        "_user_relations",
+        lambda: (_ for _ in ()).throw(failure),
+    )
+
+    with pytest.raises(duckdb.ParserException) as raised:
+        catalog.__enter__()
+    assert raised.value is failure
+    with pytest.raises(CatalogStorageError):
+        _ = catalog.connection
+
+
+def test_user_relations_preserves_parser_exception_identity(
+    tmp_path, monkeypatch
+) -> None:
+    catalog = DuckDBCatalog(tmp_path)
+    failure = duckdb.ParserException("injected parser failure")
+
+    class FaultingConnection:
+        def execute(self, *_args: object) -> None:
+            raise failure
+
+    monkeypatch.setattr(catalog, "_connection", FaultingConnection())
+
+    with pytest.raises(duckdb.ParserException) as raised:
+        catalog._user_relations()
+    assert raised.value is failure
+
+
+def test_catalog_identity_validation_preserves_unknown_fault_after_cleanup(
+    tmp_path, monkeypatch
+) -> None:
+    with DuckDBCatalog(tmp_path):
+        pass
+    acquired = StorageRootLease.try_acquire(tmp_path)
+    assert acquired.lease is not None
+    with acquired.lease:
+        catalog = DuckDBCatalog(tmp_path, read_only=True, lease=acquired.lease)
+        catalog.__enter__()
+        failure = AssertionError()
+        real_stat = catalog_module.os.stat
+
+        def fail_catalog_stat(*args: object, **kwargs: object) -> os.stat_result:
+            if args == ("catalog.duckdb",) and "dir_fd" in kwargs:
+                raise failure
+            return real_stat(*args, **kwargs)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(catalog_module.os, "stat", fail_catalog_stat)
+        try:
+            with pytest.raises(AssertionError) as raised:
+                catalog.ensure_read_identity()
+            assert raised.value is failure
+        finally:
+            catalog.close()
 
 
 def test_terminal_transition_is_atomic_and_exact_replay_is_a_no_op(tmp_path) -> None:
@@ -711,15 +1348,117 @@ def test_conflicts_and_faults_roll_back_both_current_and_history(tmp_path) -> No
     fault_root.mkdir()
     with DuckDBCatalog(fault_root) as catalog:
         catalog.create_manifest(initial)
-        catalog._after_history_insert = lambda: (_ for _ in ()).throw(  # type: ignore[method-assign]
-            RuntimeError("injected failure")
-        )
-        with pytest.raises(CatalogPersistenceError):
-            catalog.transition_manifest(initial, verified)
-        assert catalog.get_manifest(_plan()) == initial
+        for defect in (
+            RuntimeError("injected implementation failure"),
+            duckdb.ParserException("injected SQL implementation failure"),
+            KeyboardInterrupt(),
+        ):
+            catalog._after_history_insert = lambda defect=defect: (_ for _ in ()).throw(  # type: ignore[method-assign]
+                defect
+            )
+            with pytest.raises(type(defect)) as caught:
+                catalog.transition_manifest(initial, verified)
+            assert caught.value is defect
+            assert catalog.get_manifest(_plan()) == initial
+            assert catalog.connection.execute(
+                "SELECT count(*) FROM ingestion_runs"
+            ).fetchone() == (0,)
+
+
+@pytest.mark.parametrize("fault_type", (AssertionError, duckdb.ParserException))
+def test_manifest_create_preserves_unknown_run_lookup_fault_and_committed_rows(
+    tmp_path, fault_type: type[Exception]
+) -> None:
+    committed = _in_progress()
+    candidate = _in_progress(plan=_other_plan(), ingestion_run_id="run-2")
+    failure = fault_type("injected run lookup fault")
+
+    with DuckDBCatalog(tmp_path) as catalog:
+        catalog.create_manifest(committed)
+        connection = catalog.connection
+
+        class FaultingConnection:
+            def execute(self, query: str, *args: object, **kwargs: object) -> object:
+                if query == "SELECT 1 FROM ingestion_runs WHERE ingestion_run_id = ?":
+                    raise failure
+                return connection.execute(query, *args, **kwargs)
+
+        catalog._connection = FaultingConnection()  # type: ignore[assignment]
+        try:
+            with pytest.raises(fault_type) as raised:
+                catalog.create_manifest(candidate)
+            assert raised.value is failure
+        finally:
+            catalog._connection = connection
+
+        assert catalog.get_manifest(committed.plan) == committed
+        assert catalog.get_manifest(candidate.plan) is None
         assert catalog.connection.execute(
             "SELECT count(*) FROM ingestion_runs"
         ).fetchone() == (0,)
+
+
+@pytest.mark.parametrize("fault_type", (AssertionError, duckdb.ParserException))
+def test_manifest_transition_preserves_unknown_run_lookup_fault_and_history(
+    tmp_path, fault_type: type[Exception]
+) -> None:
+    initial = _in_progress()
+    failed = fail_manifest(
+        initial, _time(2), FailureCategory.EMPTY_RESPONSE, row_count=0
+    )
+    retried = retry_manifest(
+        failed, "run-2", "upstox-v3", "policy-v1", _time(3), _time(3)
+    )
+    failure = fault_type("injected run lookup fault")
+
+    with DuckDBCatalog(tmp_path) as catalog:
+        catalog.create_manifest(initial)
+        catalog.transition_manifest(initial, failed)
+        connection = catalog.connection
+
+        class FaultingConnection:
+            def execute(self, query: str, *args: object, **kwargs: object) -> object:
+                if query == "SELECT 1 FROM ingestion_runs WHERE ingestion_run_id = ?":
+                    raise failure
+                return connection.execute(query, *args, **kwargs)
+
+        catalog._connection = FaultingConnection()  # type: ignore[assignment]
+        try:
+            with pytest.raises(fault_type) as raised:
+                catalog.transition_manifest(failed, retried)
+            assert raised.value is failure
+        finally:
+            catalog._connection = connection
+
+        assert catalog.get_manifest(initial.plan) == failed
+        assert catalog.connection.execute(
+            "SELECT count(*) FROM ingestion_runs"
+        ).fetchone() == (1,)
+
+
+def test_manifest_create_converts_operational_run_lookup_failure(tmp_path) -> None:
+    committed = _in_progress()
+    candidate = _in_progress(plan=_other_plan(), ingestion_run_id="run-2")
+
+    with DuckDBCatalog(tmp_path) as catalog:
+        catalog.create_manifest(committed)
+        connection = catalog.connection
+
+        class FaultingConnection:
+            def execute(self, query: str, *args: object, **kwargs: object) -> object:
+                if query == "SELECT 1 FROM ingestion_runs WHERE ingestion_run_id = ?":
+                    raise duckdb.IOException("catalog unavailable")
+                return connection.execute(query, *args, **kwargs)
+
+        catalog._connection = FaultingConnection()  # type: ignore[assignment]
+        try:
+            with pytest.raises(CatalogPersistenceError, match="catalog read failed"):
+                catalog.create_manifest(candidate)
+        finally:
+            catalog._connection = connection
+
+        assert catalog.get_manifest(committed.plan) == committed
+        assert catalog.get_manifest(candidate.plan) is None
 
 
 def test_schema_is_fail_closed_and_storage_errors_are_sanitized(tmp_path) -> None:
@@ -903,3 +1642,22 @@ def test_failed_retry_rejects_historical_and_current_run_ids(tmp_path) -> None:
             catalog.transition_manifest(second_failed, historical_retry)
         with pytest.raises(CatalogConflictError):
             catalog.transition_manifest(third_failed, current_retry)
+
+
+def test_catalog_exit_preserves_primary_fault_after_real_close(
+    tmp_path, monkeypatch
+) -> None:
+    catalog = DuckDBCatalog(tmp_path)
+    failure = ValueError()
+    real_close = catalog.close
+
+    def close_then_fail() -> None:
+        real_close()
+        raise RuntimeError()
+
+    monkeypatch.setattr(catalog, "close", close_then_fail)
+    with pytest.raises(ValueError) as raised, catalog:
+        raise failure
+    assert raised.value is failure
+    with pytest.raises(CatalogStorageError):
+        _ = catalog.connection

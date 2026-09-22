@@ -1,4 +1,4 @@
-"""Capture-forward owner-private adjusted daily OHLCV evidence for Plan 29."""
+"""Reader-only immutable Yahoo V1 evidence compatibility for Plan 29."""
 
 from __future__ import annotations
 
@@ -8,17 +8,14 @@ import json
 import os
 import re
 import stat
-from collections.abc import Iterable, Mapping
+from collections.abc import Generator, Iterable, Mapping
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime
 from decimal import Decimal
-from numbers import Real
+from itertools import chain
 from pathlib import Path
-from types import ModuleType
 from typing import Final, NoReturn, Protocol, cast
-
-import pandas as pd
-import yfinance  # pyright: ignore[reportMissingImports]
 
 from swing_trading_ai_assistant.historical_evaluation.capability_validation import (
     CONTRACT_VERSION_V1 as PLAN29_CONTRACT_VERSION_V1,
@@ -40,26 +37,12 @@ from swing_trading_ai_assistant.historical_evaluation.capability_validation impo
     capability_validation_current_identities_v1,
     evaluate_capability_aware_historical_validation_v1,
 )
-from swing_trading_ai_assistant.market_data.capture_forward_adjusted_ohlcv_runtime_identity_manifest import (
-    CAPTURE_FORWARD_ADJUSTED_OHLCV_RUNTIME_SOURCE_SHA256_V1,
-)
-from swing_trading_ai_assistant.market_data.runtime_source_verifier import (
-    read_runtime_source,
-)
-from swing_trading_ai_assistant.market_data.schedule_evidence import (
-    MAX_SCHEDULE_BYTES,
-    ExpectedSessionSchedule,
-    parse_canonical_schedule_bytes,
-    schedule_covers_full_calendar_range,
-    schedule_digest,
-)
+from swing_trading_ai_assistant.market_data import storage_root_lease as lease_core
 from swing_trading_ai_assistant.market_data.storage_root_lease import (
     LeaseOutcome,
     StorageRootLease,
     StorageRootLeaseOperation,
 )
-
-_YFINANCE_MODULE: Final[ModuleType] = cast(ModuleType, yfinance)
 
 CONTRACT_VERSION_V1: Final = "capture-forward-adjusted-ohlcv@v1"
 REVISION_CONTRACT_VERSION_V1: Final = "capture-forward-adjusted-ohlcv-revision@v1"
@@ -90,14 +73,6 @@ _PROVIDER_SYMBOL = re.compile(r"[A-Z0-9][A-Z0-9.&_-]{0,31}\.NS\Z")
 _TOKEN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,127}\Z")
 _REVISION_NAME = re.compile(r"[0-9a-f]{64}\.json\Z")
 _COMPOSED_RELEASE = re.compile(r"composed-calendar@v1=[0-9a-f]{64}\Z")
-
-
-class _CaptureForwardAdjustedOhlcvProviderV1(Protocol):
-    def download(self, **kwargs: object) -> object: ...
-
-
-class _PandasSeries(Protocol):
-    def tolist(self) -> list[object]: ...
 
 
 def _canonical(value: object) -> bytes:
@@ -141,6 +116,14 @@ def _utc(value: datetime, name: str) -> datetime:
 
 def _timestamp(value: datetime) -> str:
     return value.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+class MappingEvidenceInvalid(ValueError):
+    """Canonical provider mapping evidence is invalid."""
+
+
+class ScheduleEvidenceInvalid(ValueError):
+    """Composed schedule evidence is invalid."""
 
 
 def mapping_identity_v1(
@@ -470,15 +453,6 @@ _CONFIGURATION_IDENTITY_SHA256: Final = _sha(
 )
 
 
-def _read_manifest_source(root: Path, relative: str) -> bytes:
-    if relative == "src/swing_trading_ai_assistant/__init__.py":
-        return read_runtime_source(
-            root.parent,
-            "src/swing_trading_ai_assistant/swing_trading_ai_assistant/__init__.py",
-        )
-    return read_runtime_source(root, relative)
-
-
 def _capture_source_identity_v1(configuration_identity_sha256: str) -> str:
     return _sha(
         _canonical(
@@ -493,21 +467,14 @@ def _capture_source_identity_v1(configuration_identity_sha256: str) -> str:
 
 
 def _runtime_code_identity() -> str:
+    """Identify this reader-only runtime without importing any provider code."""
+
     source = Path(__file__)
     if not source.is_absolute():
         raise RuntimeError("capture runtime identity invalid")
-    root = source.parent.parent
     try:
-        pairs: list[tuple[str, str]] = []
-        for relative, expected in sorted(
-            CAPTURE_FORWARD_ADJUSTED_OHLCV_RUNTIME_SOURCE_SHA256_V1.items()
-        ):
-            actual = _sha(_read_manifest_source(root, relative))
-            if actual != expected:
-                raise ValueError
-            pairs.append((relative, actual))
-        return _sha(_canonical(pairs))
-    except (OSError, ValueError):
+        return _sha(source.read_bytes())
+    except OSError:
         raise RuntimeError("capture runtime identity invalid") from None
 
 
@@ -517,6 +484,13 @@ _COMPATIBLE_WRITER_RUNTIME_IDENTITIES_V1: Final = frozenset(
         "20f18fa4043742630d317448a1b0f8cc910535be16092f1e8b0669c81d0ebcb2",
         "720baa3615e1cf42efd0e73cec83f3cb524f48f8103cee6a34d71d23569b9e68",
         "84591e7c04f06227430d1511e0008e8136a0d2a83a30325c3ba9e2ef58e7e149",
+        "c04ec0094424f0018a50f326f7ca4bac4d30c2e24f7e0d523b2e932f7c6db1e3",
+        "7a620872d3b70684811912c46a5c1ef776383d18871ee63e5840a0a423ab020e",
+        "b1fb403cef6771b29a667e60948c8181e5842e0c66d2560eb828a44c340dfc54",
+        # Released f539c5a1 writer; retain exact reads across Issue #145.
+        "1054af9a2f2e791444d0198a801d5e728139bcbb12822fd230c5625d35747560",
+        # Released 0851102 writer immediately before the provider cutover.
+        "da86373ae8271ebefca852bb7c5447e04c5a17a51aca0ced6b42594441b55d5c",
     }
 )
 
@@ -585,7 +559,7 @@ class CaptureForwardAdjustedOhlcvRequestV1:
                 self.schedule.sessions[0] < member.mapping_valid_from
                 or (
                     member.mapping_valid_through is not None
-                    and self.decision_session > member.mapping_valid_through
+                    and cutoff.date() > member.mapping_valid_through
                 )
                 for member in self.cohort
             )
@@ -593,12 +567,12 @@ class CaptureForwardAdjustedOhlcvRequestV1:
             raise ValueError("capture request is invalid")
         object.__setattr__(self, "decision_cutoff", cutoff)
         object.__setattr__(self, "evaluated_at", evaluated)
-        current = capture_forward_current_identities_v1()
         if (
-            self.schema_identity_sha256,
-            self.runtime_code_identity_sha256,
-            self.configuration_identity_sha256,
-        ) != current:
+            self.schema_identity_sha256 != _SCHEMA_IDENTITY_SHA256
+            or self.configuration_identity_sha256 != _CONFIGURATION_IDENTITY_SHA256
+            or self.runtime_code_identity_sha256
+            not in _compatible_writer_runtime_identities_v1()
+        ):
             raise ValueError("capture request identity mismatch")
         cohort_identity = _sha(
             _canonical([member.canonical_value() for member in self.cohort])
@@ -646,16 +620,46 @@ def parse_capture_forward_request_v1(
         if type(value) is not dict:
             raise ValueError
         row = cast(dict[str, object], value)
-        cohort = tuple(
-            _member_from_value(member)
-            for member in cast(list[dict[str, object]], row["cohort"])
-        )
+        try:
+            cohort = tuple(
+                _member_from_value(member)
+                for member in cast(list[dict[str, object]], row["cohort"])
+            )
+        except (KeyError, TypeError, ValueError, OverflowError):
+            raise MappingEvidenceInvalid from None
+        try:
+            schedule = _schedule_from_value(cast(dict[str, object], row["schedule"]))
+            decision_session = date.fromisoformat(cast(str, row["decision_session"]))
+            decision_cutoff = _parse_instant(row["decision_cutoff"])
+            evaluated_at = _parse_instant(row["evaluated_at"])
+        except (KeyError, TypeError, ValueError, OverflowError):
+            raise ScheduleEvidenceInvalid from None
+        if (
+            len({(member.isin, member.exchange) for member in cohort}) != len(cohort)
+            or len({member.provider_symbol for member in cohort}) != len(cohort)
+            or any(
+                schedule.sessions[0] < member.mapping_valid_from
+                or (
+                    member.mapping_valid_through is not None
+                    and decision_cutoff.date() > member.mapping_valid_through
+                )
+                for member in cohort
+            )
+        ):
+            raise MappingEvidenceInvalid
+        if (
+            decision_session != schedule.sessions[-1]
+            or schedule.decision_session_official_close_at > evaluated_at
+            or decision_cutoff < schedule.decision_session_official_close_at
+            or decision_cutoff > evaluated_at
+        ):
+            raise ScheduleEvidenceInvalid
         request = CaptureForwardAdjustedOhlcvRequestV1(
             cohort=cohort,
-            schedule=_schedule_from_value(cast(dict[str, object], row["schedule"])),
-            decision_session=date.fromisoformat(cast(str, row["decision_session"])),
-            decision_cutoff=_parse_instant(row["decision_cutoff"]),
-            evaluated_at=_parse_instant(row["evaluated_at"]),
+            schedule=schedule,
+            decision_session=decision_session,
+            decision_cutoff=decision_cutoff,
+            evaluated_at=evaluated_at,
             parent_revision_sha256=cast(str | None, row["parent_revision_sha256"]),
             schema_identity_sha256=cast(str, row["schema_identity_sha256"]),
             runtime_code_identity_sha256=cast(str, row["runtime_code_identity_sha256"]),
@@ -671,6 +675,8 @@ def parse_capture_forward_request_v1(
         ):
             raise ValueError
         return request
+    except (MappingEvidenceInvalid, ScheduleEvidenceInvalid):
+        raise
     except (
         json.JSONDecodeError,
         KeyError,
@@ -864,6 +870,52 @@ CaptureForwardAdjustedOhlcvResultV1 = (
 )
 
 
+class _ImmutableEvidenceConflict(Exception):
+    pass
+
+
+class _CaptureCleanupFailureV1(RuntimeError):
+    pass
+
+
+class _CaptureCloseableV1(Protocol):
+    def close(self) -> None: ...
+
+
+def _close_capture_resources_v1(
+    resources: Iterable[_CaptureCloseableV1 | int | None],
+    *,
+    active_failure: BaseException | None,
+) -> None:
+    failure: BaseException | None = None
+    for resource in resources:
+        if resource is None:
+            continue
+        try:
+            if isinstance(resource, int):
+                os.close(resource)
+            else:
+                resource.close()
+        except BaseException as error:
+            if failure is None:
+                failure = error
+    if failure is not None and active_failure is None:
+        raise _CaptureCleanupFailureV1("capture cleanup failed") from failure
+
+
+@contextmanager
+def _capture_resource_scope_v1(
+    resources: Iterable[_CaptureCloseableV1 | int | None],
+) -> Generator[None, None, None]:
+    try:
+        yield
+    except BaseException as error:
+        _close_capture_resources_v1(resources, active_failure=error)
+        raise
+    else:
+        _close_capture_resources_v1(resources, active_failure=None)
+
+
 @dataclass(frozen=True, slots=True)
 class CaptureForwardPlan29QualificationV1:
     evidence: HistoricalEvidenceRevisionV1
@@ -871,511 +923,23 @@ class CaptureForwardPlan29QualificationV1:
     report: HistoricalValidationReportV1
 
 
-class YfinanceCaptureForwardAdjustedOhlcvAdapterV1:
-    """Normalize the sole admitted yfinance 1.6.0 DataFrame shape."""
-
-    def download(self, **kwargs: object) -> object:  # noqa: C901
-        expected_sessions = kwargs.pop("expected_sessions", None)
-        tickers_value = kwargs.get("tickers")
-        if type(expected_sessions) is not tuple or type(tickers_value) is not tuple:
-            return CaptureForwardAdjustedOhlcvFailureV1(
-                "INSUFFICIENT_EVIDENCE", "FRAME_SCHEMA_INVALID"
-            )
-        tickers = cast(tuple[str, ...], tickers_value)
-        response = _public_yfinance_download(**kwargs)
-        if _YFINANCE_MODULE.__dict__.get("__version__") != "1.6.0":
-            return CaptureForwardAdjustedOhlcvFailureV1(
-                "INSUFFICIENT_EVIDENCE", "PROVIDER_IDENTITY_MISMATCH"
-            )
-        if response is None:
-            return CaptureForwardAdjustedOhlcvFailureV1(
-                "INSUFFICIENT_EVIDENCE", "PROVIDER_EMPTY"
-            )
-        if not isinstance(response, pd.DataFrame):
-            return CaptureForwardAdjustedOhlcvFailureV1(
-                "INSUFFICIENT_EVIDENCE", "FRAME_SCHEMA_INVALID"
-            )
-        if response.empty:
-            return CaptureForwardAdjustedOhlcvFailureV1(
-                "INSUFFICIENT_EVIDENCE", "PROVIDER_EMPTY"
-            )
-        if (
-            not isinstance(response.index, pd.DatetimeIndex)
-            or response.index.tz is None
-            or not response.index.is_unique
-            or not isinstance(response.columns, pd.MultiIndex)
-            or response.columns.nlevels != 2
-            or tuple(response.columns.names) != ("Ticker", "Price")
-            or not response.columns.is_unique
-        ):
-            return CaptureForwardAdjustedOhlcvFailureV1(
-                "INSUFFICIENT_EVIDENCE", "FRAME_SCHEMA_INVALID"
-            )
-        fields = ("Open", "High", "Low", "Close", "Volume")
-        expected_columns = tuple(
-            (ticker, field) for ticker in tickers for field in fields
-        )
-        actual_columns = tuple(cast(Iterable[tuple[str, str]], response.columns))
-        if set(actual_columns) != set(expected_columns):
-            return CaptureForwardAdjustedOhlcvFailureV1(
-                "INSUFFICIENT_EVIDENCE", "FRAME_COVERAGE_INCOMPLETE"
-            )
-        if actual_columns != expected_columns:
-            return CaptureForwardAdjustedOhlcvFailureV1(
-                "INSUFFICIENT_EVIDENCE", "FRAME_SCHEMA_INVALID"
-            )
-        timezone = getattr(response.index.tz, "key", None) or getattr(
-            response.index.tz, "zone", None
-        )
-        sessions = _session_dates(response.index)
-        if sessions is None:
-            return CaptureForwardAdjustedOhlcvFailureV1(
-                "INSUFFICIENT_EVIDENCE", "FRAME_SCHEMA_INVALID"
-            )
-        ohlcv: dict[str, tuple[dict[str, object], ...]] = {}
-        for ticker in tickers:
-            columns: dict[str, list[object]] = {}
-            for price_field in fields:
-                values = cast(object, response[(ticker, price_field)])
-                if not isinstance(values, pd.Series):
-                    return CaptureForwardAdjustedOhlcvFailureV1(
-                        "INSUFFICIENT_EVIDENCE", "FRAME_SCHEMA_INVALID"
-                    )
-                columns[price_field] = cast(_PandasSeries, values).tolist()
-            ohlcv[ticker] = tuple(
-                {
-                    "open": columns["Open"][position],
-                    "high": columns["High"][position],
-                    "low": columns["Low"][position],
-                    "close": columns["Close"][position],
-                    "volume": columns["Volume"][position],
-                }
-                for position in range(len(response.index))
-            )
-        return {
-            "timezone": timezone,
-            "index": sessions,
-            "ohlcv": ohlcv,
-            "retrieved_at": datetime.now(UTC),
-            "provider_source": EXPECTED_PROVIDER_SOURCE_V1,
-        }
-
-
-def _public_yfinance_download(**kwargs: object) -> object:
-    download = _YFINANCE_MODULE.__dict__.get("download")
-    if not callable(download):
-        raise RuntimeError("yfinance.download unavailable")
-    return download(**kwargs)
-
-
-def _session_dates(index: Iterable[object]) -> tuple[date, ...] | None:
-    sessions: list[date] = []
-    for value in index:
-        as_date = getattr(value, "date", None)
-        if not callable(as_date):
-            return None
-        result = as_date()
-        if type(result) is not date:
-            return None
-        sessions.append(result)
-    return tuple(sessions)
-
-
-def _retained_schedule_matches_request(
-    request: CaptureForwardAdjustedOhlcvRequestV1, schedule_root: Path
-) -> bool:
-    lease = _acquire_existing_private_lease(schedule_root)
-    if lease is None:
-        return False
+def _validate_historical_request_identity_v1(request: object) -> None:
     try:
-        with lease.read_operation(schedule_root) as operation:
-            calendar = _open_private_directory(
-                operation,
-                operation.descriptor,
-                "calendar-schedules",
-                create=False,
-            )
-            digests: _PrivateDirectory | None = None
-            try:
-                digests = _open_private_directory(
-                    operation, calendar.descriptor, "sha256", create=False
-                )
-                raw = _read_exact_file(
-                    operation,
-                    digests,
-                    f"{request.schedule.schedule_evidence_sha256}.json",
-                    MAX_SCHEDULE_BYTES,
-                    expected_mode=0o600,
-                )
-                schedule = parse_canonical_schedule_bytes(raw)
-                operation.ensure_live()
-                calendar.ensure_live()
-                digests.ensure_live()
-            finally:
-                if digests is not None:
-                    digests.close()
-                calendar.close()
+        if not isinstance(request, CaptureForwardAdjustedOhlcvRequestV1):
+            raise ValueError
+        cohort_identity = _sha(
+            _canonical([member.canonical_value() for member in request.cohort])
+        )
+        request_identity = _sha(
+            _canonical(request.canonical_value(include_request_identity=False))
+        )
         if (
-            type(schedule) is not ExpectedSessionSchedule
-            or schedule_digest(schedule) != request.schedule.schedule_evidence_sha256
-            or schedule.source != request.schedule.schedule_source
-            or schedule.source_release != request.schedule.schedule_source_release
-            or schedule.timezone != "Asia/Kolkata"
-            or schedule.as_of > request.decision_cutoff
-            or schedule.covered_from > request.schedule.sessions[0]
-            or schedule.covered_to < request.decision_session
-            or not schedule_covers_full_calendar_range(
-                schedule, request.schedule.sessions[0], request.decision_session
-            )
+            request.cohort_identity_sha256 != cohort_identity
+            or request.request_identity_sha256 != request_identity
         ):
-            return False
-        retained_sessions = tuple(
-            item
-            for item in schedule.sessions
-            if request.schedule.sessions[0]
-            <= item.trade_date
-            <= request.decision_session
-        )
-        return (
-            tuple(item.trade_date for item in retained_sessions)
-            == request.schedule.sessions
-            and retained_sessions[-1].close_at
-            == request.schedule.decision_session_official_close_at
-        )
-    except (OSError, ValueError):
-        return False
-    finally:
-        lease.close()
-
-
-def capture_forward_adjusted_ohlcv_v1(
-    request: CaptureForwardAdjustedOhlcvRequestV1,
-    store_root: Path,
-    schedule_root: Path,
-) -> CaptureForwardAdjustedOhlcvResultV1:
-    """Capture through the sole sealed yfinance adapter."""
-
-    return _capture_forward_adjusted_ohlcv_with_provider_v1(
-        request,
-        YfinanceCaptureForwardAdjustedOhlcvAdapterV1(),
-        store_root,
-        schedule_root,
-    )
-
-
-def _ensure_capture_authority(
-    operation: StorageRootLeaseOperation,
-    revisions: _PrivateDirectory,
-    requests: _PrivateDirectory,
-    prepared: _PrivateDirectory,
-) -> None:
-    operation.ensure_live()
-    revisions.ensure_live()
-    requests.ensure_live()
-    prepared.ensure_live()
-
-
-def _ensure_capture_state(
-    operation: StorageRootLeaseOperation,
-    revisions: _PrivateDirectory,
-    requests: _PrivateDirectory,
-    prepared: _PrivateDirectory,
-    request: CaptureForwardAdjustedOhlcvRequestV1,
-    parent: AdjustedOhlcvCaptureRevisionV1 | None,
-) -> None:
-    _ensure_capture_authority(operation, revisions, requests, prepared)
-    if parent is None:
-        return
-    admitted = _read_admitted_revision(
-        operation,
-        requests,
-        revisions,
-        parent.revision_sha256,
-    )
-    if admitted != parent or not _valid_correction_parent(request, admitted):
-        raise OSError(errno.EINVAL, "correction parent is no longer admitted")
-
-
-def _capture_forward_adjusted_ohlcv_with_provider_v1(  # noqa: C901
-    request: CaptureForwardAdjustedOhlcvRequestV1,
-    provider: _CaptureForwardAdjustedOhlcvProviderV1,
-    store_root: Path,
-    schedule_root: Path,
-) -> CaptureForwardAdjustedOhlcvResultV1:
-    if (
-        type(request) is not CaptureForwardAdjustedOhlcvRequestV1
-        or not _valid_absolute_path(store_root)
-        or not _valid_absolute_path(schedule_root)
-    ):
-        raise ValueError("capture invocation is invalid")
-    if (
-        request.schema_identity_sha256,
-        request.runtime_code_identity_sha256,
-        request.configuration_identity_sha256,
-    ) != capture_forward_current_identities_v1():
-        raise ValueError("capture request identity mismatch")
-    if not _retained_schedule_matches_request(request, schedule_root):
-        return CaptureForwardAdjustedOhlcvFailureV1(
-            "INSUFFICIENT_EVIDENCE", "SCHEDULE_EVIDENCE_MISMATCH"
-        )
-
-    root_identity = StorageRootLease.admit_existing_private_identity(store_root)
-    if root_identity is None:
-        return CaptureForwardAdjustedOhlcvFailureV1(
-            "STORE_UNAVAILABLE", "STORAGE_UNSAFE_OR_HELD"
-        )
-    lease_result = StorageRootLease.try_acquire_existing_identity(
-        store_root, root_identity
-    )
-    if lease_result.outcome is LeaseOutcome.FAILED:
-        lease_result = StorageRootLease.try_acquire_private_empty_identity(
-            store_root, root_identity
-        )
-    if lease_result.outcome is not LeaseOutcome.ACQUIRED or lease_result.lease is None:
-        return CaptureForwardAdjustedOhlcvFailureV1(
-            "STORE_UNAVAILABLE", "STORAGE_UNSAFE_OR_HELD"
-        )
-    lease = lease_result.lease
-    try:
-        with lease.root_operation(store_root) as operation:
-            root_descriptor = operation.descriptor
-            revisions: _PrivateDirectory | None = None
-            requests: _PrivateDirectory | None = None
-            prepared: _PrivateDirectory | None = None
-            try:
-                revisions = _open_private_directory(
-                    operation, root_descriptor, "revisions", create=True
-                )
-                requests = _open_private_directory(
-                    operation, root_descriptor, "requests", create=True
-                )
-                prepared = _open_private_directory(
-                    operation, root_descriptor, "prepared", create=True
-                )
-                try:
-                    existing = _read_request_revision(
-                        operation,
-                        requests,
-                        revisions,
-                        request,
-                    )
-                except _CorrectionAncestorUnavailable:
-                    _ensure_capture_authority(operation, revisions, requests, prepared)
-                    return CaptureForwardAdjustedOhlcvFailureV1(
-                        "STORE_UNAVAILABLE", "PARENT_REVISION_UNAVAILABLE"
-                    )
-                if existing is not None and not _revision_matches_request(
-                    request, existing
-                ):
-                    _ensure_capture_authority(operation, revisions, requests, prepared)
-                    return CaptureForwardAdjustedOhlcvFailureV1(
-                        "STORE_UNAVAILABLE", "PUBLISHED_REVISION_MISMATCH"
-                    )
-
-                parent: AdjustedOhlcvCaptureRevisionV1 | None = None
-                if request.parent_revision_sha256 is not None:
-                    try:
-                        parent = _read_admitted_revision(
-                            operation,
-                            requests,
-                            revisions,
-                            request.parent_revision_sha256,
-                        )
-                    except OSError:
-                        if existing is not None:
-                            _revalidate_request_pointer(
-                                requests,
-                                existing.request_identity_sha256,
-                                existing.revision_sha256,
-                            )
-                        _ensure_capture_authority(
-                            operation, revisions, requests, prepared
-                        )
-                        return CaptureForwardAdjustedOhlcvFailureV1(
-                            "STORE_UNAVAILABLE", "PARENT_REVISION_UNAVAILABLE"
-                        )
-                    if not _valid_correction_parent(request, parent):
-                        if existing is not None:
-                            _revalidate_request_pointer(
-                                requests,
-                                existing.request_identity_sha256,
-                                existing.revision_sha256,
-                            )
-                        _ensure_capture_authority(
-                            operation, revisions, requests, prepared
-                        )
-                        return CaptureForwardAdjustedOhlcvFailureV1(
-                            "INSUFFICIENT_EVIDENCE", "PARENT_REVISION_MISMATCH"
-                        )
-
-                if existing is not None:
-                    try:
-                        _ensure_capture_state(
-                            operation,
-                            revisions,
-                            requests,
-                            prepared,
-                            request,
-                            parent,
-                        )
-                    except (OSError, RuntimeError):
-                        _revalidate_request_pointer(
-                            requests,
-                            existing.request_identity_sha256,
-                            existing.revision_sha256,
-                        )
-                        raise
-                    return CaptureForwardAdjustedOhlcvSuccessV1("REUSED", existing)
-
-                prepared_recovery = _read_prepared_revision(
-                    operation, prepared, request.request_identity_sha256
-                )
-                if prepared_recovery is not None:
-                    recovered, held_prepared = prepared_recovery
-                    try:
-                        if not _revision_matches_request(request, recovered):
-                            _ensure_capture_state(
-                                operation,
-                                revisions,
-                                requests,
-                                prepared,
-                                request,
-                                parent,
-                            )
-                            return CaptureForwardAdjustedOhlcvFailureV1(
-                                "STORE_UNAVAILABLE", "PREPARED_REVISION_MISMATCH"
-                            )
-                        _ensure_capture_state(
-                            operation, revisions, requests, prepared, request, parent
-                        )
-                        held_prepared.commit()
-                        _ensure_capture_state(
-                            operation, revisions, requests, prepared, request, parent
-                        )
-                        _publish_revision(operation, revisions, recovered)
-                        _ensure_capture_state(
-                            operation, revisions, requests, prepared, request, parent
-                        )
-                        exact = _read_revision_descriptor(
-                            operation,
-                            revisions,
-                            recovered.revision_sha256,
-                        )
-                        if exact != recovered:
-                            return CaptureForwardAdjustedOhlcvFailureV1(
-                                "STORE_UNAVAILABLE", "EXACT_READBACK_FAILED"
-                            )
-                        operation.ensure_live()
-                        os.fsync(root_descriptor)
-                        _ensure_capture_state(
-                            operation,
-                            revisions,
-                            requests,
-                            prepared,
-                            request,
-                            parent,
-                        )
-                        _publish_request_pointer(
-                            operation, requests, revisions, request, recovered
-                        )
-                        return CaptureForwardAdjustedOhlcvSuccessV1("CAPTURED", exact)
-                    finally:
-                        held_prepared.close()
-
-                _ensure_capture_state(
-                    operation, revisions, requests, prepared, request, parent
-                )
-                try:
-                    frame = provider.download(
-                        tickers=tuple(
-                            member.provider_symbol for member in request.cohort
-                        ),
-                        start=request.schedule.sessions[0].isoformat(),
-                        end=(request.decision_session + timedelta(days=1)).isoformat(),
-                        interval="1d",
-                        actions=False,
-                        threads=False,
-                        ignore_tz=False,
-                        group_by="ticker",
-                        auto_adjust=True,
-                        back_adjust=False,
-                        repair=False,
-                        keepna=True,
-                        progress=False,
-                        prepost=False,
-                        rounding=False,
-                        timeout=10,
-                        multi_level_index=True,
-                        expected_sessions=tuple(
-                            session.isoformat() for session in request.schedule.sessions
-                        ),
-                    )
-                except Exception:
-                    _ensure_capture_state(
-                        operation, revisions, requests, prepared, request, parent
-                    )
-                    return CaptureForwardAdjustedOhlcvFailureV1(
-                        "INSUFFICIENT_EVIDENCE", "PROVIDER_CALL_FAILED"
-                    )
-                _ensure_capture_state(
-                    operation, revisions, requests, prepared, request, parent
-                )
-                normalized = _normalize_provider_frame(request, frame)
-                if isinstance(normalized, CaptureForwardAdjustedOhlcvFailureV1):
-                    _ensure_capture_state(
-                        operation, revisions, requests, prepared, request, parent
-                    )
-                    return normalized
-                revision = normalized
-                if parent is not None and _same_correction_content(parent, revision):
-                    _ensure_capture_state(
-                        operation, revisions, requests, prepared, request, parent
-                    )
-                    return CaptureForwardAdjustedOhlcvFailureV1(
-                        "INSUFFICIENT_EVIDENCE", "CORRECTION_CONTENT_UNCHANGED"
-                    )
-                _ensure_capture_state(
-                    operation, revisions, requests, prepared, request, parent
-                )
-                _publish_prepared_revision(operation, prepared, revision)
-                _ensure_capture_state(
-                    operation, revisions, requests, prepared, request, parent
-                )
-                _publish_revision(operation, revisions, revision)
-                _ensure_capture_state(
-                    operation, revisions, requests, prepared, request, parent
-                )
-                exact = _read_revision_descriptor(
-                    operation,
-                    revisions,
-                    revision.revision_sha256,
-                )
-                if exact != revision:
-                    return CaptureForwardAdjustedOhlcvFailureV1(
-                        "STORE_UNAVAILABLE", "EXACT_READBACK_FAILED"
-                    )
-                operation.ensure_live()
-                os.fsync(root_descriptor)
-                _ensure_capture_state(
-                    operation, revisions, requests, prepared, request, parent
-                )
-                _publish_request_pointer(
-                    operation, requests, revisions, request, revision
-                )
-                return CaptureForwardAdjustedOhlcvSuccessV1("CAPTURED", exact)
-            finally:
-                if prepared is not None:
-                    prepared.close()
-                if requests is not None:
-                    requests.close()
-                if revisions is not None:
-                    revisions.close()
-    except (OSError, RuntimeError):
-        return CaptureForwardAdjustedOhlcvFailureV1(
-            "STORE_UNAVAILABLE", "STORAGE_OPERATION_FAILED"
-        )
-    finally:
-        lease.close()
+            raise ValueError
+    except (AttributeError, TypeError, ValueError):
+        raise ValueError("capture request identity mismatch") from None
 
 
 def _revision_matches_request(
@@ -1398,6 +962,36 @@ def _revision_matches_request(
     )
 
 
+def _request_identity_for_writer_v1(
+    request: CaptureForwardAdjustedOhlcvRequestV1,
+    writer_identity: str,
+) -> str:
+    value = request.canonical_value(include_request_identity=False)
+    value["runtime_code_identity_sha256"] = writer_identity
+    return _sha(_canonical(value))
+
+
+def _revision_matches_compatible_request_v1(
+    request: CaptureForwardAdjustedOhlcvRequestV1,
+    revision: AdjustedOhlcvCaptureRevisionV1,
+) -> bool:
+    writer_identity = revision.runtime_code_identity_sha256
+    return (
+        writer_identity in _COMPATIBLE_WRITER_RUNTIME_IDENTITIES_V1
+        and revision.request_identity_sha256
+        == _request_identity_for_writer_v1(request, writer_identity)
+        and revision.cohort == request.cohort
+        and revision.cohort_identity_sha256 == request.cohort_identity_sha256
+        and revision.schedule == request.schedule
+        and revision.decision_session == request.decision_session
+        and revision.decision_cutoff == request.decision_cutoff
+        and revision.parent_revision_sha256 == request.parent_revision_sha256
+        and revision.schema_identity_sha256 == request.schema_identity_sha256
+        and revision.configuration_identity_sha256
+        == request.configuration_identity_sha256
+    )
+
+
 def _valid_correction_parent(
     request: CaptureForwardAdjustedOhlcvRequestV1,
     parent: AdjustedOhlcvCaptureRevisionV1,
@@ -1410,7 +1004,8 @@ def _valid_correction_parent(
         and parent.decision_session == request.decision_session
         and parent.decision_cutoff == request.decision_cutoff
         and parent.schema_identity_sha256 == request.schema_identity_sha256
-        and parent.runtime_code_identity_sha256 == request.runtime_code_identity_sha256
+        and parent.runtime_code_identity_sha256
+        in _compatible_writer_runtime_identities_v1()
         and parent.configuration_identity_sha256
         == request.configuration_identity_sha256
     )
@@ -1428,163 +1023,12 @@ def _ensure_valid_revision_parent(
         and parent.decision_session == child.decision_session
         and parent.decision_cutoff == child.decision_cutoff
         and parent.schema_identity_sha256 == child.schema_identity_sha256
-        and parent.runtime_code_identity_sha256 == child.runtime_code_identity_sha256
-        and parent.configuration_identity_sha256 == child.configuration_identity_sha256
+        and parent.runtime_code_identity_sha256
+        in _compatible_writer_runtime_identities_v1()
+        and child.runtime_code_identity_sha256
+        in _compatible_writer_runtime_identities_v1()
     ):
         raise _CorrectionAncestorUnavailable
-
-
-def _same_correction_content(
-    parent: AdjustedOhlcvCaptureRevisionV1,
-    revision: AdjustedOhlcvCaptureRevisionV1,
-) -> bool:
-    return (
-        parent.cohort == revision.cohort
-        and parent.schedule == revision.schedule
-        and parent.decision_session == revision.decision_session
-        and parent.decision_cutoff == revision.decision_cutoff
-        and parent.provider_source == revision.provider_source
-        and parent.source_identity_sha256 == revision.source_identity_sha256
-        and parent.bars == revision.bars
-        and parent.schema_identity_sha256 == revision.schema_identity_sha256
-        and parent.runtime_code_identity_sha256 == revision.runtime_code_identity_sha256
-        and parent.configuration_identity_sha256
-        == revision.configuration_identity_sha256
-    )
-
-
-def _normalize_provider_frame(  # noqa: C901 - closed provider admission
-    request: CaptureForwardAdjustedOhlcvRequestV1, frame: object
-) -> AdjustedOhlcvCaptureRevisionV1 | CaptureForwardAdjustedOhlcvFailureV1:
-    if isinstance(frame, CaptureForwardAdjustedOhlcvFailureV1):
-        return frame
-    if not isinstance(frame, Mapping) or not frame:
-        return CaptureForwardAdjustedOhlcvFailureV1(
-            "INSUFFICIENT_EVIDENCE", "PROVIDER_EMPTY"
-        )
-    frame_mapping = cast(Mapping[str, object], frame)
-    if frame_mapping.get("provider_source") != EXPECTED_PROVIDER_SOURCE_V1:
-        return CaptureForwardAdjustedOhlcvFailureV1(
-            "INSUFFICIENT_EVIDENCE", "PROVIDER_IDENTITY_MISMATCH"
-        )
-    if frame_mapping.get("timezone") != "Asia/Kolkata":
-        return CaptureForwardAdjustedOhlcvFailureV1(
-            "INSUFFICIENT_EVIDENCE", "FRAME_SCHEMA_INVALID"
-        )
-    index = frame_mapping.get("index")
-    if type(index) is not tuple or index != request.schedule.sessions:
-        return CaptureForwardAdjustedOhlcvFailureV1(
-            "INSUFFICIENT_EVIDENCE", "FRAME_COVERAGE_INCOMPLETE"
-        )
-    retrieved_raw = frame_mapping.get("retrieved_at")
-    try:
-        retrieved_at = _utc(cast(datetime, retrieved_raw), "retrieved_at")
-    except (TypeError, ValueError):
-        return CaptureForwardAdjustedOhlcvFailureV1(
-            "INSUFFICIENT_EVIDENCE", "FRAME_SCHEMA_INVALID"
-        )
-    raw_ohlcv = frame_mapping.get("ohlcv")
-    if not isinstance(raw_ohlcv, Mapping):
-        return CaptureForwardAdjustedOhlcvFailureV1(
-            "INSUFFICIENT_EVIDENCE", "FRAME_COVERAGE_INCOMPLETE"
-        )
-    ohlcv = cast(Mapping[str, object], raw_ohlcv)
-    if set(ohlcv) != {member.provider_symbol for member in request.cohort}:
-        return CaptureForwardAdjustedOhlcvFailureV1(
-            "INSUFFICIENT_EVIDENCE", "FRAME_COVERAGE_INCOMPLETE"
-        )
-    bars: list[AdjustedOhlcvBarV1] = []
-    for member in request.cohort:
-        raw_rows = ohlcv.get(member.provider_symbol)
-        if type(raw_rows) is not tuple:
-            return CaptureForwardAdjustedOhlcvFailureV1(
-                "INSUFFICIENT_EVIDENCE", "FRAME_COVERAGE_INCOMPLETE"
-            )
-        rows = cast(tuple[object, ...], raw_rows)
-        if len(rows) != len(request.schedule.sessions):
-            return CaptureForwardAdjustedOhlcvFailureV1(
-                "INSUFFICIENT_EVIDENCE", "FRAME_COVERAGE_INCOMPLETE"
-            )
-        for session, raw_row_value in zip(request.schedule.sessions, rows, strict=True):
-            if not isinstance(raw_row_value, Mapping):
-                return CaptureForwardAdjustedOhlcvFailureV1(
-                    "INSUFFICIENT_EVIDENCE", "FRAME_SCHEMA_INVALID"
-                )
-            raw_row = cast(Mapping[str, object], raw_row_value)
-            if set(raw_row) != {"open", "high", "low", "close", "volume"}:
-                return CaptureForwardAdjustedOhlcvFailureV1(
-                    "INSUFFICIENT_EVIDENCE", "FRAME_SCHEMA_INVALID"
-                )
-            values = tuple(
-                _decimal(raw_row.get(name)) for name in ("open", "high", "low", "close")
-            )
-            volume = _volume(raw_row.get("volume"))
-            if any(value is None for value in values) or volume is None:
-                return CaptureForwardAdjustedOhlcvFailureV1(
-                    "INSUFFICIENT_EVIDENCE", "FRAME_VALUE_INVALID"
-                )
-            try:
-                bars.append(
-                    AdjustedOhlcvBarV1(
-                        member_isin=member.isin,
-                        member_exchange=member.exchange,
-                        session=session,
-                        open=cast(Decimal, values[0]),
-                        high=cast(Decimal, values[1]),
-                        low=cast(Decimal, values[2]),
-                        close=cast(Decimal, values[3]),
-                        volume=volume,
-                    )
-                )
-            except ValueError:
-                return CaptureForwardAdjustedOhlcvFailureV1(
-                    "INSUFFICIENT_EVIDENCE", "FRAME_VALUE_INVALID"
-                )
-    if retrieved_at < request.schedule.decision_session_official_close_at:
-        return CaptureForwardAdjustedOhlcvFailureV1(
-            "INSUFFICIENT_EVIDENCE", "RETRIEVED_BEFORE_OFFICIAL_CLOSE"
-        )
-    if retrieved_at > request.decision_cutoff:
-        return CaptureForwardAdjustedOhlcvFailureV1(
-            "INSUFFICIENT_EVIDENCE", "RETRIEVED_AFTER_DECISION_CUTOFF"
-        )
-    source_identity = _capture_source_identity_v1(request.configuration_identity_sha256)
-    return AdjustedOhlcvCaptureRevisionV1(
-        request_identity_sha256=request.request_identity_sha256,
-        cohort=request.cohort,
-        cohort_identity_sha256=request.cohort_identity_sha256,
-        schedule=request.schedule,
-        decision_session=request.decision_session,
-        decision_cutoff=request.decision_cutoff,
-        retrieved_at=retrieved_at,
-        provider_source=EXPECTED_PROVIDER_SOURCE_V1,
-        source_identity_sha256=source_identity,
-        parent_revision_sha256=request.parent_revision_sha256,
-        bars=tuple(bars),
-        schema_identity_sha256=request.schema_identity_sha256,
-        runtime_code_identity_sha256=request.runtime_code_identity_sha256,
-        configuration_identity_sha256=request.configuration_identity_sha256,
-    )
-
-
-def _decimal(value: object) -> Decimal | None:
-    if isinstance(value, bool):
-        return None
-    if type(value) is Decimal:
-        result = value
-    elif isinstance(value, Real):
-        result = Decimal(str(value))
-    else:
-        return None
-    return result if result.is_finite() else None
-
-
-def _volume(value: object) -> int | None:
-    number = _decimal(value)
-    if number is None or number < 0 or number != number.to_integral_value():
-        return None
-    result = int(number)
-    return result if result >= 0 else None
 
 
 @dataclass(slots=True)
@@ -1594,13 +1038,20 @@ class _PrivateDirectory:
     name: str
     descriptor: int
     identity: tuple[int, int, int, int]
+    parent: _PrivateDirectory | None = None
 
     def ensure_live(self) -> None:
-        self.operation.ensure_live()
+        if self.parent is None:
+            self.operation.ensure_live()
+        else:
+            self.parent.ensure_live()
         descriptor_metadata = os.fstat(self.descriptor)
-        path_metadata = os.stat(
-            self.name, dir_fd=self.parent_descriptor, follow_symlinks=False
-        )
+        try:
+            path_metadata = os.stat(
+                self.name, dir_fd=self.parent_descriptor, follow_symlinks=False
+            )
+        except FileNotFoundError:
+            raise OSError(errno.EBUSY, "private directory authority changed") from None
         descriptor_identity = (
             descriptor_metadata.st_dev,
             descriptor_metadata.st_ino,
@@ -1623,17 +1074,37 @@ class _PrivateDirectory:
             raise OSError(errno.EBUSY, "private directory authority changed")
 
     def close(self) -> None:
-        os.close(self.descriptor)
+        descriptor = self.descriptor
+        self.descriptor = -1
+        if descriptor >= 0:
+            os.close(descriptor)
+
+    def __enter__(self) -> _PrivateDirectory:
+        return self
+
+    def __exit__(
+        self, _exc_type: object, _exc: BaseException | None, _traceback: object
+    ) -> None:
+        _close_capture_resources_v1((self,), active_failure=_exc)
 
 
 def _open_private_directory(
     operation: StorageRootLeaseOperation,
-    parent_descriptor: int,
+    parent: int | _PrivateDirectory,
     name: str,
     *,
     create: bool,
 ) -> _PrivateDirectory:
     operation.ensure_live()
+    if isinstance(parent, _PrivateDirectory):
+        if parent.operation is not operation:
+            raise OSError(errno.EBUSY, "private directory authority changed")
+        parent.ensure_live()
+        parent_descriptor = parent.descriptor
+    else:
+        if parent != operation.descriptor:
+            raise OSError(errno.EBUSY, "private directory authority changed")
+        parent_descriptor = parent
     if create:
         try:
             os.mkdir(name, mode=0o700, dir_fd=parent_descriptor)
@@ -1641,11 +1112,18 @@ def _open_private_directory(
             os.fsync(parent_descriptor)
         except FileExistsError:
             pass
-    descriptor = os.open(
-        name,
-        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
-        dir_fd=parent_descriptor,
-    )
+    try:
+        descriptor = os.open(
+            name,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+            dir_fd=parent_descriptor,
+        )
+    except FileNotFoundError:
+        if isinstance(parent, _PrivateDirectory):
+            parent.ensure_live()
+        else:
+            operation.ensure_live()
+        raise
     try:
         metadata = os.fstat(descriptor)
         directory = _PrivateDirectory(
@@ -1659,11 +1137,12 @@ def _open_private_directory(
                 metadata.st_mode,
                 metadata.st_uid,
             ),
+            parent=parent if isinstance(parent, _PrivateDirectory) else None,
         )
         directory.ensure_live()
         return directory
-    except Exception:
-        os.close(descriptor)
+    except BaseException as error:
+        _close_capture_resources_v1((descriptor,), active_failure=error)
         raise
 
 
@@ -1676,11 +1155,15 @@ def _open_exact_file(
     expected_nlink: int = 1,
 ) -> tuple[int, bytes]:
     directory.ensure_live()
-    descriptor = os.open(
-        name,
-        os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK,
-        dir_fd=directory.descriptor,
-    )
+    try:
+        descriptor = os.open(
+            name,
+            os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK,
+            dir_fd=directory.descriptor,
+        )
+    except FileNotFoundError:
+        directory.ensure_live()
+        raise
     try:
         metadata = os.fstat(descriptor)
         path_metadata = os.stat(
@@ -1696,7 +1179,7 @@ def _open_exact_file(
             or metadata.st_size <= 0
             or metadata.st_size > maximum
         ):
-            raise OSError(errno.EPERM, "unsafe immutable file")
+            raise _ImmutableEvidenceConflict("unsafe immutable file")
         chunks: list[bytes] = []
         remaining = metadata.st_size
         while remaining:
@@ -1717,11 +1200,13 @@ def _open_exact_file(
             )
             != identity
         ):
-            raise OSError(errno.EBUSY, "immutable file changed")
+            raise _ImmutableEvidenceConflict("immutable file changed")
         directory.ensure_live()
         return descriptor, b"".join(chunks)
-    except Exception:
-        os.close(descriptor)
+    except BaseException as error:
+        _close_capture_resources_v1((descriptor,), active_failure=error)
+        if isinstance(error, FileNotFoundError):
+            raise _ImmutableEvidenceConflict("immutable file changed") from None
         raise
 
 
@@ -1748,7 +1233,10 @@ def _require_publication_name(
 ) -> None:
     directory.ensure_live()
     held = os.fstat(descriptor)
-    named = os.stat(name, dir_fd=directory.descriptor, follow_symlinks=False)
+    try:
+        named = os.stat(name, dir_fd=directory.descriptor, follow_symlinks=False)
+    except FileNotFoundError:
+        raise _ImmutableEvidenceConflict("publication identity changed") from None
     if (
         _publication_identity(held) != _publication_identity(named)
         or not stat.S_ISREG(held.st_mode)
@@ -1757,7 +1245,7 @@ def _require_publication_name(
         or held.st_nlink != 1
         or held.st_size != expected_size
     ):
-        raise OSError(errno.EBUSY, "publication identity changed")
+        raise _ImmutableEvidenceConflict("publication identity changed")
 
 
 def _read_held_exact_file(
@@ -1801,11 +1289,15 @@ def _open_recoverable_publication(
     maximum: int,
 ) -> tuple[int, bytes, int]:
     directory.ensure_live()
-    descriptor = os.open(
-        name,
-        os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK,
-        dir_fd=directory.descriptor,
-    )
+    try:
+        descriptor = os.open(
+            name,
+            os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK,
+            dir_fd=directory.descriptor,
+        )
+    except FileNotFoundError:
+        directory.ensure_live()
+        raise
     try:
         held = os.fstat(descriptor)
         mode = stat.S_IMODE(held.st_mode)
@@ -1816,7 +1308,7 @@ def _open_recoverable_publication(
             or held.st_nlink != 1
             or not 1 <= held.st_size <= maximum
         ):
-            raise OSError(errno.EBUSY, "publication is unsafe")
+            raise _ImmutableEvidenceConflict("publication is unsafe")
         raw = _read_held_exact_file(
             directory,
             name,
@@ -1825,8 +1317,8 @@ def _open_recoverable_publication(
             expected_mode=mode,
         )
         return descriptor, raw, mode
-    except Exception:
-        os.close(descriptor)
+    except BaseException as error:
+        _close_capture_resources_v1((descriptor,), active_failure=error)
         raise
 
 
@@ -1851,7 +1343,7 @@ class _HeldRecoverablePublication:
             expected_mode=self.mode,
         )
         if exact != self.content:
-            raise OSError(errno.EIO, "publication readback failed")
+            raise _ImmutableEvidenceConflict("publication readback failed")
 
     def commit(self) -> None:
         if self.mode == 0o600:
@@ -1866,7 +1358,10 @@ class _HeldRecoverablePublication:
             self.ensure_exact()
 
     def close(self) -> None:
-        os.close(self.descriptor)
+        descriptor = self.descriptor
+        self.descriptor = -1
+        if descriptor >= 0:
+            os.close(descriptor)
 
 
 def _hold_recoverable_publication(
@@ -1879,13 +1374,17 @@ def _hold_recoverable_publication(
         name,
         maximum,
     )
-    return _HeldRecoverablePublication(
-        directory,
-        name,
-        descriptor,
-        content,
-        mode,
-    )
+    try:
+        return _HeldRecoverablePublication(
+            directory,
+            name,
+            descriptor,
+            content,
+            mode,
+        )
+    except BaseException as error:
+        _close_capture_resources_v1((descriptor,), active_failure=error)
+        raise
 
 
 def _commit_held_publication(
@@ -1906,7 +1405,7 @@ def _commit_held_publication(
         expected_mode=0o600,
     )
     if exact != content:
-        raise OSError(errno.EIO, "publication readback failed")
+        raise _ImmutableEvidenceConflict("publication readback failed")
     os.fchmod(descriptor, 0o400)
     os.fsync(descriptor)
     directory.ensure_live()
@@ -1918,7 +1417,7 @@ def _commit_held_publication(
         len(content),
     )
     if exact != content:
-        raise OSError(errno.EIO, "publication commit readback failed")
+        raise _ImmutableEvidenceConflict("publication commit readback failed")
 
 
 def _recover_publication(
@@ -1934,9 +1433,9 @@ def _recover_publication(
         )
     except FileNotFoundError:
         return False
-    try:
+    with _capture_resource_scope_v1((descriptor,)):
         if existing != content:
-            raise OSError(errno.EEXIST, "immutable content conflict")
+            raise _ImmutableEvidenceConflict("immutable content conflict")
         if mode == 0o600:
             _commit_held_publication(directory, name, descriptor, content)
         else:
@@ -1951,13 +1450,11 @@ def _recover_publication(
                 len(content),
             )
             if exact != content:
-                raise OSError(errno.EIO, "publication recovery readback failed")
+                raise _ImmutableEvidenceConflict("publication recovery readback failed")
         return True
-    finally:
-        os.close(descriptor)
 
 
-def _prepare_publication(
+def prepare_capture_publication(
     operation: StorageRootLeaseOperation,
     directory: _PrivateDirectory,
     name: str,
@@ -1992,16 +1489,16 @@ def _prepare_publication(
             )
             held.ensure_exact()
             return held
-        except Exception:
-            os.close(descriptor)
+        except BaseException as error:
+            _close_capture_resources_v1((descriptor,), active_failure=error)
             raise
     if held.content != content:
-        held.close()
-        raise OSError(errno.EEXIST, "immutable content conflict")
+        with _capture_resource_scope_v1((held,)):
+            raise _ImmutableEvidenceConflict("immutable content conflict")
     return held
 
 
-def _publish_bytes(
+def publish_capture_bytes(
     operation: StorageRootLeaseOperation,
     directory: _PrivateDirectory,
     name: str,
@@ -2017,7 +1514,7 @@ def _publish_bytes(
         0o600,
         dir_fd=directory.descriptor,
     )
-    try:
+    with _capture_resource_scope_v1((descriptor,)):
         view = memoryview(content)
         written = 0
         while written < len(view):
@@ -2027,11 +1524,9 @@ def _publish_bytes(
                 raise OSError(errno.EIO, "short write")
             written += count
         _commit_held_publication(directory, name, descriptor, content)
-    finally:
-        os.close(descriptor)
 
 
-def _read_exact_file(
+def read_exact_capture_file(
     operation: StorageRootLeaseOperation,
     directory: _PrivateDirectory,
     name: str,
@@ -2040,6 +1535,7 @@ def _read_exact_file(
     expected_mode: int = 0o400,
     expected_nlink: int = 1,
 ) -> bytes:
+    del operation
     descriptor, raw = _open_exact_file(
         directory,
         name,
@@ -2047,7 +1543,7 @@ def _read_exact_file(
         expected_mode=expected_mode,
         expected_nlink=expected_nlink,
     )
-    os.close(descriptor)
+    _close_capture_resources_v1((descriptor,), active_failure=None)
     return raw
 
 
@@ -2058,92 +1554,6 @@ def _pointer_bytes(request_identity_sha256: str, revision_sha256: str) -> bytes:
             "revision_sha256": revision_sha256,
         }
     )
-
-
-def _publish_prepared_revision(
-    operation: StorageRootLeaseOperation,
-    prepared: _PrivateDirectory,
-    revision: AdjustedOhlcvCaptureRevisionV1,
-) -> None:
-    _publish_bytes(
-        operation,
-        prepared,
-        f"{revision.request_identity_sha256}.json",
-        revision.canonical_json_bytes(),
-    )
-
-
-def _publish_revision(
-    operation: StorageRootLeaseOperation,
-    revisions: _PrivateDirectory,
-    revision: AdjustedOhlcvCaptureRevisionV1,
-) -> None:
-    _publish_bytes(
-        operation,
-        revisions,
-        f"{revision.revision_sha256}.json",
-        revision.canonical_json_bytes(),
-    )
-
-
-def _publish_request_pointer(
-    operation: StorageRootLeaseOperation,
-    requests: _PrivateDirectory,
-    revisions: _PrivateDirectory,
-    request: CaptureForwardAdjustedOhlcvRequestV1,
-    revision: AdjustedOhlcvCaptureRevisionV1,
-) -> None:
-    requested_pointer = (
-        revision.revision_sha256,
-        _prepare_publication(
-            operation,
-            requests,
-            f"{request.request_identity_sha256}.json",
-            _pointer_bytes(request.request_identity_sha256, revision.revision_sha256),
-        ),
-    )
-    admitted, held_pointers, held_revisions = _validated_admission_chain(
-        operation,
-        requests,
-        revisions,
-        revision.revision_sha256,
-        requested_pointer=requested_pointer,
-    )
-    try:
-        if admitted != revision or not _revision_matches_request(request, admitted):
-            raise OSError(errno.EINVAL, "request pointer invalid")
-        operation.ensure_live()
-        requests.ensure_live()
-        revisions.ensure_live()
-        for held_revision in held_revisions:
-            held_revision.ensure_exact()
-        for held_pointer in held_pointers:
-            held_pointer.ensure_exact()
-        requested_pointer[1].commit()
-        for held_revision in held_revisions:
-            held_revision.ensure_exact()
-        for held_pointer in held_pointers:
-            held_pointer.ensure_exact()
-    finally:
-        for held_pointer in held_pointers:
-            held_pointer.close()
-        for held_revision in held_revisions:
-            held_revision.close()
-
-
-def _revalidate_request_pointer(
-    requests: _PrivateDirectory,
-    request_identity_sha256: str,
-    revision_sha256: str,
-) -> None:
-    name = f"{request_identity_sha256}.json"
-    expected = _pointer_bytes(request_identity_sha256, revision_sha256)
-    descriptor, raw = _open_exact_file(requests, name, len(expected))
-    try:
-        if raw != expected:
-            raise OSError(errno.EBUSY, "request pointer changed")
-    finally:
-        os.close(descriptor)
 
 
 def _open_pointer_revision(
@@ -2175,18 +1585,18 @@ def _open_pointer_revision(
         ):
             raise ValueError
         return cast(str, revision_sha256), held
-    except (json.JSONDecodeError, TypeError, ValueError):
-        held.close()
-        raise OSError(errno.EINVAL, "request pointer invalid") from None
-    except Exception:
-        held.close()
+    except (json.JSONDecodeError, TypeError, ValueError) as error:
+        _close_capture_resources_v1((held,), active_failure=error)
+        raise _ImmutableEvidenceConflict("request pointer invalid") from None
+    except BaseException as error:
+        _close_capture_resources_v1((held,), active_failure=error)
         raise
 
 
 def _raise_admission_failure(is_requested: bool, message: str) -> NoReturn:
     if not is_requested:
         raise _CorrectionAncestorUnavailable
-    raise OSError(errno.EINVAL, message)
+    raise _ImmutableEvidenceConflict(message)
 
 
 def _open_admission_pointer(
@@ -2299,24 +1709,33 @@ def _validated_admission_chain(
             held_revisions.append(held_revision)
             _ensure_valid_revision_parent(child, parent)
             current = parent
-    except Exception:
-        for pointer in held_pointers:
-            pointer.close()
-        for held_revision in held_revisions:
-            held_revision.close()
+    except BaseException as error:
+        _close_capture_resources_v1(
+            chain(held_pointers, held_revisions), active_failure=error
+        )
         raise
 
 
-def _read_request_revision(
+def _read_request_revision(  # noqa: C901 - bounded immutable-admission transaction
     operation: StorageRootLeaseOperation,
     requests: _PrivateDirectory,
     revisions: _PrivateDirectory,
     request: CaptureForwardAdjustedOhlcvRequestV1,
+    *,
+    request_identity_sha256: str | None = None,
+    writer_identity: str | None = None,
 ) -> AdjustedOhlcvCaptureRevisionV1 | None:
+    if (request_identity_sha256 is None) != (writer_identity is None):
+        raise ValueError("request pointer identity is invalid")
+    pointer_identity = (
+        request.request_identity_sha256
+        if request_identity_sha256 is None
+        else request_identity_sha256
+    )
     requested_pointer = _open_pointer_revision(
         operation,
         requests,
-        request.request_identity_sha256,
+        pointer_identity,
         allow_uncommitted=True,
     )
     if requested_pointer is None:
@@ -2329,9 +1748,15 @@ def _read_request_revision(
         revision_sha256,
         requested_pointer=requested_pointer,
     )
-    try:
-        if not _revision_matches_request(request, revision):
-            raise OSError(errno.EINVAL, "request pointer invalid")
+    with _capture_resource_scope_v1(chain(held_pointers, held_revisions)):
+        matches = (
+            _revision_matches_request(request, revision)
+            if writer_identity is None
+            else revision.runtime_code_identity_sha256 == writer_identity
+            and _revision_matches_compatible_request_v1(request, revision)
+        )
+        if not matches:
+            raise _ImmutableEvidenceConflict("request pointer invalid")
         operation.ensure_live()
         requests.ensure_live()
         revisions.ensure_live()
@@ -2339,17 +1764,34 @@ def _read_request_revision(
             held_revision.ensure_exact()
         for pointer in held_pointers:
             pointer.ensure_exact()
-        requested_pointer[1].commit()
+        if requested_pointer[1].mode != 0o400:
+            return None
         for held_revision in held_revisions:
             held_revision.ensure_exact()
         for pointer in held_pointers:
             pointer.ensure_exact()
         return revision
-    finally:
-        for pointer in held_pointers:
-            pointer.close()
-        for held_revision in held_revisions:
-            held_revision.close()
+
+
+def _read_compatible_request_revision_v1(
+    operation: StorageRootLeaseOperation,
+    requests: _PrivateDirectory,
+    revisions: _PrivateDirectory,
+    request: CaptureForwardAdjustedOhlcvRequestV1,
+) -> AdjustedOhlcvCaptureRevisionV1 | None:
+    for writer_identity in sorted(_COMPATIBLE_WRITER_RUNTIME_IDENTITIES_V1):
+        request_identity = _request_identity_for_writer_v1(request, writer_identity)
+        revision = _read_request_revision(
+            operation,
+            requests,
+            revisions,
+            request,
+            request_identity_sha256=request_identity,
+            writer_identity=writer_identity,
+        )
+        if revision is not None:
+            return revision
+    return None
 
 
 def _read_prepared_revision(
@@ -2375,11 +1817,17 @@ def _read_prepared_revision(
         ):
             raise ValueError
         return revision, held
-    except (json.JSONDecodeError, KeyError, TypeError, ValueError):
-        held.close()
-        raise OSError(errno.EINVAL, "prepared revision invalid") from None
-    except Exception:
-        held.close()
+    except (
+        json.JSONDecodeError,
+        KeyError,
+        RecursionError,
+        TypeError,
+        ValueError,
+    ) as error:
+        _close_capture_resources_v1((held,), active_failure=error)
+        raise _ImmutableEvidenceConflict("prepared revision invalid") from None
+    except BaseException as error:
+        _close_capture_resources_v1((held,), active_failure=error)
         raise
 
 
@@ -2395,23 +1843,136 @@ def _read_admitted_revision(
         revisions,
         revision_sha256,
     )
-    try:
+    with _capture_resource_scope_v1(chain(held_pointers, held_revisions)):
         return requested
-    finally:
-        for pointer in held_pointers:
-            pointer.close()
-        for held_revision in held_revisions:
-            held_revision.close()
 
 
-def _acquire_existing_private_lease(store_root: Path) -> StorageRootLease | None:
-    root_identity = StorageRootLease.admit_existing_private_identity(store_root)
+def _ensure_historical_read_state(
+    operation: StorageRootLeaseOperation,
+    revisions: _PrivateDirectory,
+    requests: _PrivateDirectory,
+    prepared: _PrivateDirectory,
+    request: CaptureForwardAdjustedOhlcvRequestV1,
+    parent: AdjustedOhlcvCaptureRevisionV1 | None,
+) -> None:
+    operation.ensure_live()
+    revisions.ensure_live()
+    requests.ensure_live()
+    prepared.ensure_live()
+    if parent is None:
+        return
+    admitted = _read_admitted_revision(
+        operation, requests, revisions, parent.revision_sha256
+    )
+    if admitted != parent or not _valid_correction_parent(request, admitted):
+        raise _ImmutableEvidenceConflict("correction parent is no longer admitted")
+
+
+def _admit_existing_private_empty_store_v1(store_root: Path) -> bool:
+    try:
+        descriptor = lease_core._open_directory_without_symlink_components(  # pyright: ignore[reportPrivateUsage]
+            store_root
+        )
+        with _capture_resource_scope_v1((descriptor,)):
+            metadata = os.fstat(descriptor)
+            if not stat.S_ISDIR(metadata.st_mode):
+                raise lease_core.StorageRootLeaseError
+            lease_core._assert_private_empty_root(  # pyright: ignore[reportPrivateUsage]
+                store_root, descriptor, metadata
+            )
+    except (OSError, lease_core.StorageRootLeaseError):
+        return False
+    return True
+
+
+def _acquire_existing_private_lease(
+    store_root: Path, *, _expected_root_identity: tuple[int, int] | None = None
+) -> StorageRootLease | None:
+    root_identity = _expected_root_identity or (
+        StorageRootLease.admit_existing_private_identity(store_root)
+    )
     if root_identity is None:
         return None
     result = StorageRootLease.try_acquire_existing_identity(store_root, root_identity)
     if result.outcome is not LeaseOutcome.ACQUIRED:
         return None
     return result.lease
+
+
+def read_capture_forward_request_revision_v1(  # noqa: C901 - one exact read
+    store_root: Path,
+    request: CaptureForwardAdjustedOhlcvRequestV1,
+    *,
+    _expected_root_identity: tuple[int, int] | None = None,
+) -> AdjustedOhlcvCaptureRevisionV1 | None:
+    """Read-validate one request's immutable store state without creating it."""
+    _validate_historical_request_identity_v1(request)
+
+    if not _valid_absolute_path(store_root):
+        raise ValueError("request revision read is invalid")
+    directories: list[_PrivateDirectory | None] = [None, None, None]
+    lease = _acquire_existing_private_lease(
+        store_root, _expected_root_identity=_expected_root_identity
+    )
+    if lease is None:
+        if _admit_existing_private_empty_store_v1(store_root):
+            return None
+        raise OSError(errno.EBUSY, "capture store unavailable")
+    try:
+        with (
+            _capture_resource_scope_v1(chain(directories, (lease,))),
+            lease.read_operation(store_root) as operation,
+        ):
+            for index, name in enumerate(("revisions", "requests", "prepared")):
+                with suppress(FileNotFoundError):
+                    directories[index] = _open_private_directory(
+                        operation, operation.descriptor, name, create=False
+                    )
+            if all(directory is None for directory in directories):
+                return None
+            if any(directory is None for directory in directories):
+                raise _ImmutableEvidenceConflict("capture store state incomplete")
+            revisions, requests, prepared = cast(
+                tuple[_PrivateDirectory, _PrivateDirectory, _PrivateDirectory],
+                tuple(directories),
+            )
+            existing = _read_request_revision(
+                operation,
+                requests,
+                revisions,
+                request,
+            )
+            if existing is None:
+                existing = _read_compatible_request_revision_v1(
+                    operation,
+                    requests,
+                    revisions,
+                    request,
+                )
+            parent: AdjustedOhlcvCaptureRevisionV1 | None = None
+            if request.parent_revision_sha256 is not None:
+                parent = _read_admitted_revision(
+                    operation, requests, revisions, request.parent_revision_sha256
+                )
+                if not _valid_correction_parent(request, parent):
+                    raise _ImmutableEvidenceConflict("correction parent invalid")
+            _ensure_historical_read_state(
+                operation, revisions, requests, prepared, request, parent
+            )
+            if existing is not None:
+                return existing
+            prepared_recovery = _read_prepared_revision(
+                operation, prepared, request.request_identity_sha256
+            )
+            if prepared_recovery is None:
+                return None
+            recovered, held_prepared = prepared_recovery
+            with _capture_resource_scope_v1((held_prepared,)):
+                if not _revision_matches_request(request, recovered):
+                    raise _ImmutableEvidenceConflict("prepared revision invalid")
+                return None
+    except _ImmutableEvidenceConflict:
+        raise ValueError("request revision evidence conflict") from None
 
 
 def read_capture_forward_revision_v1(
@@ -2425,30 +1986,25 @@ def read_capture_forward_revision_v1(
     if lease is None:
         raise ValueError("capture revision unavailable")
     try:
-        with lease.read_operation(store_root) as operation:
-            revisions = _open_private_directory(
+        with (
+            _capture_resource_scope_v1((lease,)),
+            lease.read_operation(store_root) as operation,
+            _open_private_directory(
                 operation, operation.descriptor, "revisions", create=False
+            ) as revisions,
+            _open_private_directory(
+                operation, operation.descriptor, "requests", create=False
+            ) as requests,
+        ):
+            revision = _read_admitted_revision(
+                operation, requests, revisions, revision_sha256
             )
-            requests: _PrivateDirectory | None = None
-            try:
-                requests = _open_private_directory(
-                    operation, operation.descriptor, "requests", create=False
-                )
-                revision = _read_admitted_revision(
-                    operation, requests, revisions, revision_sha256
-                )
-                operation.ensure_live()
-                requests.ensure_live()
-                revisions.ensure_live()
-                return revision
-            finally:
-                if requests is not None:
-                    requests.close()
-                revisions.close()
-    except OSError:
+            operation.ensure_live()
+            requests.ensure_live()
+            revisions.ensure_live()
+            return revision
+    except (OSError, _ImmutableEvidenceConflict):
         raise ValueError("capture revision unavailable") from None
-    finally:
-        lease.close()
 
 
 def _hold_revision_descriptor(
@@ -2472,28 +2028,18 @@ def _hold_revision_descriptor(
         ):
             raise ValueError
         return revision, held
-    except (json.JSONDecodeError, KeyError, TypeError, ValueError):
-        held.close()
-        raise OSError(errno.EINVAL, "capture revision invalid") from None
-    except Exception:
-        held.close()
+    except (
+        json.JSONDecodeError,
+        KeyError,
+        RecursionError,
+        TypeError,
+        ValueError,
+    ) as error:
+        _close_capture_resources_v1((held,), active_failure=error)
+        raise _ImmutableEvidenceConflict("capture revision invalid") from None
+    except BaseException as error:
+        _close_capture_resources_v1((held,), active_failure=error)
         raise
-
-
-def _read_revision_descriptor(
-    operation: StorageRootLeaseOperation,
-    revisions: _PrivateDirectory,
-    revision_sha256: str,
-) -> AdjustedOhlcvCaptureRevisionV1:
-    revision, held = _hold_revision_descriptor(
-        operation,
-        revisions,
-        revision_sha256,
-    )
-    try:
-        return revision
-    finally:
-        held.close()
 
 
 def _revision_from_value(value: object) -> AdjustedOhlcvCaptureRevisionV1:
@@ -2614,32 +2160,27 @@ def compose_capture_forward_plan29_v1(
     if lease is None:
         raise ValueError("capture-forward composition is invalid")
     try:
-        with lease.read_operation(store_root) as operation:
-            revisions = _open_private_directory(
+        with (
+            _capture_resource_scope_v1((lease,)),
+            lease.read_operation(store_root) as operation,
+            _open_private_directory(
                 operation, operation.descriptor, "revisions", create=False
+            ) as revisions,
+            _open_private_directory(
+                operation, operation.descriptor, "requests", create=False
+            ) as requests,
+        ):
+            captures = tuple(
+                _read_admitted_revision(operation, requests, revisions, revision_sha256)
+                for revision_sha256 in revision_sha256s
             )
-            requests: _PrivateDirectory | None = None
-            try:
-                requests = _open_private_directory(
-                    operation, operation.descriptor, "requests", create=False
-                )
-                captures = tuple(
-                    _read_admitted_revision(
-                        operation, requests, revisions, revision_sha256
-                    )
-                    for revision_sha256 in revision_sha256s
-                )
-                operation.ensure_live()
-                requests.ensure_live()
-                revisions.ensure_live()
-            finally:
-                if requests is not None:
-                    requests.close()
-                revisions.close()
-    except (OSError, RuntimeError):
+            operation.ensure_live()
+            requests.ensure_live()
+            revisions.ensure_live()
+    except _CaptureCleanupFailureV1:
+        raise
+    except (OSError, RuntimeError, _ImmutableEvidenceConflict):
         raise ValueError("capture-forward composition is invalid") from None
-    finally:
-        lease.close()
     return _compose_capture_forward_plan29_from_revisions_v1(
         captures, regions=regions, evaluated_at=evaluated_at
     )
@@ -2687,8 +2228,6 @@ def _compose_capture_forward_plan29_from_revisions_v1(  # noqa: C901
         or capture.price_basis != first.price_basis
         or capture.volume_basis != first.volume_basis
         or capture.schedule.schedule_source != first.schedule.schedule_source
-        or capture.schedule.schedule_source_release
-        != first.schedule.schedule_source_release
         or capture.configuration_identity_sha256 != first.configuration_identity_sha256
         or capture.decision_cutoff > evaluated
         for capture in captures
@@ -2725,6 +2264,18 @@ def _compose_capture_forward_plan29_from_revisions_v1(  # noqa: C901
             {
                 "capture_source_identities": [
                     capture.source_identity_sha256 for capture in captures
+                ],
+                "schedule_lineage": [
+                    {
+                        "schedule_identity_sha256": (
+                            capture.schedule.schedule_identity_sha256
+                        ),
+                        "schedule_source": capture.schedule.schedule_source,
+                        "schedule_source_release": (
+                            capture.schedule.schedule_source_release
+                        ),
+                    }
+                    for capture in captures
                 ],
                 "composer_runtime_code_identity_sha256": composer_runtime,
                 "price_basis": ADJUSTED_PRICE_BASIS_V1,

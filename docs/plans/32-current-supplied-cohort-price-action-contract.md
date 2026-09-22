@@ -1,9 +1,30 @@
 # Plan 32: current supplied-cohort Price Action contract
 
+> Harness portability: historical named-model review choices below record the
+> original delivery. New work follows the [canonical agent policy](../mandatory-agent-instructions.md)
+> and [portable review procedure](../agent-workflow.md); independent exact-byte
+> review and every product acceptance criterion remain required.
+
 **Issue:** [#152](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/152)  
 **Status:** accepted implementation contract  
 **Risk:** R3  
 **Contract:** `current-supplied-cohort-price-action@v1`
+
+## Independent current-research successor — Issue 186
+
+[Issue #186](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/186),
+the first working child of #172, reuses the delivered Plan30 BharatStock
+two-session Price Action projection through a new public orchestration/result
+contract. It is not yet released and does not change this plan's exact Upstox
+raw/Plan-21/Market-Structure-bound V1 report or claim those guarantees for
+source-reported BharatStock prices.
+
+The new command's required evidence is its canonical equity mapping, official
+completed sessions and admitted source-reported capture. Its feature-local
+Price Action can be observed while the legacy enclosing packet lacks Structure
+history. Separate single-candle/cross-session and integrated requirement
+decomposition remains governed by #187; stronger historical, price-integrity,
+qualification and trade-readiness requirements are not removed.
 
 ## Authority and outcome
 
@@ -19,46 +40,19 @@ This contract resolves two independent Sol/high decision passes. The selected de
 4. **Smallest alternative:** one pure S19/S20 evaluator over the existing exact raw grid, Plan-21 screen, and exact Market Structure result; no source, store, scheduler, score, or transport.
 5. **Decision:** **accepted** for the Sprint 19 first working slice with the rules and matrix below frozen before implementation.
 
-## Reference-repository validation
+## Withdrawn reference-repository disposition — 2026-09-08
 
-After the contract freeze, the owner-requested read-only review inspected the
-named local reference checkouts under
-[the repository rules](../reference-repositories.md):
-`genie-market-intelligence`, its migrated duplicate `fundamental-analysis`,
-`swing_trading_scanner`, and `smc_analysis`. They were used only to challenge
-ideas and logic. No reference code, implementation, architecture, threshold,
-or trading claim was copied or adopted; this project's contract, code, and
-tests remain independently specified and implemented.
-Crypto, futures, options, intraday, derivative-strategy, and execution-specific
-assumptions were classified as irrelevant and excluded even when adjacent code
-contained a potentially useful generic price-mechanics idea.
+On 2026-09-08, the owner withdrew the external trading-repository references
+previously used in this section. The prior review remains a historical delivery
+record, but it is superseded for current and future work by the
+[independent research logic policy](../mandatory-agent-instructions.md#independent-research-logic).
+External trading implementations do not validate this contract or guide future
+study.
 
-The review found **no Sprint 19 blocker**:
-
-- `candlestick_engine.py` in the genie/fundamental checkouts independently uses
-  `abs(C-O)`, `H-max(O,C)`, and `min(O,C)-L`; this corroborates the basic idea
-  behind direct geometry, while Plan 32 independently defines exact Decimal
-  arithmetic, the geometry invariant, completed-session admission,
-  price-basis and corporate-action controls, and canonical identities;
-- the earlier scanner distinguishes close-to-close movement and candle
-  movement, supporting the idea of separate S19-close-to-S20-open and
-  S19-close-to-S20-close facts, but its hard-coded scores and unqualified
-  signal claims were rejected;
-- previous-high/low, inside/outside, doji, hammer, engulfing, and chart-pattern
-  logic depends on strictness choices, percentage or absolute tolerances,
-  context windows, and unproven efficacy, so it remains later Price Action
-  work; and
-- `smc_analysis` confirms that FVG lifecycle, equal-level pools, sweeps,
-  order-block candidates, and multi-timeframe alignment belong to a dedicated
-  Liquidity/SMC contract. Its same-confirmation-bar structure breaks,
-  wick-based dual-break tie handling, reusable broken levels, float
-  thresholds, partial-bar stitching, mutable caches, and unsupported
-  backtest/execution assumptions were explicitly rejected.
-
-Future SMC study may separately evaluate provenance-bound FVG lifecycle,
-confirmed equal-high/low pools, sweep/reclaim facts, order-block lifecycle, and
-complete-bar multi-timeframe alignment. None enters or blocks this
-threshold-free Price Action slice.
+The independently specified S19/S20 calculation, admission boundary, runtime
+contract, historical delivery, and necessary-only non-goals below remain
+unchanged. This disposition introduces no new runtime behavior or Liquidity/SMC
+feature.
 
 ## Working-feature-first partition
 
@@ -348,3 +342,12 @@ Implementation begins with discriminating failing checks for the frozen matrix. 
 The bounded retained-current smoke is time-independent with respect to market hours: during an active session it may use the prior completed official session; after close it may use the current date only after the delivered schedule and raw-grid boundaries admit the completed bar. Missing admissible retained evidence blocks only that smoke and Sprint 19 closure. It does not block deterministic implementation, review preparation, Sprint 17 captures, or unrelated work.
 
 Final acceptance requires the applicable repository format, lint, type, dead-code, focused, full-suite, coverage, diff, build, installed-wheel/runtime, hosted CI, and GitGuardian gates; independent Sol/high exact-byte functional/domain and security/privacy/provenance reviews; an exact reviewed revision; PR; and merge. Any review finding must cite a violated current acceptance condition or concrete current safety, correctness, usability, authorization, privacy, or evidence-integrity failure to block this slice. All other improvements are recorded separately and deferred.
+
+**Historical routing supersession — Issue #168 (2026-09-05), superseded for new work by Issue #170:** at that time, for new review assignments, the Sol/high model requirement in the preceding paragraph is superseded by Astra/high under the [OMP routing decision](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/168). Review independence, exact-byte evidence, all other acceptance gates, and the historical Sol decision evidence above remain unchanged. Current assignments and provider-blocked reviews follow the [canonical capability and provider boundaries](../mandatory-agent-instructions.md#capability-and-responsibility-selection).
+
+## Issue #187 successor crosswalk
+
+BharatStock V2 decomposes current-candle geometry from previous-close comparison
+so one admitted completed bar remains observable when a previous session is
+unavailable. This is a distinct source-specific successor and does not modify
+Plan-32 V1 Price Action inputs, bytes, readers, terminology or suppression.

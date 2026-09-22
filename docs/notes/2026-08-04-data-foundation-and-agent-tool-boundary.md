@@ -7,8 +7,8 @@ Status: superseded in part; current boundary recorded on 2026-08-07
 
 The project was reframed from a conventional Python trading script into a
 research tool that any AI-agent harness can consume for Nifty 50 equity swing
-trading. We also examined prior trading repositories, ExpiryTrack, its existing
-DuckDB market data, and current Upstox historical-data capabilities.
+trading. Earlier external-source review and current Upstox historical-data
+capabilities informed the initial data-foundation discussion.
 
 ## Accepted direction
 
@@ -18,11 +18,11 @@ DuckDB market data, and current Upstox historical-data capabilities.
 - The v1 universe, downloader, persisted datasets, and research pipeline remain
   point-in-time Nifty 50 equities. Non-equity ingestion is not part of the
   current platform or roadmap.
-- The accepted replacement for the earlier ExpiryTrack ownership idea is an
+- The accepted replacement for an earlier external-data migration proposal is an
   installable equity data package in this repository with configurable shared
-  storage. ExpiryTrack remains read-only reference material.
-- Existing trading repositories are references for concepts and lessons, not
-  sources for copy-pasted implementation.
+  storage. That migration is rejected and has no active work.
+- Research logic follows the canonical [independent research logic
+  policy](../mandatory-agent-instructions.md#independent-research-logic).
 - Missing or weak evidence and `NO_TRADE` are valid outcomes, not failures that
   an AI should fill with speculation.
 
@@ -31,11 +31,6 @@ These decisions are reflected in `docs/architecture-freeze-v1.md` and
 
 ## Durable research findings
 
-- ExpiryTrack's existing DuckDB contains index and derivative reference data but
-  no Nifty 50 constituent equity candles; it is not an approved current data
-  source for this tool.
-- Its legacy schema is derivative-specific and represents spot instruments using
-  fake expiry metadata. Equities need a separate generalized schema.
 - Upstox Historical Candle Data V3 documents one-minute equity history from
   January 2022, requested in monthly windows for 1–15 minute intervals.
 - Raw one-minute bars should remain immutable. Higher timeframes should be
@@ -77,12 +72,10 @@ derivative, forex, crypto, and other adapters are not approved. Market regime,
 strategies, backtesting, and agent integration remain deferred until the equity
 data package is complete.
 
-ExpiryTrack's existing database is not an equity source because it has no
-constituent-stock candles. The accepted data design is a clean installable equity
-market-data package in this repository, with immutable monthly Parquet partitions
-as the canonical candle store and DuckDB as the catalog and query engine.
-ExpiryTrack remains a read-only reference, not a scheduled NIFTY/India VIX
-source.
+The accepted data design is a clean installable equity market-data package in
+this repository, with immutable monthly Parquet partitions as the canonical
+candle store and DuckDB as the catalog and query engine. The earlier
+external-data migration remains superseded and is not an active task.
 
 Performance, scalability, and maintainability are accepted release gates. The
 pipeline must use bounded concurrency and memory, immutable instrument-month
@@ -109,12 +102,9 @@ Upstox master catalog, calls Historical Candle V3, validates the seven-field
 candle shape in memory, and emits only status, row count, first/last timestamp,
 and a schema-valid flag. It contains no candle-storage dependency or write path.
 
-ExpiryTrack commit `e937fedc42465df72932818ef4d2c1481f755965` informed the
-review of HTTP lifecycle, throttling, and response-shape risks. No implementation
-was copied. Its older active-instrument route and SQLite credential design were
-rejected for this probe in favor of the documented V3 route. The initially built
-macOS Keychain provider was subsequently removed by the accepted portable
-credential decision below.
+An earlier external implementation review was not adopted. The probe instead
+uses the documented V3 route. The initially built macOS Keychain provider was
+subsequently removed by the accepted portable credential decision below.
 
 The public Upstox NSE BOD catalog was successfully fetched and RELIANCE resolved
 to ISIN `INE002A01018`. The later credential-safe live gate used an ignored
@@ -223,47 +213,15 @@ Official references:
 - <https://upstox.com/developer/api-documentation/authentication/>
 - <https://upstox.com/developer/api-documentation/access-token-request/>
 
-## ExpiryTrack NIFTY and India VIX migration opportunity
+## Retired external-data migration
 
-Status: **superseded as an active roadmap item on 2026-08-07; retained as a
-read-only reference audit**
+Status: **superseded as an active roadmap item on 2026-08-07**
 
-The equity-only downloader-v1 boundary supersedes the proposed migration. Do not
-ingest these index or derivative records in the current roadmap. A future
-instrument module would require a new architecture decision, specification,
-point-in-time data and risk contracts, and independent validation. The remaining
-details preserve what was observed in the reference database; they are not an
-implementation instruction.
-
-A read-only audit of ExpiryTrack's `market_data.duckdb` on 2026-08-04 found a
-24 GB physical database with 168,481,043 rows in one canonical `market_data`
-table. The table has a primary key on `(expired_instrument_key, ts)` and exposes
-3m, 5m, 15m, 30m, 1h, and 1d timeframes as views rather than duplicate stored
-tables.
-
-The requested reusable subset is approximately 129,042,075 one-minute rows:
-
-- NIFTY spot: 167,376 rows;
-- NIFTY futures: 479,169 rows;
-- NIFTY calls: 62,916,160 rows;
-- NIFTY puts: 65,311,622 rows; and
-- India VIX spot: 167,748 rows.
-
-Observed coverage begins on 2024-07-12 for NIFTY options, 2024-08-02 for NIFTY
-futures, and 2024-08-13 for NIFTY spot and India VIX. NIFTY derivatives extend
-through 2026-07-28; spot and India VIX extend through 2026-07-31. These ranges
-must be treated as observed source coverage, not an unverified claim of complete
-exchange history.
-
-If a future approved module reopens this evidence, it should not copy the candles
-into a second row-oriented DuckDB table. Any migration design would need to open
-the source read-only, normalize its legacy schema under an approved
-instrument-specific contract, validate bounded partitions, and preserve
-immutable files, manifests, checksums, lineage, quality findings, and observed
-coverage.
-
-BANKNIFTY and SENSEX source downloads were observed as incomplete. Any future
-approved migration would still need to verify instrument identity, OHLC
-envelopes, session timestamps, expected coverage, volume and OI semantics,
-partition-level row reconciliation, and idempotent restart behavior before the
-source database could be considered imported.
+An earlier proposal to migrate external index and derivative data was rejected
+by the equity-only downloader-v1 boundary. It provides no current data source,
+implementation guidance, or active task. Its retained historical record remains
+evidence of that disposition, not a direction to reopen the migration. Any
+future instrument module requires its own architecture decision, specification,
+point-in-time data and risk contracts, and independent validation under the
+canonical [independent research logic
+policy](../mandatory-agent-instructions.md#independent-research-logic).

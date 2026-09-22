@@ -4,6 +4,12 @@ Status: **CANONICAL PROJECT ADAPTER**
 
 Owner: repository owner and product direction authority
 Governing Issue: [#163](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/163)
+Harness portability revision: [#170](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/170)
+Review-efficiency revision: [#174](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/174)
+Decision-retention revision: [#179](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/179)
+Interactive-responsiveness revision: [#194](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/194)
+
+This revision supersedes the OMP-only runtime, named-model routing, Herdr-only orchestration, and harness-specific session/permission choices in #163 and #168. Historical records retain their original evidence; their harness choices are not requirements for new work.
 
 These instructions apply to every task in this repository, including resumed work, discussion that becomes delivery work, and work that appears routine. Every agent MUST read and follow this file before planning, editing, delegation, or delivery. Prior-session familiarity, summaries, memories, and restored harness state do not substitute for the current file.
 
@@ -61,19 +67,65 @@ External temporal windows, future-session captures, retrospective point-in-time 
 
 Stop at the scope-expansion circuit breaker before adding an unplanned subsystem, persistence or replay model, attestation mechanism, provider, generalized abstraction, delivery surface, or threat model. Resume only when it is the least costly adequate correction for a current blocker or the owner explicitly changes scope.
 
-### 4. Use Herdr for multi-agent work and independent R3/R4 review
+### 4. Use accountable coordination and independent R3/R4 review
 
-When work genuinely needs multiple agents or independent R3/R4 review, use Herdr and follow [`docs/herdr-multi-agent-workflow.md`](herdr-multi-agent-workflow.md). Never substitute an invisible or generic subagent launcher.
+Use any available AI agent harness that can satisfy the task's controls, including Pi, Oh My Pi, Codex, or OpenCode. No harness, provider, terminal manager, model family, plugin, or global configuration file is mandatory. Follow [the portable agent workflow](agent-workflow.md) for capability selection, assignment, coordination, and review mechanics. Herdr is one optional implementation described in [its adapter](herdr-multi-agent-workflow.md).
 
-One coordinator owns interpretation, decomposition, cross-slice contracts, file ownership, shared-file serialization, integration, repository-wide gates, tracker changes, and delivery claims. Agents MUST NOT use nested delegation. Independent reviewers inspect stable exact bytes and do not mutate them.
+One coordinator owns interpretation, decomposition, cross-slice contracts, file ownership, shared-file serialization, integration, repository-wide gates, tracker changes, and delivery claims. Agents MUST NOT use nested delegation. Independent reviewers inspect stable exact bytes and do not mutate them. Native delegated agents, separate sessions, and qualified human reviewers are acceptable when identity, assignment, independence, complete results, and candidate immutability can be established. A writer's second pass is not independent review.
 
-After a complete result is captured and checked, close that reviewer or worker tab immediately when it is `idle` or `done`. Never close, interrupt, or replace an active `working`, `blocked`, or `unknown` agent for cleanup or timeboxing.
+An interactive coordinator MUST keep the foreground conversation responsive.
+Long-running delegated work is submitted asynchronously, after which the
+coordinator returns control instead of occupying the foreground with a lifecycle
+wait. Completion or attention is consumed through a supported host event or
+notification and then verified from authoritative lifecycle state and complete
+result evidence. Do not sleep, poll, inject synthetic user messages, or require a
+child to prompt the coordinator as a callback. A synchronous wait is allowed only
+in headless/non-interactive execution or for a bounded same-turn dependency that
+cannot delay user input.
 
-If Herdr is unavailable, continue single-agent work where proportionate and pause only the exact work whose risk tier requires unavailable independent agents.
+Personal use is not grounds to lower a change's risk tier, remove delivered or
+accepted future capabilities, weaken security or research integrity, or relax
+quality standards, acceptance criteria, reviewer roles, or applicable gates.
+Optimize repeated work, not these requirements.
+
+R3/R4 work requires both independent functional/domain and
+security/privacy/provenance reviews. Initial reviews cover the complete
+base-to-candidate change and its affected context. A correction MAY receive a
+bounded re-review only under all of these conditions:
+
+- The coordinator supplies one inspectable package with the original base,
+  previously reviewed and current commit/tree identities, complete original and
+  correction diffs, governing contracts, complete prior review results and
+  limitations, every finding's disposition, and observed verification evidence.
+- Prior full reviews are complete and valid for their stated scope. Their
+  findings and coverage may provide context, including a completed blocker
+  verdict, but no prior verdict or failed check becomes current approval.
+  Missing, interrupted, invalid or safety-refused review cannot supply the
+  required review baseline.
+- The correction's impact is justified through changed behavior, dependencies,
+  callers, generated artifacts, runtime identities, and trust boundaries.
+  Mechanically identified unchanged bytes support this analysis but do not
+  establish unchanged behavior or sufficient coverage by themselves.
+- Each required reviewer independently accepts the proposed scope, examines all
+  affected behavior and prior findings within their responsibility, and issues
+  a new verdict for the exact current candidate. The record identifies reused
+  context, newly examined scope, evidence limits, and unresolved blockers.
+  Approval requires coverage of the entire current accepted slice, not just
+  changed lines, and no unresolved current blocker.
+- Changed contracts or risks, broader effects, missing evidence, or uncertainty
+  require expanded review, up to the full candidate. If bounded scope cannot be
+  justified, full review remains required; reduced review is never mandatory.
+
+This changes review repetition, not review independence, final-revision
+accountability, provider safety boundaries, or the full accepted scope.
+
+After a complete result is captured and checked, close or release completed task-owned execution resources when the harness supports it. Retain durable review evidence. Never close, interrupt, or replace an active, blocked, or unknown agent for cleanup or timeboxing; a completed message alone does not prove a persistent task has stopped.
+
+If a required capability or independent reviewer is unavailable, continue authorized single-agent work where proportionate and pause only the dependent review, acceptance, or release. Do not claim a missing review passed or require installing a preferred harness merely to continue independent work.
 
 ### 5. Use bounded goal mode when available
 
-Attempt the harness's persistent `/goal` or equivalent by default for an implementation-ready bounded slice that benefits from uninterrupted execution. Goal mode may start only after the governing Issue and sources, first-working/later boundary, contracts, file ownership, risk and adversarial matrix, acceptance evidence, review ownership, non-goals, and pause conditions are frozen.
+Use the harness's persistent goal or equivalent continuation facility when available, permitted, and useful for an implementation-ready bounded slice that benefits from uninterrupted execution. Goal mode may start only after the governing Issue and sources, first-working/later boundary, contracts, file ownership, risk and adversarial matrix, acceptance evidence, review ownership, non-goals, and pause conditions are frozen.
 
 Goal mode grants continuity, not authority. It MUST pause at the next safe boundary for:
 
@@ -88,22 +140,50 @@ Goal mode grants continuity, not authority. It MUST pause at the next safe bound
 
 Resuming a goal requires rechecking tracker state, branch and working tree, material decisions, external prerequisites, and whether earlier evidence still applies. Never continue merely because the harness restored a session.
 
-Route goal work by responsibility:
-
-- Sol/high owns framing, architecture, market/source/evidence/security decisions, adversarial acceptance, and independent review.
-- Terra/high may implement only after contracts, ownership, failure rules, and checks are frozen. It pauses on consequential ambiguity and does not spawn agents.
+Route goal work through the [capability and responsibility rules](#capability-and-responsibility-selection) below. An implementation agent may implement only after contracts, ownership, failure rules, and checks are frozen. It pauses on consequential ambiguity and does not spawn agents.
 
 For R3/R4 evidence, persistence, revision, security, or state-transition contracts, freeze the adversarial matrix before implementation. Cover positive behavior, malformed/unsupported/insufficient/conflicting outcomes, bounds and limit-plus-one, combined-failure precedence, interruption/retry/rollback, provenance substitution, concurrency where applicable, historical compatibility, and external temporal or authority gates.
 
 If goal mode is unavailable or cannot preserve these controls, record the constraint and use the ordinary bounded workflow.
 
-### 6. Start every spawned agent and reviewer with routine permissions pre-approved
+### 6. Prepare task-scoped permissions within host controls
 
-Start OMP workers and reviewers in full-permission/yolo autonomous mode. Do not override the normal yolo mode with `write` or `always-ask` approval modes. Routine reads, searches, scoped edits, commands, tests, hashes, and read-only review MUST NOT stall on permission dialogs.
+Configure available permissions for already-authorized routine work before starting an assignment, within the host sandbox, account policy, and owner authority. Prefer scoped permissions sufficient for the task; no unrestricted, yolo, or other named mode is required. Avoid redundant confirmation for routine reads, searches, scoped edits, commands, tests, hashes, and review. Honor any mandatory host approval or access restriction; never disable a security control to eliminate a dialog.
 
 Permissions do not enlarge authority. Enforce read-only review through the assignment contract, any available reviewer-specific capability restriction, and immutable candidate evidence—not approval prompts. Every reviewer targets a clean committed candidate. The coordinator MUST perform pre-review and post-review checks of the full commit SHA, tree identity, and clean worktree; any mismatch or unexpected mutation invalidates the review and requires a fresh review after repair.
 
 Agents pause only for genuine blockers: unresolved owner decisions, credentials or protected effects, destructive or irreversible actions, scope expansion, release authority, unavailable external evidence, or another boundary named above.
+
+Missing or delayed tool/session state, a lifecycle artifact that appears only
+after startup input, and a routine approval dialog are operational conditions,
+not owner decisions. Inspect, wait, retry, restart, or use the documented
+no-work bootstrap; apply existing authorization to an in-scope routine
+dialog only where the host permits the agent to do so. Never ask the owner merely to authorize ordinary continuation.
+
+## Capability and responsibility selection
+
+**Task-based model selection (project application; official guidance checked 2026-09-21):** Select an available, authorized model and reasoning effort for the task's complexity, ambiguity, risk, integration surface, and verification needs. The [Models guide](https://learn.chatgpt.com/docs/models) describes Astra as strongest for complex multi-step tool work, Sol for complex or open-ended coding, research, and cybersecurity, Terra as balanced for everyday work, and Luna for clear, repeatable tasks. This project uses those descriptions as starting points, not compulsory roles or guarantees: Luna suits narrow mechanical work that is easily checked; Terra normal bounded engineering; Sol complex implementation, integration, or review; and Astra the hardest ambiguous or high-consequence reasoning. Every capable authorized model MAY implement within its assignment. An author never approves its own candidate.
+
+The [Subagents guide](https://learn.chatgpt.com/docs/agent-configuration/subagents) says child agents inherit the parent model and effort unless overridden; an explicit model without an effort uses that model's default, and host configuration defaults may apply. Use the default effort unless deeper analysis is needed; high suits complex review or edge cases, medium balanced work, and low straightforward work, with higher effort increasing latency and token use. The guide's Terra-reviewer and Luna-small-fixer examples illustrate possible assignments, not exclusive ownership. Its generic `gpt-5.6` alias does not establish an identity for Sol. Exact identifiers and supported efforts must be verified on the current host.
+
+Honor an explicit owner model choice when available. In Codex, make an explicit model or effort override only where the host and owner/project authority allow it; otherwise retain the inherited or configured default. Record requested or inherited settings separately from host-observed telemetry. Do not invent a model identity when telemetry is unavailable. These choices do not expand authority, replace required reviewer independence, permit nested delegation, or alter host restrictions. Model names, reasoning-setting names, session-log schemas, and provider prefixes are not portable requirements. Routine in-scope failures require diagnosis, bounded repair and retest. Pause only authority, safety, product, protected external-effect or release boundaries, and only the dependent work.
+
+| Responsibility | Required capability and boundary |
+|---|---|
+| Coordination and integration | Interpret authority, freeze scope and contracts, serialize shared work, verify evidence, and own final delivery claims. |
+| Consequential design or escalation | Reason about architecture, domain, source/evidence/security decisions and adversarial acceptance before implementation. |
+| Bounded implementation | Implement the frozen contract and focused checks; return consequential ambiguity to the coordinator. |
+| Independent functional/domain review | Assess the exact candidate and current acceptance/failure paths through full initial review or the qualified correction review above; report blockers with evidence and remain independent of the writer. |
+| Security/privacy/provenance review | Perform authorized defensive analysis of the exact candidate and its trust boundaries; remain independent and read-only. |
+| Mechanical work | Perform an exact transformation with explicit acceptance evidence; escalate semantic interpretation. |
+
+Record the actual harness/session, requested or inherited model and reasoning settings, host-observed settings when exposed, permissions, assignment, and result source. Verify any explicitly required configuration through the host's supported metadata; do not invent unavailable telemetry or require another harness's JSONL format. Missing optional telemetry is a disclosed limit; inability to establish a required capability, independence, or candidate identity blocks only the dependent claim. A model change alone does not create reviewer independence.
+
+Do not modify global harness profiles, credentials, or unrelated settings as part of normal repository work. Apply configuration choices to new assignments; do not switch another agent's in-flight work or relabel historical review evidence.
+
+A provider safety pause/refusal is **INVALID / NO VERDICT**, regardless of an apparent idle state. Preserve its evidence and follow the provider/host's authorized resolution or support path. Never retry, rephrase, switch models or harnesses, dismiss a restriction, or use a new review to bypass that boundary. Owner approval does not override provider policy. Ordinary transport or lifecycle failures may be diagnosed and retried once their cause is addressed, with prior failures retained.
+
+Optimize accepted work per unit of usage, including retries and reviews. Missing cost metadata is unknown, not free usage. Do not equate API list prices with subscription allowances or claim measured savings or capabilities without evidence from the actual environment.
 
 ## Additional standing owner instructions
 
@@ -119,10 +199,43 @@ These active owner instructions exist beyond the six execution controls.
 ### Communication and task tracking
 
 - Explain progress, blockers, failures, and bottlenecks in plain language. Translate necessary engineering or market jargon immediately; lead with the concrete effect.
+- Keep one active delivery outcome per coordinator until it is completed or explicitly paused, stopped, or reordered. Parallel agents MAY work within that same outcome when ownership and independence require it; an unrelated product, tooling, or process task MUST NOT be started alongside it merely because another tab or executor is available. Urgent work explicitly displaces the prior outcome and updates live tracker status rather than silently increasing WIP.
 - Keep general discussion out of sprint delivery todos. Only work needed to build, test, review, publish, or close the active delivery belongs there.
 - When a discussion becomes authorized delivery, create or update its own governed Issue and delivery tasks at that point.
-- Use one OMP session per sprint: run `/new` before starting a new sprint, use `/compact` only within the active sprint when needed, and otherwise allow automatic compaction.
-- Do not use Orca for this repository unless the owner explicitly reverses this instruction. Use repository tools, direct GitHub integration, and Herdr where required.
+- Keep session context scoped to the active sprint or bounded task. At a new sprint, use a fresh session or equivalent explicit context reset; preserve an evidence-bearing handoff before compaction, session changes, or switching harnesses. No slash command or proprietary session format is required.
+- Use available repository tools, direct GitHub integration, and coordination facilities that satisfy the controls above. Tool availability does not authorize unrelated work or changes to another active agent.
+
+### Durable discussion closeout
+
+When the owner confirms a material direction or asks to retain a proposal, the
+coordinator MUST complete this closeout before unrelated work or a handoff.
+A terminal acknowledgement alone is not a saved decision.
+
+- Classify the conclusion using the existing notes vocabulary: `proposed`,
+  `open`, `accepted`, `rejected`, or `superseded`. Record its scope, owner and
+  authority, source/date, rationale, material open questions, and any replacement
+  link. Approval of a broad direction does not approve every proposed detail,
+  implementation, provider effect, or release.
+- Persist it in the appropriate existing governing Issue, approved
+  specification, or reasoning note, within current write/publication authority.
+  Preserve useful proposals without turning every brainstorm into delivery or
+  creating a competing ledger. Distinguish the decision's status from whether
+  its document is published, its implementation is complete, or its rule is active.
+- Read back the source record and check its content and status. When continuity
+  memory is configured and authorised, retain a concise status-labelled summary
+  and source pointer, then verify it through a relevant retrieval. Memory remains
+  context, not a replacement for the governing record.
+- Report the actual saved location and which persistence/readback checks passed.
+  If authority, storage, or retrieval is unavailable, retain an authorised local
+  pending record where possible and report the exact unverified step; do not say
+  it is saved or recovered merely because text was printed. Block only the
+  dependent persistence/completion claim, not unrelated authorised work.
+- On resumption, retrieve the context and read the current authoritative source.
+  Preserve prior decisions with explicit supersession links; do not let stale
+  memory override current authority or invent unrecovered criteria.
+- Exclude secrets, raw private market/account data, and unnecessary transcripts
+  from discussion records and memory. This procedure authorises no new service,
+  upload destination, background hook, or guarantee of automatic retention.
 
 ### Tracker and lifecycle
 
@@ -135,16 +248,65 @@ These active owner instructions exist beyond the six execution controls.
 
 ## Product mission and scope
 
-Build a trustworthy, agent-agnostic research tool for listed-equity swing trading. Product research, qualification, and default workflows focus on the point-in-time Nifty 50 plus Nifty Next 50 (the Nifty 100). This is not an autonomous trading bot.
+Build a trustworthy, agent-agnostic research tool for listed-equity swing
+trading. Product research, qualification, and default workflows focus on the
+point-in-time Nifty 50 plus Nifty Next 50 (the Nifty 100). This is not an
+autonomous trading bot.
 
-- Reusable feature cores accept an explicit bounded list of canonical listed-equity instruments independently of index membership.
-- Point-in-time index membership and universe selection are separate higher-level policies.
-- Canonical equity identity is ISIN plus exchange, effective symbol, and versioned provider mappings.
-- Each feature declares required data capabilities and returns explicit unsupported or insufficient-evidence outcomes instead of embedding an index-membership check.
-- Explicitly supplied supported stocks outside the Nifty 100 may use the same capabilities when canonical identity and required evidence exist; they are not the primary roadmap or qualification focus.
-- Use an explicit swing horizon and bar frequency. Exclude intraday trading, futures, options, crypto, long-term investing, generic multi-asset features, unsupported evidence, and broker order placement.
+- Treat every index, sector, Industry, theme, watchlist, and caller selection
+  as a higher-level policy that produces an exact dynamic list of canonical
+  stocks. Names such as Nifty 50, Nifty Next 50, Nifty 100, Nifty Bank, Private
+  Bank, PSU Bank, Financial Services, and an explicit user list MUST NOT select
+  a different research algorithm or become a reusable-core admission rule.
+- Reusable feature cores accept an explicit bounded list of one or more
+  canonical listed-equity instruments independently of index, sector,
+  Industry, theme, or watchlist membership. Point-in-time membership, list
+  discovery, and list labels remain separate higher-level policies.
+- Canonical equity identity is ISIN plus exchange, effective symbol, and
+  versioned provider mappings. Every result binds the exact ordered stock-list
+  identity. A union, intersection, difference, or reordered list is a new
+  selection with its own identity and provenance.
+- Category lists may overlap. Never infer a category, hierarchy, official
+  taxonomy, or membership claim from stock names or another list. Preserve the
+  selector's exact source, retrieval/knowledge time, revision, methodology
+  claim, and members when the result claims that selector.
+- Each feature declares its finite resource bound and required data
+  capabilities. A limit is a processing bound, not an index rule. An oversized
+  list may be partitioned only when the contract preserves exact whole-list
+  semantics; never average or combine batch verdicts when the calculation
+  depends on the complete cohort.
+- Keep stock selection separate from stock eligibility. The default research
+  focus is Nifty 100. Nifty 500 is at most a carefully screened discovery
+  universe, never blanket admission, and the product does not target every NSE
+  listing.
+- Every selected stock, including an explicitly supplied stock or a Nifty 500
+  member, must pass objective versioned eligibility, history, canonical
+  identity, provider-mapping, data-quality, liquidity/turnover, price
+  integrity, event-risk, and other capability-specific gates before the
+  affected research claim. Newly listed, very small-cap, penny/very-low-priced,
+  thinly traded, or otherwise manipulation-susceptible stocks fail closed when
+  the applicable evidence-backed gate is not satisfied. Do not infer
+  manipulation from price or capitalization alone.
+- A supported stock outside Nifty 100 may use the same capabilities when it
+  passes those gates. It must not be rejected solely for index non-membership;
+  conversely, Nifty 100 or Nifty 500 membership never bypasses a gate.
+- Return explicit malformed, unsupported, or insufficient-evidence outcomes
+  instead of embedding an index/category check, omitting a member, weakening a
+  threshold, or silently substituting another stock.
+- Use an explicit swing horizon and bar frequency. Exclude intraday trading,
+  futures, options, crypto, long-term investing, generic multi-asset features,
+  unsupported evidence, and broker order placement.
 - Never use guaranteed-return, certainty, or financial-adviser language.
-- Treat `NO_TRADE`, missing evidence, unsupported capability, and insufficient data as first-class outcomes.
+- Treat `NO_TRADE`, missing evidence, unsupported capability, and insufficient
+  data as first-class outcomes.
+- Treat Price Action, Liquidity/SMC, Volume Analysis, and Relative Strength as
+  necessary-only feature families. Never import or implement their full
+  catalog blindly. Under
+  [Plan 34](plans/34-swing-research-feature-map.md), build only the smallest
+  objective, non-duplicative facts proven necessary for market research,
+  analysis, scanning, or screening for swing-trading use over an admitted
+  dynamic list of one or more supported canonical stocks; every other concept
+  remains deferred.
 
 ## Direction and repository authority
 
@@ -154,15 +316,43 @@ Before changing architecture or market logic, read the relevant sections of:
 
 - `docs/architecture-freeze-v1.md`;
 - `docs/roadmap.md` and `docs/upcoming_sprints_overview.md`;
-- the affected accepted Plan or module specification;
-- `docs/reference-repositories.md` when studying prior work; and
+- the affected accepted Plan or module specification; and
 - the live GitHub Issue and Project item.
 
 Surface conflicts; never silently redefine rules or ownership.
 
 Evaluate only proposed new modules, data sources, or scoring factors before building them. In at most five lines state expected value, scope fit, material data/research risk, the smallest alternative, and `accepted`, `deferred`, or `rejected`. Ordinary implementation choices need no separate ritual.
 
-Reference repositories are read-only idea sources. Do not modify them or copy-paste their implementations. Independently specify, implement, test, and record provenance for any adopted concept.
+### Independent research logic
+
+On 2026-09-08 the owner withdrew the previously supplied external trading
+repository references, including those supplied for Price Action and
+Liquidity/SMC. This supersedes earlier permission to study them in project
+documents, GitHub discussions, or remembered conversations. Do not consult,
+copy, adapt, recommend, or use those repositories' implementations, concepts,
+thresholds, trading claims, or test results as design inputs or validation
+oracles for this project.
+
+Derive each necessary research calculation independently from the approved
+product question, explicit mathematical definitions, admitted market evidence,
+and causal/time/price-integrity requirements. Specify the rules first, implement
+the project's own logic, and verify it with independently derived expectations
+and adversarial cases. Independence does not by itself prove correctness.
+
+The product focus, necessary-only feature boundary, historical validation,
+source authorization, and evidence/provenance controls remain unchanged.
+Continue using verified project components where they satisfy the independently
+specified contract; this direction is not a blanket rewrite or permission to
+discard working code, tests, or retained evidence. Official provider and exchange
+documentation, approved dependency documentation, and the engineering handbook
+remain legitimate sources for their own contracts, not trading-logic substitutes.
+
+The catalogue and its active study instructions are removed under
+[#172](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/172).
+Prior revisions remain historical records only; do not restore withdrawn
+guidance from them. Preserve required legal attribution and immutable
+research evidence, and do not delete unrelated repositories or rewrite Git
+history as part of this withdrawal.
 
 ## Delivery and evidence controls
 
@@ -174,6 +364,11 @@ Reference repositories are read-only idea sources. Do not modify them or copy-pa
 - A bug fix requires a discriminating reproduction before repair and confirmation after repair.
 - UI changes require verification on the actual surface; CLI/TUI changes require launching the actual program and observing the changed path.
 - Focused checks do not replace applicable full repository gates.
+- For executable changes, prioritize inexpensive applicable static checks, previously failing and affected tests, and fast regressions before expensive acceptance runs. Resolve known code-review blockers before starting expensive final gates. Include available automated PR feedback before those runs where the host supports that ordering; if publication automatically starts CI, record that constraint and avoid interim pushes rather than claiming review preceded CI or disabling required checks.
+- Measure test setup, execution and teardown durations before classifying slow tests or optimizing the suite. Preserve fixture, isolation and exclusive-resource constraints. Fast-first scheduling reduces time to failure; it does not prove lower total runtime. A test's history of passing is not permission to omit it. Parallelism and test selection require evidence, not assumptions about speed or unaffected behavior.
+- Split test stages may supply final evidence only when they cover the complete required selection on the same final revision, use compatible environments, and preserve aggregate coverage and other configured gates. Focused or fail-fast runs are repair feedback, not full acceptance. Reuse prior CI evidence only through an existing verified admission mechanism with matching identities; never transfer a green result by assumption.
+- Consolidate review findings and use focused checks during correction work. Run expensive applicable final gates after the findings are addressed and the candidate is stable, unless a scoped contract requires an earlier gate. All applicable full-suite, coverage, static, build, installed-artifact and hosted requirements remain release prerequisites. A later relevant change invalidates affected evidence and requires verification again; scheduling is not a waiver or approval transfer.
+- Keep small related documentation updates in the existing governing Issue and PR. Do not create a separate Issue or automated run merely for minor workflow prose. The documentation-only verification rule above remains unchanged; bundling docs with genuine executable changes does not remove the executable change's applicable gates.
 - Runtime-source edits are formatted before every directly and transitively bound source-at-rest manifest is refreshed.
 - R3/R4 review is independent, exact-byte, non-mutating, and blocker-only for the current accepted slice. Review drift or a later commit invalidates the verdict.
 - Release is PR-based. Direct push to `main` is prohibited. Hosted CI, security checks, exact merge ancestry, and main admission must pass where configured.
@@ -217,12 +412,12 @@ Only this file owns project-wide agent behavior. Other sources retain the narrow
 |---|---|---|
 | `AGENTS.md` | Bootstrap only | Requires this file before work; MUST NOT duplicate the canonical rules. |
 | `docs/mandatory-agent-instructions.md` | Canonical project adapter | Owns active project-wide agent instructions, precedence, and update rules. |
-| `docs/herdr-multi-agent-workflow.md` | Specialized Herdr procedure | Owns current Herdr commands, assignment format, coordination mechanics, and tab lifecycle under this file's Herdr policy. |
+| `docs/agent-workflow.md` | Portable operating procedure | Owns bootstrap, capability mapping, assignment, coordination, handoff, and review mechanics under this canonical policy. |
+| `docs/herdr-multi-agent-workflow.md` | Optional Herdr adapter | Maps the portable procedure to Herdr when selected; does not mandate Herdr, OMP, models, or global permissions. |
 | `docs/architecture-freeze-v1.md` | Product architecture authority | Owns accepted product and architecture boundaries; process-history passages are records, not a second agent policy. |
 | `docs/roadmap.md` and `docs/upcoming_sprints_overview.md` | Delivery sequencing | Own current roadmap dependencies and lifecycle summaries; they do not define general agent behavior. |
 | `docs/plans/` and `docs/sprints/` | Scoped contracts and historical records | Accepted Plans govern their feature scope; Sprint records preserve evidence and decisions. Repeated workflow wording is historical unless incorporated here. |
 | `docs/notes/README.md` | Notes authority | Defines notes as non-authoritative reasoning unless promoted into an approved source. |
-| `docs/reference-repositories.md` | Reference-source policy | Owns the approved read-only reference inventory and provenance context. |
 | GitHub Issues, Project, milestones, and PRs | Active delivery state | Own live work, status, priority, sprint assignment, acceptance, review, and merge evidence. |
 | Software-engineering handbook | Global project-agnostic defaults | Supplies shared risk-scaled engineering rules. This file is the repository adapter and overrides only within authorized project scope. |
 | Durable memory and conversation history | Context only | Useful for discovery; never overrides current authoritative evidence. |

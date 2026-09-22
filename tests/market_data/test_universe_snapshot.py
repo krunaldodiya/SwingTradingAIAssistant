@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import os
+import subprocess
+import sys
 from dataclasses import replace
 from datetime import UTC, date, datetime
 
@@ -12,7 +15,13 @@ import swing_trading_ai_assistant.market_data.universe_snapshot as universe_modu
 from swing_trading_ai_assistant.market_data.catalog import (
     CatalogConflictError,
     CatalogPersistenceError,
+    CatalogSchemaError,
     DuckDBCatalog,
+)
+from swing_trading_ai_assistant.market_data.cli import main
+from swing_trading_ai_assistant.market_data.current_cohort import (
+    CurrentCohortMemberV1,
+    CurrentSuppliedCohortManifestV1,
 )
 from swing_trading_ai_assistant.market_data.storage_root_lease import StorageRootLease
 from swing_trading_ai_assistant.market_data.universe_snapshot import (
@@ -505,6 +514,51 @@ def test_publish_same_payload_race_is_idempotent_and_cleans_temporary(
         os.close(descriptor)
 
 
+def test_publish_exact_relinquishes_recycled_temporary_descriptor(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    descriptor = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
+    primary = AssertionError("released universe close fault")
+    real_close = universe_module.os.close
+    real_open = universe_module.os.open
+    replacement: int | None = None
+    faulted = False
+
+    class Operation:
+        def ensure_live(self) -> None:
+            pass
+
+    def release_then_raise(fd: int) -> None:
+        nonlocal faulted, replacement
+        if not faulted:
+            faulted = True
+            real_close(fd)
+            replacement = real_open("/dev/null", os.O_RDONLY)
+            assert replacement == fd
+            raise primary
+        real_close(fd)
+
+    try:
+        with monkeypatch.context() as scoped:
+            scoped.setattr(universe_module.os, "close", release_then_raise)
+            with pytest.raises(AssertionError) as raised:
+                universe_module._publish_exact(
+                    Operation(), descriptor, "snapshot.json", b"retained"
+                )
+            assert raised.value is primary
+            assert replacement is not None
+            os.fstat(replacement)
+            assert not (tmp_path / "snapshot.json").exists()
+            quarantines = tuple(tmp_path.iterdir())
+            assert len(quarantines) == 1
+            assert (quarantines[0] / "entry").read_bytes() == b"retained"
+    finally:
+        if replacement is not None:
+            with contextlib.suppress(OSError):
+                real_close(replacement)
+        real_close(descriptor)
+
+
 def test_resolve_rejects_invalid_request_and_metadata_mismatch(tmp_path) -> None:
     acquired = StorageRootLease.try_acquire(tmp_path)
     assert acquired.lease is not None
@@ -868,11 +922,13 @@ def test_catalog_precommit_validator_rolls_back_universe_row(tmp_path) -> None:
             _snapshot()
         )
         catalog.connection.execute("DELETE FROM universe_snapshots")
-        with pytest.raises(CatalogPersistenceError):
+        failure = ValueError()
+        with pytest.raises(ValueError) as raised:
             catalog.save_universe_snapshot(
                 metadata,
-                precommit_validator=lambda: (_ for _ in ()).throw(ValueError()),
+                precommit_validator=lambda: (_ for _ in ()).throw(failure),
             )
+        assert raised.value is failure
         assert catalog.list_universe_snapshots() == ()
 
 
@@ -926,6 +982,110 @@ def test_bounded_read_rejects_entry_replacement_before_or_after_read(
             universe_module._read_bounded(Operation(), descriptor, "snapshot.json", 2)
     finally:
         os.close(descriptor)
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="POSIX FIFO")
+def test_immutable_read_fifo_substitution_after_admission_fails_promptly(
+    tmp_path,
+) -> None:
+    environment = {
+        **os.environ,
+        "PLAN33_FIFO_SUBPROCESS_ROOT": str(tmp_path.resolve()),
+    }
+    script = """
+import os
+import stat
+import tempfile
+from pathlib import Path
+
+from swing_trading_ai_assistant.market_data import universe_snapshot as universe
+from swing_trading_ai_assistant.market_data.storage_root_lease import StorageRootLease
+
+
+for stage in ("existing", "temporary", "final", "bounded"):
+    with tempfile.TemporaryDirectory(
+        dir=os.environ["PLAN33_FIFO_SUBPROCESS_ROOT"]
+    ) as temporary:
+        root = Path(temporary) / "root"
+        root.mkdir(mode=0o700)
+        lease = StorageRootLease.try_acquire_private_empty(root).lease
+        assert lease is not None
+        name = "snapshot.json"
+        payload = b"expected"
+        target = root / name
+        with lease.root_operation(root) as operation:
+            if stage in {"existing", "bounded"}:
+                descriptor = os.open(
+                    name,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                    0o400,
+                    dir_fd=operation.descriptor,
+                )
+                try:
+                    os.write(descriptor, payload)
+                finally:
+                    os.close(descriptor)
+            real_open = universe.os.open
+            replacement = [None]
+
+            def substitute(path, flags, mode=0o777, **kwargs):
+                path_text = os.fspath(path)
+                readonly = (flags & os.O_ACCMODE) == os.O_RDONLY
+                temporary_readback = (
+                    stage == "temporary"
+                    and readonly
+                    and path_text.startswith(f".{name}.")
+                    and path_text.endswith(".tmp")
+                )
+                final_readback = (
+                    stage == "final"
+                    and readonly
+                    and path_text == name
+                    and target.exists()
+                )
+                direct_read = (
+                    stage in {"existing", "bounded"}
+                    and readonly
+                    and path_text == name
+                )
+                if replacement[0] is None and (
+                    temporary_readback or final_readback or direct_read
+                ):
+                    os.unlink(path_text, dir_fd=kwargs["dir_fd"])
+                    os.mkfifo(path_text, mode=0o400, dir_fd=kwargs["dir_fd"])
+                    replacement[0] = root / path_text
+                return real_open(path, flags, mode, **kwargs)
+
+            universe.os.open = substitute
+            try:
+                try:
+                    if stage == "bounded":
+                        universe._read_bounded(operation, operation.descriptor, name, len(payload))
+                    else:
+                        universe._publish_exact(
+                            operation, operation.descriptor, name, payload
+                        )
+                except ValueError:
+                    pass
+                else:
+                    raise SystemExit(f"{stage} FIFO was accepted")
+            finally:
+                universe.os.open = real_open
+            if replacement[0] is None or not stat.S_ISFIFO(
+                replacement[0].lstat().st_mode
+            ):
+                raise SystemExit(f"{stage} FIFO was not preserved")
+        lease.close()
+"""
+    completed = subprocess.run(  # noqa: S603 - fixed interpreter and test script
+        [sys.executable, "-c", script],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=5,
+        env=environment,
+    )
+    assert completed.returncode == 0, completed.stderr
 
 
 def test_catalog_universe_boundaries_and_conflicts_fail_closed(tmp_path) -> None:
@@ -1005,7 +1165,7 @@ def test_catalog_universe_read_failures_are_typed(
         with pytest.raises(CatalogPersistenceError):
             catalog.has_universe_snapshot_coverage(as_of=date(2024, 6, 1))
 
-    with pytest.raises(ValueError):
+    with pytest.raises(CatalogSchemaError):
         catalog_module._universe_metadata_from_row((1,))
 
 
@@ -1034,3 +1194,118 @@ def test_resolve_rejects_same_inode_mutation_after_valid_bounded_read(
                     as_of=date(2024, 6, 1),
                     knowledge_cutoff=datetime(2024, 1, 1, tzinfo=UTC),
                 )
+
+
+@pytest.mark.parametrize("fault_type", (TypeError, ValueError))
+def test_canonical_decoder_preserves_unexpected_helper_fault_identity(
+    monkeypatch: pytest.MonkeyPatch, fault_type: type[Exception]
+) -> None:
+    payload = _snapshot().canonical_json_bytes()
+    error = fault_type("unexpected decoder helper fault")
+    reached = False
+
+    def fail_member(_value: object) -> Nifty50ConstituentV1:
+        nonlocal reached
+        reached = True
+        raise error
+
+    monkeypatch.setattr(universe_module, "_parse_member", fail_member)
+
+    with pytest.raises(fault_type) as raised:
+        Nifty50UniverseSnapshotV1.from_canonical_json_bytes(payload)
+
+    assert reached
+    assert raised.value is error
+
+
+@pytest.mark.parametrize(
+    "fault_type",
+    (AssertionError, KeyError, RuntimeError, Exception, TypeError, ValueError),
+)
+def test_resolve_preserves_unexpected_retained_read_fault_identity(
+    tmp_path, monkeypatch: pytest.MonkeyPatch, fault_type: type[BaseException]
+) -> None:
+    acquired = StorageRootLease.try_acquire(tmp_path)
+    assert acquired.lease is not None
+    with acquired.lease, DuckDBCatalog(tmp_path, lease=acquired.lease) as catalog:
+        store = Nifty50UniverseStoreV1(tmp_path, acquired.lease, catalog)
+        store.retain(_snapshot())
+        error = fault_type("unexpected retained read fault")
+        reached = False
+
+        def fail_read(_descriptor: int, _maximum: int) -> bytes:
+            nonlocal reached
+            reached = True
+            raise error
+
+        monkeypatch.setattr(universe_module, "_read_fd", fail_read)
+
+        with pytest.raises(fault_type) as raised:
+            store.resolve(
+                as_of=date(2024, 6, 1),
+                knowledge_cutoff=datetime(2024, 1, 1, tzinfo=UTC),
+            )
+
+    assert reached
+    assert raised.value is error
+
+
+def test_default_cohort_cli_propagates_retained_universe_read_fault_without_archive(
+    tmp_path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = tmp_path / "retained"
+    root.mkdir(mode=0o700)
+    acquired = StorageRootLease.try_acquire(root)
+    assert acquired.lease is not None
+    snapshot = _snapshot()
+    with acquired.lease, DuckDBCatalog(root, lease=acquired.lease) as catalog:
+        Nifty50UniverseStoreV1(root, acquired.lease, catalog).retain(snapshot)
+
+    member = snapshot.constituents[0]
+    cohort_file = tmp_path / "cohort.json"
+    manifest = CurrentSuppliedCohortManifestV1(
+        datetime(2024, 1, 1, tzinfo=UTC),
+        (CurrentCohortMemberV1(member.isin, member.symbol),),
+    )
+    cohort_file.write_bytes(
+        json.dumps(
+            {
+                "contract_version": manifest.contract_version,
+                "members": [{"isin": member.isin, "symbol": member.symbol}],
+                "selected_at": "2024-01-01T00:00:00.000000Z",
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+        + b"\n"
+    )
+    error = RuntimeError("unexpected universe read defect")
+    reached = False
+
+    def fail_read(_descriptor: int, _maximum: int) -> bytes:
+        nonlocal reached
+        reached = True
+        raise error
+
+    monkeypatch.setattr(universe_module, "_read_fd", fail_read)
+
+    exit_code = main(
+        [
+            "cohort-current",
+            "--cohort-file",
+            str(cohort_file),
+            "--storage-root",
+            str(root),
+            "--cutoff",
+            "2024-06-01T00:00:00.000000Z",
+            "--output",
+            "json",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert reached
+    assert exit_code == 2
+    assert captured.out == ""
+    assert captured.err == "internal_error\n"
+    assert not (root / ".current-fact-archive-v1").exists()

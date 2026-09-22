@@ -372,22 +372,19 @@ def test_executor_cancellation_during_backoff_prevents_later_request() -> None:
     assert len(session.requests) == 1
 
 
-def test_executor_sanitizes_provider_contract_exception_and_emits_stable_event() -> (
-    None
-):
+def test_executor_preserves_unknown_session_fault_identity_without_event() -> None:
     events: list[object] = []
-    session = FakeSession([RuntimeError("token=secret body=provider-secret")])
+    failure = RuntimeError("token=secret body=provider-secret")
+    session = FakeSession([failure])
 
-    result = _executor(session, FakeLimiter(), events=events).fetch(
-        _plan(), remaining_attempts=1
-    )
+    with pytest.raises(RuntimeError) as raised:
+        _executor(session, FakeLimiter(), events=events).fetch(
+            _plan(), remaining_attempts=1
+        )
 
-    assert result.response is None
-    assert result.failure is not None
-    assert result.failure.code is HistoricalFetchCode.PROVIDER_CONTRACT
-    assert not hasattr(result.failure, "detail")
-    assert [event.category for event in events] == ["provider_contract"]
-    assert "secret" not in repr(events)
+    assert raised.value is failure
+    assert len(session.requests) == 1
+    assert events == []
 
 
 def test_executor_ignores_ambiguous_or_invalid_retry_after_and_records_stable_code() -> (
@@ -669,50 +666,40 @@ def test_partial_month_plan_is_rejected_before_limiter_or_session() -> None:
     assert limiter.acquires == []
 
 
-@pytest.mark.parametrize("clock", [object()])
-def test_invalid_clock_output_maps_to_sanitized_typed_result(clock: object) -> None:
+def test_executor_preserves_unknown_clock_and_event_sink_faults() -> None:
     class InvalidClock:
         def now(self) -> object:
-            return clock
+            return object()
 
-    session = FakeSession([_success()])
     events: list[object] = []
-    result = HistoricalRequestExecutor(
-        session=session,
-        limiter=FakeLimiter(),
-        clock=InvalidClock(),  # type: ignore[arg-type]
-        sleeper=FakeSleeper(),
-        jitter=FakeJitter(),
-        event_sink=events.append,
-        run_id="run-1",
-    ).fetch(_plan(), remaining_attempts=1)
-
-    assert result.response is None
-    assert result.failure is not None
-    assert result.failure.code is HistoricalFetchCode.PROVIDER_CONTRACT
+    with pytest.raises(ValueError):
+        HistoricalRequestExecutor(
+            session=FakeSession([_success()]),
+            limiter=FakeLimiter(),
+            clock=InvalidClock(),  # type: ignore[arg-type]
+            sleeper=FakeSleeper(),
+            jitter=FakeJitter(),
+            event_sink=events.append,
+            run_id="run-1",
+        ).fetch(_plan(), remaining_attempts=1)
     assert events == []
 
+    failure = RuntimeError("token=secret body=provider-secret")
 
-def test_event_sink_failure_maps_to_typed_result_without_leaking_exception_text() -> (
-    None
-):
-    def hostile_sink(event: ProviderEvent) -> None:
-        raise RuntimeError("token=secret body=provider-secret")
+    def hostile_sink(_event: ProviderEvent) -> None:
+        raise failure
 
-    result = HistoricalRequestExecutor(
-        session=FakeSession([_success()]),
-        limiter=FakeLimiter(),
-        clock=FakeClock(),
-        sleeper=FakeSleeper(),
-        jitter=FakeJitter(),
-        event_sink=hostile_sink,
-        run_id="run-1",
-    ).fetch(_plan(), remaining_attempts=1)
-
-    assert result.response is None
-    assert result.failure is not None
-    assert result.failure.code is HistoricalFetchCode.PROVIDER_CONTRACT
-    assert "secret" not in repr(result)
+    with pytest.raises(RuntimeError) as raised:
+        HistoricalRequestExecutor(
+            session=FakeSession([_success()]),
+            limiter=FakeLimiter(),
+            clock=FakeClock(),
+            sleeper=FakeSleeper(),
+            jitter=FakeJitter(),
+            event_sink=hostile_sink,
+            run_id="run-1",
+        ).fetch(_plan(), remaining_attempts=1)
+    assert raised.value is failure
 
 
 def test_public_provider_contract_dataclasses_enforce_sanitized_invariants() -> None:
@@ -934,14 +921,14 @@ def test_executor_rejects_retry_after_above_policy_without_waiting() -> None:
     assert sleeper.delays == []
 
 
-def test_executor_maps_cancellation_and_provider_errors_from_account_deferral() -> None:
+def test_executor_preserves_unknown_account_deferral_fault() -> None:
     class CancelLimiter(FakeLimiter):
         def defer_for(self, delay: timedelta, remaining_wait: timedelta) -> timedelta:
             raise CancellationRequested
 
     class ErrorLimiter(FakeLimiter):
         def defer_for(self, delay: timedelta, remaining_wait: timedelta) -> timedelta:
-            raise RuntimeError("account secret")
+            raise failure
 
     response = HistoricalResponse(
         status_code=429,
@@ -952,14 +939,15 @@ def test_executor_maps_cancellation_and_provider_errors_from_account_deferral() 
     cancelled = _executor(FakeSession([response]), CancelLimiter()).fetch(
         _plan(), remaining_attempts=2
     )
-    failed = _executor(FakeSession([response]), ErrorLimiter()).fetch(
-        _plan(), remaining_attempts=2
-    )
+    failure = RuntimeError("account secret")
+    with pytest.raises(RuntimeError) as raised:
+        _executor(FakeSession([response]), ErrorLimiter()).fetch(
+            _plan(), remaining_attempts=2
+        )
 
     assert cancelled.failure is not None
     assert cancelled.failure.code is HistoricalFetchCode.CANCELLED
-    assert failed.failure is not None
-    assert failed.failure.code is HistoricalFetchCode.PROVIDER_CONTRACT
+    assert raised.value is failure
 
 
 def test_executor_handles_sleeper_bound_failure_and_huge_retry_after_safely() -> None:
@@ -989,7 +977,7 @@ def test_executor_handles_sleeper_bound_failure_and_huge_retry_after_safely() ->
     assert result.failure.code is HistoricalFetchCode.RETRY_WAIT_BOUND_EXCEEDED
 
 
-def test_executor_stops_after_deferral_cancellation_and_sanitizes_sleeper_failure() -> (
+def test_executor_stops_after_deferral_cancellation_and_preserves_sleeper_fault() -> (
     None
 ):
     class CancelAfterDeferralLimiter(FakeLimiter):
@@ -997,9 +985,16 @@ def test_executor_stops_after_deferral_cancellation_and_sanitizes_sleeper_failur
             cancellation.cancel()
             return delay
 
+    class NonDeferringLimiter(FakeLimiter):
+        def defer_for(self, delay: timedelta, remaining_wait: timedelta) -> timedelta:
+            self.deferrals.append((delay, remaining_wait))
+            return timedelta(0)
+
+    failure = RuntimeError("sleeper secret")
+
     class ErrorSleeper(FakeSleeper):
         def sleep(self, delay: timedelta, cancellation: CancellationToken) -> None:
-            raise RuntimeError("sleeper secret")
+            raise failure
 
     response = HistoricalResponse(
         status_code=429,
@@ -1008,21 +1003,23 @@ def test_executor_stops_after_deferral_cancellation_and_sanitizes_sleeper_failur
         error_category=ProviderErrorCategory.RATE_LIMITED,
     )
     cancellation = CancellationToken()
+    cancelled_session = FakeSession([response])
     cancelled = _executor(
-        FakeSession([response]),
+        cancelled_session,
         CancelAfterDeferralLimiter(),
         cancellation=cancellation,
     ).fetch(_plan(), remaining_attempts=2)
-    failed = _executor(
-        FakeSession([response]),
-        FakeLimiter(),
-        sleeper=ErrorSleeper(),
-    ).fetch(_plan(), remaining_attempts=2)
+    with pytest.raises(RuntimeError) as raised:
+        _executor(
+            FakeSession([response]),
+            NonDeferringLimiter(),
+            sleeper=ErrorSleeper(),
+        ).fetch(_plan(), remaining_attempts=2)
 
     assert cancelled.failure is not None
     assert cancelled.failure.code is HistoricalFetchCode.CANCELLED
-    assert failed.failure is not None
-    assert failed.failure.code is HistoricalFetchCode.PROVIDER_CONTRACT
+    assert len(cancelled_session.requests) == 1
+    assert raised.value is failure
 
 
 def test_executor_rejects_invalid_bounds_and_sanitizes_event_identity() -> None:

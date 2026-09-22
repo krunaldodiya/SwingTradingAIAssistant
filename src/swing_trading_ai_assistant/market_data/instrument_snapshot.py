@@ -9,6 +9,7 @@ import json
 import os
 import re
 import stat
+import zlib
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta, timezone
@@ -24,9 +25,14 @@ from .instruments import (
     AmbiguousInstrumentError,
     Instrument,
     InstrumentCatalog,
+    InstrumentCatalogPayloadError,
     InstrumentNotFoundError,
 )
-from .storage_root_lease import StorageRootLease, StorageRootLeaseOperation
+from .storage_root_lease import (
+    StorageRootLease,
+    StorageRootLeaseError,
+    StorageRootLeaseOperation,
+)
 
 SNAPSHOT_SOURCE_V1: Final = "upstox-bod-nse"
 MAX_OBSERVATION_JSON_BYTES_V1: Final = 4096
@@ -48,6 +54,10 @@ _IST: Final = timezone(timedelta(hours=5, minutes=30))
 _DIGEST: Final = re.compile(r"[0-9a-f]{64}\Z")
 
 
+class InstrumentSnapshotValidationError(ValueError):
+    """An explicitly rejected snapshot input or canonical representation."""
+
+
 class InstrumentSnapshotError(RuntimeError):
     """Base class for sanitized snapshot-boundary failures."""
 
@@ -62,6 +72,10 @@ class InstrumentSnapshotNotFoundError(InstrumentSnapshotUnavailableError):
 
 class SnapshotInstrumentNotFoundError(InstrumentSnapshotError):
     """No equity matches the requested identity in retained evidence."""
+
+
+class SnapshotInstrumentUnsupportedError(SnapshotInstrumentNotFoundError):
+    """The requested symbol exists but is not an admitted NSE equity."""
 
 
 class SnapshotInstrumentAmbiguousError(InstrumentSnapshotError):
@@ -103,7 +117,9 @@ class FetchedInstrumentSnapshotV1:
             or not _valid_header(self.etag)
             or not _valid_header(self.last_modified)
         ):
-            raise ValueError("invalid fetched instrument snapshot")
+            raise InstrumentSnapshotValidationError(
+                "invalid fetched instrument snapshot"
+            )
         object.__setattr__(self, "retrieved_at", self.retrieved_at.astimezone(UTC))
 
 
@@ -155,7 +171,9 @@ class InstrumentSnapshotMetadataV1:
             or not _valid_header(self.etag)
             or not _valid_header(self.last_modified)
         ):
-            raise ValueError("invalid instrument snapshot metadata")
+            raise InstrumentSnapshotValidationError(
+                "invalid instrument snapshot metadata"
+            )
         object.__setattr__(self, "retrieved_at", self.retrieved_at.astimezone(UTC))
 
 
@@ -198,21 +216,26 @@ class InstrumentSnapshotClientV1:
         try:
             with gzip.GzipFile(fileobj=BytesIO(compressed), mode="rb") as stream:
                 decompressed = stream.read(DEFAULT_MAX_CATALOG_DECOMPRESSED_BYTES + 1)
-            if len(decompressed) > DEFAULT_MAX_CATALOG_DECOMPRESSED_BYTES:
-                raise ValueError
-            catalog = InstrumentCatalog.from_json_bytes(decompressed)
-            retrieved_at = self._clock()
-            if (
-                type(retrieved_at) is not datetime
-                or retrieved_at.tzinfo is None
-                or retrieved_at.utcoffset() is None
-            ):
-                raise ValueError
-            retrieved_at = retrieved_at.astimezone(UTC)
-        except Exception:
+        except (EOFError, gzip.BadGzipFile, zlib.error):
             raise InstrumentSnapshotUnavailableError(
                 "instrument snapshot unavailable"
             ) from None
+        if len(decompressed) > DEFAULT_MAX_CATALOG_DECOMPRESSED_BYTES:
+            raise InstrumentSnapshotUnavailableError("instrument snapshot unavailable")
+        try:
+            catalog = InstrumentCatalog.from_json_bytes(decompressed)
+        except InstrumentCatalogPayloadError:
+            raise InstrumentSnapshotUnavailableError(
+                "instrument snapshot unavailable"
+            ) from None
+        retrieved_at = self._clock()
+        if (
+            type(retrieved_at) is not datetime
+            or retrieved_at.tzinfo is None
+            or retrieved_at.utcoffset() is None
+        ):
+            raise InstrumentSnapshotUnavailableError("instrument snapshot unavailable")
+        retrieved_at = retrieved_at.astimezone(UTC)
         return FetchedInstrumentSnapshotV1(
             retrieved_at=retrieved_at,
             observation_date=retrieved_at.astimezone(_IST).date(),
@@ -242,16 +265,19 @@ class InstrumentSnapshotStoreV1:
         self._catalog = catalog
 
     def retain(
-        self, fetched: FetchedInstrumentSnapshotV1
+        self,
+        fetched: FetchedInstrumentSnapshotV1,
+        *,
+        deadline: InstrumentSnapshotDeadlinePortV1 | None = None,
     ) -> InstrumentSnapshotMetadataV1:
         try:
             if type(fetched) is not FetchedInstrumentSnapshotV1:
-                raise ValueError
+                raise InstrumentSnapshotValidationError
             if (
                 _sha256(fetched.compressed_bytes) != fetched.compressed_sha256
                 or _sha256(fetched.decompressed_bytes) != fetched.decompressed_sha256
             ):
-                raise ValueError
+                raise InstrumentSnapshotValidationError
             partial = _metadata_without_observation(fetched)
             sidecar = _canonical_observation_bytes(partial)
             observation_sha256 = _sha256(sidecar)
@@ -278,9 +304,17 @@ class InstrumentSnapshotStoreV1:
             )
             sidecar = _canonical_observation_bytes(_metadata_without_digest(metadata))
             journal = _canonical_journal_bytes(metadata)
+        except InstrumentSnapshotValidationError:
+            raise InstrumentSnapshotCorruptError(
+                "instrument snapshot corrupt"
+            ) from None
+        _ensure_deadline_live(deadline)
+        try:
             with self._lease.root_operation(self._root) as operation:
                 snapshot_fd = _open_snapshot_root(operation, create=True)
+                active_exception: BaseException | None = None
                 try:
+                    _ensure_deadline_live(deadline)
                     _publish_exact(
                         operation,
                         snapshot_fd,
@@ -292,6 +326,7 @@ class InstrumentSnapshotStoreV1:
                         operation, metadata.compressed_sha256, create=True
                     )
                     try:
+                        _ensure_deadline_live(deadline)
                         _publish_exact(
                             operation,
                             object_fd,
@@ -299,6 +334,7 @@ class InstrumentSnapshotStoreV1:
                             "snapshot.json.gz",
                             fetched.compressed_bytes,
                         )
+                        _ensure_deadline_live(deadline)
                         _publish_exact(
                             operation,
                             observations_fd,
@@ -306,30 +342,44 @@ class InstrumentSnapshotStoreV1:
                             f"sha256={metadata.observation_sha256}.json",
                             sidecar,
                         )
+                    except BaseException as error:
+                        active_exception = error
+                        raise
                     finally:
-                        os.close(observations_fd)
-                        os.close(object_fd)
+                        _close_snapshot_directories(
+                            object_fd, observations_fd, active_exception
+                        )
+                    _ensure_deadline_live(deadline)
                     self._catalog.save_instrument_snapshot(metadata)
+                    _ensure_deadline_live(deadline)
                     _remove_journal(operation, snapshot_fd)
+                except BaseException as error:
+                    active_exception = error
+                    raise
                 finally:
-                    os.close(snapshot_fd)
+                    _close_snapshot_descriptor(snapshot_fd, active_exception)
             return metadata
-        except InstrumentSnapshotError:
+        except (InstrumentSnapshotError, StorageRootLeaseError):
             raise
-        except Exception:
+        except OSError:
             raise InstrumentSnapshotCorruptError(
                 "instrument snapshot corrupt"
             ) from None
 
-    def recover_pending(self) -> InstrumentSnapshotMetadataV1 | None:
+    def recover_pending(
+        self, *, deadline: InstrumentSnapshotDeadlinePortV1 | None = None
+    ) -> InstrumentSnapshotMetadataV1 | None:
         """Recover one fixed journal before any provider request."""
+        _ensure_deadline_live(deadline)
         try:
             with self._lease.root_operation(self._root) as operation:
                 try:
                     snapshot_fd = _open_snapshot_root(operation, create=False)
                 except FileNotFoundError:
                     return None
+                active_exception: BaseException | None = None
                 try:
+                    _ensure_deadline_live(deadline)
                     _remove_safe_temp(
                         operation, snapshot_fd, _RECOVERY_JOURNAL_TEMP_NAME
                     )
@@ -346,6 +396,7 @@ class InstrumentSnapshotStoreV1:
                         operation, metadata.compressed_sha256, create=True
                     )
                     try:
+                        _ensure_deadline_live(deadline)
                         _remove_safe_temp(operation, object_fd, ".snapshot.json.gz.tmp")
                         _remove_safe_temp(
                             operation,
@@ -366,6 +417,7 @@ class InstrumentSnapshotStoreV1:
                                     MAX_OBSERVATION_JSON_BYTES_V1,
                                 )
                             except FileNotFoundError:
+                                _ensure_deadline_live(deadline)
                                 _remove_journal(operation, snapshot_fd)
                                 return None
                             raise InstrumentSnapshotCorruptError(
@@ -375,6 +427,7 @@ class InstrumentSnapshotStoreV1:
                         sidecar = _canonical_observation_bytes(
                             _metadata_without_digest(metadata)
                         )
+                        _ensure_deadline_live(deadline)
                         _publish_exact(
                             operation,
                             observations_fd,
@@ -382,17 +435,26 @@ class InstrumentSnapshotStoreV1:
                             f"sha256={metadata.observation_sha256}.json",
                             sidecar,
                         )
+                    except BaseException as error:
+                        active_exception = error
+                        raise
                     finally:
-                        os.close(observations_fd)
-                        os.close(object_fd)
+                        _close_snapshot_directories(
+                            object_fd, observations_fd, active_exception
+                        )
+                    _ensure_deadline_live(deadline)
                     self._catalog.save_instrument_snapshot(metadata)
+                    _ensure_deadline_live(deadline)
                     _remove_journal(operation, snapshot_fd)
                     return metadata
+                except BaseException as error:
+                    active_exception = error
+                    raise
                 finally:
-                    os.close(snapshot_fd)
-        except InstrumentSnapshotError:
+                    _close_snapshot_descriptor(snapshot_fd, active_exception)
+        except (InstrumentSnapshotError, StorageRootLeaseError):
             raise
-        except Exception:
+        except (EOFError, OSError):
             raise InstrumentSnapshotCorruptError(
                 "instrument snapshot corrupt"
             ) from None
@@ -422,6 +484,7 @@ class InstrumentSnapshotStoreV1:
                 object_fd, observations_fd = _open_snapshot_directories(
                     operation, metadata.compressed_sha256, create=False
                 )
+                active_exception: BaseException | None = None
                 try:
                     sidecar = _read_bounded(
                         observations_fd,
@@ -436,7 +499,9 @@ class InstrumentSnapshotStoreV1:
                         sidecar != expected
                         or _sha256(sidecar) != metadata.observation_sha256
                     ):
-                        raise ValueError
+                        raise InstrumentSnapshotCorruptError(
+                            "instrument snapshot corrupt"
+                        )
                     compressed = _read_bounded(
                         object_fd,
                         "snapshot.json.gz",
@@ -444,17 +509,21 @@ class InstrumentSnapshotStoreV1:
                     )
                     _ensure_deadline_live(deadline)
                     operation.ensure_live()
+                except BaseException as error:
+                    active_exception = error
+                    raise
                 finally:
-                    os.close(observations_fd)
-                    os.close(object_fd)
+                    _close_snapshot_directories(
+                        object_fd, observations_fd, active_exception
+                    )
             decompressed = _validate_compressed_object(metadata, compressed)
             _ensure_deadline_live(deadline)
             instrument = _resolve_equity_in_payload(decompressed, segment, symbol)
             _ensure_deadline_live(deadline)
             return ResolvedInstrumentSnapshotV1(metadata, instrument)
-        except InstrumentSnapshotError:
+        except (InstrumentSnapshotError, StorageRootLeaseError):
             raise
-        except Exception:
+        except (EOFError, OSError):
             _ensure_deadline_live(deadline)
             raise InstrumentSnapshotCorruptError(
                 "instrument snapshot corrupt"
@@ -486,11 +555,21 @@ def _resolve_equity_in_payload(
     decompressed: bytes, segment: str, symbol: str
 ) -> Instrument:
     try:
-        instrument = InstrumentCatalog.from_json_bytes(decompressed).resolve(
+        catalog = InstrumentCatalog.from_json_bytes(decompressed)
+    except InstrumentCatalogPayloadError:
+        raise InstrumentSnapshotCorruptError("instrument snapshot corrupt") from None
+    try:
+        instrument = catalog.resolve(
             segment=segment, symbol=symbol, instrument_type="EQ"
         )
     except InstrumentNotFoundError:
-        raise SnapshotInstrumentNotFoundError("instrument not found") from None
+        try:
+            catalog.resolve(segment=segment, symbol=symbol)
+        except InstrumentNotFoundError:
+            raise SnapshotInstrumentNotFoundError("instrument not found") from None
+        except AmbiguousInstrumentError:
+            raise SnapshotInstrumentAmbiguousError("instrument ambiguous") from None
+        raise SnapshotInstrumentUnsupportedError("instrument unsupported") from None
     except AmbiguousInstrumentError:
         raise SnapshotInstrumentAmbiguousError("instrument ambiguous") from None
     if (
@@ -508,7 +587,7 @@ def _resolve_equity_in_payload(
             )
         )
     ):
-        raise ValueError
+        raise InstrumentSnapshotCorruptError("instrument snapshot corrupt")
     return instrument
 
 
@@ -548,14 +627,14 @@ def _canonical_observation_bytes(values: tuple[object, ...]) -> bytes:
     value["observation_date"] = values[2].isoformat()  # type: ignore[union-attr]
     instant = values[3]
     if type(instant) is not datetime:
-        raise ValueError
+        raise InstrumentSnapshotValidationError
     value["retrieved_at"] = instant.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
     encoded = (
         json.dumps(value, ensure_ascii=True, allow_nan=False, separators=(",", ":"))
         + "\n"
     ).encode()
     if len(encoded) > MAX_OBSERVATION_JSON_BYTES_V1:
-        raise ValueError
+        raise InstrumentSnapshotValidationError
     return encoded
 
 
@@ -582,30 +661,46 @@ def _canonical_journal_bytes(metadata: InstrumentSnapshotMetadataV1) -> bytes:
         + "\n"
     ).encode()
     if len(encoded) > MAX_RECOVERY_JOURNAL_BYTES_V1:
-        raise ValueError
+        raise InstrumentSnapshotValidationError
     return encoded
 
 
 def _parse_canonical_journal(value: bytes) -> InstrumentSnapshotMetadataV1:
     try:
-        parsed_object: object = json.loads(
-            value,
-            object_pairs_hook=_unique_object,
-            parse_constant=lambda _value: (_ for _ in ()).throw(ValueError()),
-        )
+        try:
+            parsed_object: object = json.loads(
+                value,
+                object_pairs_hook=_unique_object,
+                parse_constant=lambda _value: (_ for _ in ()).throw(
+                    InstrumentSnapshotValidationError()
+                ),
+                parse_int=_parse_journal_json_int,
+            )
+        except (
+            UnicodeDecodeError,
+            json.JSONDecodeError,
+            InstrumentSnapshotValidationError,
+            RecursionError,
+        ):
+            raise InstrumentSnapshotValidationError from None
         if type(parsed_object) is not dict:
-            raise ValueError
+            raise InstrumentSnapshotValidationError
         parsed = cast(dict[str, object], parsed_object)
         expected_keys = tuple(InstrumentSnapshotMetadataV1.__dataclass_fields__)
         if tuple(parsed) != expected_keys or not _valid_journal_value_types(parsed):
-            raise ValueError
+            raise InstrumentSnapshotValidationError
+        try:
+            observation_date = date.fromisoformat(cast(str, parsed["observation_date"]))
+            retrieved_at = datetime.strptime(
+                cast(str, parsed["retrieved_at"]), "%Y-%m-%dT%H:%M:%S.%fZ"
+            ).replace(tzinfo=UTC)
+        except ValueError:
+            raise InstrumentSnapshotValidationError from None
         metadata = InstrumentSnapshotMetadataV1(
             cast(int, parsed["schema_version"]),
             cast(str, parsed["source"]),
-            date.fromisoformat(cast(str, parsed["observation_date"])),
-            datetime.strptime(
-                cast(str, parsed["retrieved_at"]), "%Y-%m-%dT%H:%M:%S.%fZ"
-            ).replace(tzinfo=UTC),
+            observation_date,
+            retrieved_at,
             cast(str, parsed["observation_sha256"]),
             cast(str, parsed["compressed_sha256"]),
             cast(str, parsed["decompressed_sha256"]),
@@ -617,9 +712,9 @@ def _parse_canonical_journal(value: bytes) -> InstrumentSnapshotMetadataV1:
             cast(str | None, parsed["last_modified"]),
         )
         if _canonical_journal_bytes(metadata) != value:
-            raise ValueError
+            raise InstrumentSnapshotValidationError
         return metadata
-    except Exception:
+    except InstrumentSnapshotValidationError:
         raise InstrumentSnapshotCorruptError(
             "instrument snapshot journal corrupt"
         ) from None
@@ -654,9 +749,16 @@ def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
     value: dict[str, object] = {}
     for key, item in pairs:
         if key in value:
-            raise ValueError
+            raise InstrumentSnapshotValidationError
         value[key] = item
     return value
+
+
+def _parse_journal_json_int(value: str) -> int:
+    try:
+        return int(value)
+    except ValueError:
+        raise InstrumentSnapshotValidationError from None
 
 
 def _open_snapshot_root(operation: StorageRootLeaseOperation, *, create: bool) -> int:
@@ -665,28 +767,53 @@ def _open_snapshot_root(operation: StorageRootLeaseOperation, *, create: bool) -
     )
 
 
+def _close_snapshot_descriptor(
+    descriptor: int, active_exception: BaseException | None
+) -> None:
+    try:
+        os.close(descriptor)
+    except BaseException:
+        if active_exception is None:
+            raise
+
+
+def _close_snapshot_directories(
+    object_fd: int,
+    observations_fd: int,
+    active_exception: BaseException | None,
+) -> None:
+    cleanup_error: BaseException | None = None
+    for descriptor in (observations_fd, object_fd):
+        try:
+            os.close(descriptor)
+        except BaseException as error:
+            if cleanup_error is None:
+                cleanup_error = error
+    if cleanup_error is not None and active_exception is None:
+        raise cleanup_error
+
+
 def _open_snapshot_directories(
     operation: StorageRootLeaseOperation, digest: str, *, create: bool
 ) -> tuple[int, int]:
-    snapshot_fd = _open_snapshot_root(operation, create=create)
-    current = snapshot_fd
+    snapshot_fd: int | None = _open_snapshot_root(operation, create=create)
     object_fd: int | None = None
     try:
-        current = _open_directory(
+        object_fd = _open_directory(
             operation, snapshot_fd, f"sha256={digest}", create=create
         )
-        os.close(snapshot_fd)
-        object_fd = current
+        previous_snapshot_fd = snapshot_fd
+        snapshot_fd = None
+        os.close(previous_snapshot_fd)
         observations_fd = _open_directory(
             operation, object_fd, "observations", create=create
         )
         return object_fd, observations_fd
-    except Exception:
-        with suppress(OSError):
-            os.close(current)
-        if object_fd is not None and object_fd != current:
-            with suppress(OSError):
-                os.close(object_fd)
+    except BaseException as error:
+        if object_fd is not None:
+            _close_snapshot_descriptor(object_fd, error)
+        if snapshot_fd is not None:
+            _close_snapshot_descriptor(snapshot_fd, error)
         raise
 
 
@@ -714,14 +841,17 @@ def _open_directory(
             os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
             dir_fd=parent_fd,
         )
-    info = os.fstat(descriptor)
-    if (
-        not stat.S_ISDIR(info.st_mode)
-        or info.st_uid != os.geteuid()
-        or stat.S_IMODE(info.st_mode) & 0o022
-    ):
-        os.close(descriptor)
-        raise InstrumentSnapshotCorruptError("instrument snapshot path unsafe")
+    try:
+        info = os.fstat(descriptor)
+        if (
+            not stat.S_ISDIR(info.st_mode)
+            or info.st_uid != os.geteuid()
+            or stat.S_IMODE(info.st_mode) & 0o022
+        ):
+            raise InstrumentSnapshotCorruptError("instrument snapshot path unsafe")
+    except BaseException as error:
+        _close_snapshot_descriptor(descriptor, error)
+        raise
     return descriptor
 
 
@@ -753,41 +883,53 @@ def _publish_exact(
         if existing != value:
             raise InstrumentSnapshotCorruptError("instrument snapshot conflicts")
         return
+    _write_snapshot_temp(parent_fd, temp_name, value)
+    reopened = _read_bounded(parent_fd, temp_name, len(value))
+    if reopened != value or _sha256(reopened) != _sha256(value):
+        raise InstrumentSnapshotCorruptError("instrument snapshot temp corrupt")
+    try:
+        try:
+            operation.ensure_live()
+            os.link(
+                temp_name,
+                final_name,
+                src_dir_fd=parent_fd,
+                dst_dir_fd=parent_fd,
+                follow_symlinks=False,
+            )
+        except OSError as error:
+            if (
+                error.errno != errno.EEXIST
+                or _read_bounded(parent_fd, final_name, len(value)) != value
+            ):
+                raise
+    except BaseException:
+        with suppress(BaseException):
+            os.unlink(temp_name, dir_fd=parent_fd)
+        raise
+    with suppress(FileNotFoundError):
+        os.unlink(temp_name, dir_fd=parent_fd)
+    os.fsync(parent_fd)
+
+
+def _write_snapshot_temp(parent_fd: int, temp_name: str, value: bytes) -> None:
     descriptor = os.open(
         temp_name,
         os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
         0o600,
         dir_fd=parent_fd,
     )
+    active_exception: BaseException | None = None
     try:
         written = 0
         while written < len(value):
             written += os.write(descriptor, value[written:])
         os.fsync(descriptor)
+    except BaseException as error:
+        active_exception = error
+        raise
     finally:
-        os.close(descriptor)
-    reopened = _read_bounded(parent_fd, temp_name, len(value))
-    if reopened != value or _sha256(reopened) != _sha256(value):
-        raise InstrumentSnapshotCorruptError("instrument snapshot temp corrupt")
-    try:
-        operation.ensure_live()
-        os.link(
-            temp_name,
-            final_name,
-            src_dir_fd=parent_fd,
-            dst_dir_fd=parent_fd,
-            follow_symlinks=False,
-        )
-    except OSError as error:
-        if (
-            error.errno != errno.EEXIST
-            or _read_bounded(parent_fd, final_name, len(value)) != value
-        ):
-            raise
-    finally:
-        with suppress(FileNotFoundError):
-            os.unlink(temp_name, dir_fd=parent_fd)
-    os.fsync(parent_fd)
+        _close_snapshot_descriptor(descriptor, active_exception)
 
 
 def _remove_safe_temp(
@@ -817,20 +959,23 @@ def _remove_journal(operation: StorageRootLeaseOperation, snapshot_fd: int) -> N
 def _validate_compressed_object(
     metadata: InstrumentSnapshotMetadataV1, compressed: bytes
 ) -> bytes:
-    if (
-        len(compressed) != metadata.compressed_byte_count
-        or _sha256(compressed) != metadata.compressed_sha256
-    ):
-        raise ValueError
-    with gzip.GzipFile(fileobj=BytesIO(compressed), mode="rb") as stream:
-        decompressed = stream.read(DEFAULT_MAX_CATALOG_DECOMPRESSED_BYTES + 1)
-    if (
-        len(decompressed) != metadata.decompressed_byte_count
-        or _sha256(decompressed) != metadata.decompressed_sha256
-    ):
-        raise ValueError
-    InstrumentCatalog.from_json_bytes(decompressed)
-    return decompressed
+    try:
+        if (
+            len(compressed) != metadata.compressed_byte_count
+            or _sha256(compressed) != metadata.compressed_sha256
+        ):
+            raise InstrumentSnapshotCorruptError("instrument snapshot corrupt")
+        with gzip.GzipFile(fileobj=BytesIO(compressed), mode="rb") as stream:
+            decompressed = stream.read(DEFAULT_MAX_CATALOG_DECOMPRESSED_BYTES + 1)
+        if (
+            len(decompressed) != metadata.decompressed_byte_count
+            or _sha256(decompressed) != metadata.decompressed_sha256
+        ):
+            raise InstrumentSnapshotCorruptError("instrument snapshot corrupt")
+        InstrumentCatalog.from_json_bytes(decompressed)
+        return decompressed
+    except (EOFError, gzip.BadGzipFile, zlib.error, InstrumentCatalogPayloadError):
+        raise InstrumentSnapshotCorruptError("instrument snapshot corrupt") from None
 
 
 def _read_bounded(parent_fd: int, name: str, limit: int) -> bytes:
@@ -839,6 +984,7 @@ def _read_bounded(parent_fd: int, name: str, limit: int) -> bytes:
         os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK,
         dir_fd=parent_fd,
     )
+    active_exception: BaseException | None = None
     try:
         info = os.fstat(descriptor)
         path_info = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
@@ -847,7 +993,7 @@ def _read_bounded(parent_fd: int, name: str, limit: int) -> bytes:
             or (info.st_dev, info.st_ino) != (path_info.st_dev, path_info.st_ino)
             or info.st_size > limit
         ):
-            raise ValueError
+            raise InstrumentSnapshotCorruptError("instrument snapshot corrupt")
         chunks: list[bytes] = []
         total = 0
         while total <= limit:
@@ -858,10 +1004,13 @@ def _read_bounded(parent_fd: int, name: str, limit: int) -> bytes:
             total += len(chunk)
         value = b"".join(chunks)
         if len(value) != info.st_size or len(value) > limit:
-            raise ValueError
+            raise InstrumentSnapshotCorruptError("instrument snapshot corrupt")
         return value
+    except BaseException as error:
+        active_exception = error
+        raise
     finally:
-        os.close(descriptor)
+        _close_snapshot_descriptor(descriptor, active_exception)
 
 
 def _sanitized_header(value: str | None) -> str | None:

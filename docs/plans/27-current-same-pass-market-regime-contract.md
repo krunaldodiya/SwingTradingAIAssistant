@@ -1,5 +1,46 @@
 # Current same-pass Market Regime contract
 
+> Successor work (2026-09-10):
+> [Issue #184](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/184)
+> owns the [BharatStock cutover](../roadmap.md#bharatstock-migration-direction).
+> Its V4 path must preserve this plan's complete raw → Plan21 → adjusted
+> ordering, immutable current-context retention/reuse, cutoff and identity
+> checks, declared failure precedence, Industry and Packet behavior.
+> Only the adjusted provider/mapping bridge changes to Plan22 V3.
+> Historical V3 contexts/readers keep their original Yahoo identities.
+> The delivered counts, smokes and approvals below do not transfer to V4.
+> The [accepted as-provided decision](../roadmap.md#accepted-as-provided-ohlcv-decision-and-member-isolation)
+> allows source-preserving implementation without waiting for provider clarification.
+> The owner has retired optional factor application. The fixed source basis
+> binds the raw request, derived price request and retained context; Upstox raw
+> values are unchanged. Review and release remain separate.
+
+The V4 request binds the original ordered selection separately from canonical
+cohort identity. The adjusted request is derived from that exact admitted raw
+request and its 21-session schedule, not accepted as an unrelated handoff.
+No adjusted value is relabelled as raw. One missing mandatory aggregate input
+withholds the dependent whole-list conclusion without changing its denominator.
+Independent selected-basis member facts use the separate Plan30 V3/#183 path.
+The V4 completion record remains #184; this notice is not release acceptance.
+
+## Calendar-only successor boundary — Issue 186
+
+[Issue #186](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/186)
+is the first working child of #172, not yet released. It extracts the existing
+official calendar composition policy for a separately sealed calendar-only
+input. Industry and event observations remain mandatory for this plan's combined
+context where its existing contract requires them; they are not forged, made
+nullable or fetched merely to prepare an independent calendar.
+
+The successor retains actual source observations, manifest and canonical
+schedule, preserves source conflict/special-session rejection, and selects the
+two latest closes at invocation data-selection time. Its acquisition deadline
+does not make a later bar completed. The historical combined context below,
+its source identities, 21-session requirements and supported readers are not
+relabelled as the new single-stock result.
+
+## Delivered historical Plan 27 baseline
+
 Status: **DELIVERED/CLOSED — PR #140 MERGED; ISSUE #119 CLOSED/COMPLETED; DELIVERY PROJECT ITEM DONE; SPRINT 14 MILESTONE; EXACT REVIEWED HEAD APPROVED/PASSED; ALL REQUIRED CURRENT SMOKES, 852 FOCUSED, 3,400 FULL AT 89.53% COVERAGE, ALL EXACT-CURRENT LOCAL GATES, HOSTED QUALITY/BUILD, AND GITGUARDIAN PASSED**
 Issue: [#119 — Sprint 14: integrated current research packet](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/119)
 Risk: **R3 / High — financial, temporal, and evidence impact**
@@ -2321,3 +2362,10 @@ current data means exact admitted evidence only, never a partial-as-complete
 bar, mixed price basis, silent provider fallback, inferred value, or unproven
 row. `NO_TRADE`, unsupported capability, and insufficient evidence remain
 first-class outcomes.
+
+## Issue #187 successor crosswalk
+
+V5 composes a validated retained Market Regime V4 projection without reopening
+its same-pass acquisition, comparability, archive or suppression contracts.
+Regime remains a whole-cohort feature and is not an independent BharatStock
+price acquisition prerequisite.

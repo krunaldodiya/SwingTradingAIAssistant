@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import sys
 from email.message import Message
 from io import BytesIO
 
 import pytest
 
+import swing_trading_ai_assistant.market_data.intraday as intraday_module
 from swing_trading_ai_assistant.market_data.credentials import AccessToken
 from swing_trading_ai_assistant.market_data.http import (
     HttpResponse,
@@ -139,6 +141,44 @@ def test_intraday_client_rejects_noncanonical_success_json(body: bytes) -> None:
         UpstoxV3IntradayClient(transport).fetch(
             IntradayRequest("NSE_EQ|INE002A01018"), AccessToken("test-token")
         )
+
+
+@pytest.mark.parametrize("fault_type", (AssertionError, ValueError, MemoryError))
+def test_intraday_client_preserves_unknown_json_decoder_fault(
+    monkeypatch: pytest.MonkeyPatch, fault_type: type[Exception]
+) -> None:
+    transport = RecordingTransport(_success([]))
+    error = fault_type("synthetic intraday decoder defect")
+    fault_reached = False
+
+    def fail(*_args: object, **_kwargs: object) -> object:
+        nonlocal fault_reached
+        fault_reached = True
+        raise error
+
+    monkeypatch.setattr(intraday_module.json, "loads", fail)
+    try:
+        with pytest.raises(fault_type) as raised:
+            UpstoxV3IntradayClient(transport).fetch(
+                IntradayRequest("NSE_EQ|INE002A01018"), AccessToken("test-token")
+            )
+    finally:
+        assert fault_reached
+    assert raised.value is error
+
+
+def test_intraday_client_retains_integer_limit_payload_rejection() -> None:
+    body = b'{"status":"success","data":{"candles":[[' + b"1" * 1000 + b"]]}}"
+    transport = RecordingTransport(HttpResponse(status_code=200, body=body))
+    previous_limit = sys.get_int_max_str_digits()
+    try:
+        sys.set_int_max_str_digits(640)
+        with pytest.raises(ValueError):
+            UpstoxV3IntradayClient(transport).fetch(
+                IntradayRequest("NSE_EQ|INE002A01018"), AccessToken("test-token")
+            )
+    finally:
+        sys.set_int_max_str_digits(previous_limit)
 
 
 @pytest.mark.parametrize(
