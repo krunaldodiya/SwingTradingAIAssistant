@@ -331,3 +331,42 @@ and sampled RSS limit these claims to offline orchestration; this is not live
 provider latency, a production SLA or proof of hard synchronous cancellation.
 Final revision review, configured full gates, installed package and hosted
 checks remain release prerequisites. Earlier pending notes above are historical.
+
+## Calendar compatibility found during final live verification
+
+The September 22 explicit PNB refresh stopped with
+`UNAVAILABLE / storage / CALENDAR_EVIDENCE_INVALID` before any authenticated
+price request. All six previously retained immutable files were unchanged.
+The old calendar was valid under the released #186 writer: later event-only
+hardening changed the enclosing acquisition runtime identity. Calendar replay
+then recomposed its source manifest with the newer identity, changing the
+manifest hash and schedule release before refresh could acquire new evidence.
+This is a parent #172 legacy-reader compatibility gap, not an optimization
+regression or corrupted market evidence.
+
+The bounded correction separates retained calendar replay from admission as a
+current-minted calendar. Only these exact released writers and the independently
+verified active reader are supported:
+
+| Calendar writer identity | Released source |
+| --- | --- |
+| `e99a63c009a99827dccf4e5b2c45c7760321670ab7b295867193670b60d1fb48` | #186, merge `feb186dbf5196b904b235c172787d27811d647c4` |
+| `d31d596fa0097312aa755050c1251de963721f638b051ba569a37c504d0fb8fe` | #187, merge `8275a47be86dfa28da46c9d6a5a9221c5f57d800`; unchanged through #188/#189 |
+
+These identities were recomputed from the seven exact released module/manifest
+blobs. Their calendar replay algorithm is unchanged. Historical admission
+replays all observations, coverage, times, composition policy and schedule using
+the admitted original writer; it requires exact original canonical bytes and
+retains registry bindings. Unknown writers, mismatched identities or altered
+evidence remain invalid. The active reader's source integrity is still checked.
+An old calendar is never advertised as a current-minted bundle, and fresh
+acquisition plus combined Industry/event evidence keep current-only identity.
+Old workflow runtime/configuration mismatches still prevent warm reuse; refresh
+publishes new current evidence without rewriting old records or resetting the
+locator.
+
+The earlier measurements remain evidence for their named measured runtime, not
+an automatic performance or release approval of this correction. Applicable
+regression, review, package, hosted and real refresh gates must complete on the
+corrected candidate. The zero-request failed attempt remains retained and does
+not satisfy the parent's live refresh-to-feature criterion.

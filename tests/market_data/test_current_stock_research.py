@@ -26,6 +26,9 @@ from swing_trading_ai_assistant.market_data import (
 )
 from swing_trading_ai_assistant.market_data import catalog as catalog_api
 from swing_trading_ai_assistant.market_data import (
+    current_evidence_acquisition as calendar_api,
+)
+from swing_trading_ai_assistant.market_data import (
     current_stock_research as workflow,
 )
 from swing_trading_ai_assistant.market_data import (
@@ -1527,6 +1530,89 @@ def test_inactivity_revalidates_the_bounded_window_without_mutating_old_evidence
         )
         assert result.mapping_observation_sha256 != first.mapping_observation_sha256
     assert original.read_bytes() == raw
+
+
+@pytest.mark.parametrize("refresh", [False, True])
+@pytest.mark.parametrize(
+    "writer",
+    [
+        "e99a63c009a99827dccf4e5b2c45c7760321670ab7b295867193670b60d1fb48",
+        "d31d596fa0097312aa755050c1251de963721f638b051ba569a37c504d0fb8fe",
+    ],
+)
+def test_released_calendar_survives_reader_upgrade_and_refresh(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, writer: str, refresh: bool
+) -> None:
+    clock, sources = _Clock(), _OfficialSources()
+    prices = _Prices(clock)
+    with monkeypatch.context() as old_writer:
+        old_writer.setattr(
+            calendar_api,
+            "current_evidence_acquisition_runtime_code_identity_v1",
+            lambda: writer,
+        )
+        old_writer.setattr(workflow, "_runtime_identity", lambda: "a" * 64)
+        first = _research(tmp_path, clock, sources, prices)
+        assert first.status == "OBSERVED"
+    originals = {
+        path: path.read_bytes()
+        for directory in (
+            "current-stock-research-v1/calendars",
+            "current-stock-research-v1/receipts",
+            "bharatstock-capture-v3/revisions",
+            "calendar-schedules",
+        )
+        for path in (tmp_path / directory).rglob("*.json")
+    }
+    assert originals
+    clock.value += timedelta(days=1 if not refresh else 0, minutes=1)
+
+    result = _research(tmp_path, clock, sources, prices, refresh=refresh)
+
+    assert result.status == "OBSERVED" and result.price_action is not None
+    assert result.runtime_code_identity_sha256 != first.runtime_code_identity_sha256
+    assert (
+        result.calendar_source_manifest_sha256 != first.calendar_source_manifest_sha256
+    )
+    assert len(prices.calls) == 2
+    assert all(path.read_bytes() == raw for path, raw in originals.items())
+    sources.forbid_requests = True
+    prices.failure = AssertionError("new current evidence must support warm reuse")
+    warm = _research(tmp_path, clock, sources, prices)
+    assert warm.reuse_state == "REUSED"
+    assert warm.capture_revision_sha256 == result.capture_revision_sha256
+    assert warm.price_action == result.price_action
+    assert len(prices.calls) == 2
+
+
+def test_unknown_calendar_writer_stops_refresh_before_new_provider_effects(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clock, sources = _Clock(), _OfficialSources()
+    prices = _Prices(clock)
+    with monkeypatch.context() as unknown_writer:
+        unknown_writer.setattr(
+            calendar_api,
+            "current_evidence_acquisition_runtime_code_identity_v1",
+            lambda: "0" * 64,
+        )
+        first = _research(tmp_path, clock, sources, prices)
+        assert first.status == "OBSERVED"
+    original_files = {
+        path: path.read_bytes()
+        for path in (tmp_path / "current-stock-research-v1").rglob("*.json")
+    }
+    assert original_files
+    prior_calls = len(prices.calls)
+    sources.forbid_requests = True
+    prices.failure = AssertionError("unknown writer must fail before provider work")
+
+    result = _research(tmp_path, clock, sources, prices, refresh=True)
+
+    assert result.status == "UNAVAILABLE"
+    assert result.stage == "storage" and result.code == "CALENDAR_EVIDENCE_INVALID"
+    assert len(prices.calls) == prior_calls
+    assert all(path.read_bytes() == raw for path, raw in original_files.items())
 
 
 @pytest.mark.parametrize(

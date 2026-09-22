@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Final
@@ -349,6 +351,120 @@ def test_calendar_evidence_rejects_oversized_serialized_input_before_base64_repl
         api.parse_current_calendar_evidence_v1(
             b"{" + b" " * api._MAX_CALENDAR_EVIDENCE_BYTES
         )
+
+
+@pytest.mark.parametrize(
+    "writer",
+    [
+        "e99a63c009a99827dccf4e5b2c45c7760321670ab7b295867193670b60d1fb48",
+        "d31d596fa0097312aa755050c1251de963721f638b051ba569a37c504d0fb8fe",
+    ],
+)
+def test_released_calendar_writer_replays_without_restamping(
+    monkeypatch: pytest.MonkeyPatch, writer: str
+) -> None:
+    transport = _CalendarTransport(_bodies(date(2026, 8, 1), _NOW))
+    with monkeypatch.context() as old_writer:
+        old_writer.setattr(
+            api, "current_evidence_acquisition_runtime_code_identity_v1", lambda: writer
+        )
+        original = _acquire(transport)
+        raw = original.canonical_json_bytes()
+
+    replay = api.parse_current_calendar_evidence_v1(raw)
+
+    assert replay.canonical_json_bytes() == raw
+    assert replay.runtime_code_identity_sha256 == writer
+    assert replay.schedule == original.schedule
+    assert replay.source_manifest_bytes == original.source_manifest_bytes
+    is_current = writer == api.current_evidence_acquisition_runtime_code_identity_v1()
+    assert api.validate_current_calendar_evidence_bundle_v1(replay) is is_current
+    current = _acquire(_CalendarTransport(_bodies(date(2026, 8, 1), _NOW)))
+    assert api.validate_current_calendar_evidence_bundle_v1(current)
+    assert (current.runtime_code_identity_sha256 == writer) is is_current
+    assert current.schedule.sessions == replay.schedule.sessions
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["unknown-writer", "outer-writer", "manifest", "schedule", "observation"],
+)
+def test_retained_calendar_rejects_unknown_or_resealed_provenance(
+    monkeypatch: pytest.MonkeyPatch, mutation: str
+) -> None:
+    writer = (
+        "0" * 64
+        if mutation == "unknown-writer"
+        else "e99a63c009a99827dccf4e5b2c45c7760321670ab7b295867193670b60d1fb48"
+    )
+    with monkeypatch.context() as old_writer:
+        old_writer.setattr(
+            api, "current_evidence_acquisition_runtime_code_identity_v1", lambda: writer
+        )
+        raw = _acquire(
+            _CalendarTransport(_bodies(date(2026, 8, 1), _NOW))
+        ).canonical_json_bytes()
+    payload = json.loads(raw)
+    if mutation == "outer-writer":
+        payload["runtime_code_identity_sha256"] = (
+            "d31d596fa0097312aa755050c1251de963721f638b051ba569a37c504d0fb8fe"
+        )
+    elif mutation in ("manifest", "schedule"):
+        schedule = json.loads(base64.b64decode(payload["schedule_b64"]))
+        if mutation == "manifest":
+            manifest = json.loads(base64.b64decode(payload["source_manifest_b64"]))
+            manifest["composition_policy"]["precedence"].reverse()
+            manifest_raw = json.dumps(
+                manifest, sort_keys=True, separators=(",", ":")
+            ).encode()
+            digest = hashlib.sha256(manifest_raw).hexdigest()
+            payload["source_manifest_b64"] = base64.b64encode(manifest_raw).decode()
+            payload["source_manifest_sha256"] = digest
+            schedule["source_release"] = f"composed-calendar@v1={digest}"
+        else:
+            schedule["sessions"] = schedule["sessions"][:-1]
+        schedule_raw = json.dumps(
+            schedule, sort_keys=True, separators=(",", ":")
+        ).encode()
+        payload["schedule_b64"] = base64.b64encode(schedule_raw).decode()
+        payload["schedule_evidence_sha256"] = hashlib.sha256(schedule_raw).hexdigest()
+    elif mutation == "observation":
+        payload["observations"][0]["known_at"] = "2026-08-26T04:15:07Z"
+    with pytest.raises(ValueError, match="invalid current calendar evidence"):
+        api.parse_current_calendar_evidence_v1(
+            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+        )
+
+
+def test_retained_calendar_requires_current_reader_and_preserves_registry_binding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    writer = "e99a63c009a99827dccf4e5b2c45c7760321670ab7b295867193670b60d1fb48"
+    with monkeypatch.context() as old_writer:
+        old_writer.setattr(
+            api, "current_evidence_acquisition_runtime_code_identity_v1", lambda: writer
+        )
+        raw = _acquire(
+            _CalendarTransport(_bodies(date(2026, 8, 1), _NOW))
+        ).canonical_json_bytes()
+    replay = api.parse_current_calendar_evidence_v1(raw)
+    object.__setattr__(
+        replay,
+        "runtime_code_identity_sha256",
+        api.current_evidence_acquisition_runtime_code_identity_v1(),
+    )
+    assert not api.validate_current_calendar_evidence_bundle_v1(replay)
+    with pytest.raises(ValueError, match="invalid current calendar evidence"):
+        replay.canonical_json_bytes()
+
+    def invalid_reader() -> str:
+        raise ValueError("active source integrity unavailable")
+
+    monkeypatch.setattr(
+        api, "current_evidence_acquisition_runtime_code_identity_v1", invalid_reader
+    )
+    with pytest.raises(ValueError, match="invalid current calendar evidence"):
+        api.parse_current_calendar_evidence_v1(raw)
 
 
 def test_calendar_admits_exact_32_day_maximum_and_rejects_one_more_before_transport() -> (
