@@ -20,6 +20,15 @@ auto-load repository instructions, explicitly read those links before work.
 No particular harness, model, terminal manager, or unrestricted permission mode
 is required.
 
+## Try single-stock research with a local assistant
+
+Use the [single-stock research workflow](docs/workflows/single-stock-research.md)
+for a reproducible synthetic demonstration of price behaviour, structure and
+missing evidence through the existing CLI. It blocks network access and uses no
+private captures or provider credentials. See the
+[observed explanation and limitations](docs/workflows/single-stock-research-observation.md).
+The separate live command still requires authorized acquisition and disclosure.
+
 ## What this project is—and is not
 
 The product has two strict layers:
