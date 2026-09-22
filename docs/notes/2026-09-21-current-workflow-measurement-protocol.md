@@ -4,7 +4,8 @@ Status: baseline protocol and harness archive; candidate verification pending.
 
 The accompanying [baseline record](2026-09-21-current-workflow-baseline.json)
 binds the original files by SHA-256. The source blocks below preserve those
-worker and sampler bytes. They are offline measurement utilities, not production
+worker and sampler bytes. Literal text fences preserve the archived source bytes
+against automatic code-block formatting. They are offline measurement utilities, not production
 entrypoints, tests automatically selected by pytest, or live provider scripts.
 
 ## Reproduction
@@ -93,7 +94,7 @@ do not repeat indefinitely to obtain a desired result.
 
 ## Original worker
 
-```python
+```text
 """Frozen offline public-path baseline worker; no production optimization."""
 import json
 import socket
@@ -204,7 +205,7 @@ if __name__ == '__main__':
 
 ## Original external RSS sampler
 
-```python
+```text
 """Serialize offline workers and sample their RSS from the parent process."""
 import hashlib
 import json
