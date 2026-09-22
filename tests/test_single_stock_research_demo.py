@@ -26,8 +26,22 @@ def run_demo(*args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-@pytest.mark.parametrize("question", ["PRICE_BEHAVIOR", "CURRENT_STRUCTURE"])
-def test_complete_demo_runs_real_question_and_never_exports_bars(question: str) -> None:
+@pytest.mark.parametrize(
+    "question,identity",
+    [
+        (
+            "PRICE_BEHAVIOR",
+            "03b7175c3a06c95c778b88ee4be6e7f2edb668eaf8cf7e7618ec327c96228c6a",
+        ),
+        (
+            "CURRENT_STRUCTURE",
+            "745b23ece9459697f45ad4e4aaee5dfe3a34d61755fe3345df8de516ca5d59e5",
+        ),
+    ],
+)
+def test_complete_demo_runs_real_question_and_never_exports_bars(
+    question: str, identity: str
+) -> None:
     result = run_demo("--question", question)
     assert result.returncode == 0, result.stderr
     value = json.loads(result.stdout)
@@ -35,6 +49,7 @@ def test_complete_demo_runs_real_question_and_never_exports_bars(question: str) 
     assert value["question"] == question
     assert value["status"] == "READY"
     assert value["packet"]["members"][0]["features"]
+    assert value["packet"]["result_identity_sha256"] == identity
     assert '"source_bars"' not in result.stdout
     assert "SYNTHETIC" in result.stderr
 
@@ -85,12 +100,20 @@ def test_unknown_scenario_fails_before_execution() -> None:
     assert result.stdout == ""
 
 
-def test_demo_network_guard_blocks_an_actual_socket_attempt() -> None:
+@pytest.mark.parametrize(
+    "attempt",
+    [
+        "socket.getaddrinfo('localhost', 1)",
+        "socket.socket().connect(('127.0.0.1', 1))",
+        "socket.socket(type=socket.SOCK_DGRAM).sendto(b'probe', ('127.0.0.1', 1))",
+        "socket.socket(type=socket.SOCK_DGRAM).sendmsg([b'probe'], [], 0, ('127.0.0.1', 1))",
+    ],
+)
+def test_demo_network_guard_blocks_an_actual_socket_attempt(attempt: str) -> None:
     program = (
         "import runpy, socket, sys; "
         "demo=runpy.run_path(sys.argv[1]); "
-        "sys.addaudithook(demo['deny_network']); "
-        "socket.create_connection(('127.0.0.1',1),timeout=1)"
+        "sys.addaudithook(demo['deny_network']); " + attempt
     )
     result = subprocess.run(  # noqa: S603 - fixed program and repository path
         [sys.executable, "-c", program, str(DEMO)],

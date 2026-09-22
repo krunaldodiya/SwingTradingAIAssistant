@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import gzip
+import io
 import json
 import sys
 from collections.abc import Callable
@@ -50,7 +51,12 @@ class SyntheticClock:
 
 
 def deny_network(event: str, _args: tuple[object, ...]) -> None:
-    if event in {"socket.connect", "socket.getaddrinfo", "socket.sendto"}:
+    if event in {
+        "socket.connect",
+        "socket.getaddrinfo",
+        "socket.sendto",
+        "socket.sendmsg",
+    }:
         raise RuntimeError("synthetic demo prohibits network access")
 
 
@@ -80,7 +86,13 @@ class SyntheticOfficialSources:
                         "instrument_key": "NSE_EQ|INE002A01018",
                     }
                 )
-            body = gzip.compress(json.dumps(rows).encode(), mtime=0)
+            # GzipFile emits OS=255 across supported Python versions; compress()
+            # used the platform OS byte on Python 3.11/3.12 with mtime=0.
+            # The exact synthetic source bytes bind the public packet identity.
+            buffer = io.BytesIO()
+            with gzip.GzipFile(fileobj=buffer, mode="wb", mtime=0) as archive:
+                archive.write(json.dumps(rows).encode())
+            body = buffer.getvalue()
         elif url == UPSTOX_HOLIDAYS_URL:
             body = json.dumps(
                 {
