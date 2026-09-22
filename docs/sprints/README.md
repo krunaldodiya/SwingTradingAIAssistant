@@ -40,10 +40,11 @@ remediation are in
   [closeout candidate](sprint-2-closeout.md) for 21/24 delivered tasks with
   ARK-92, ARK-93, and ARK-69 carried over; Milestone 2 remains blocked and is
   not accepted.
-- [Sprint 3 — Nifty 50 downloader v1](sprint-3.md) — the seven-slice preview is
-  accepted historical evidence and the downloader-v1 release candidate is in
-  final publication verification; Plan 01 continues to block research-module
-  implementation until that release closes.
+- [Sprint 3 — Nifty 50 downloader v1](sprint-3.md) — closed; the downloader-v1
+  release gate passed through [PR #82](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/82),
+  merged as `23b07d0c6204de230e5cebe17c8f54001751b253`. The seven-slice preview
+  and final publication evidence remain historical records; this completed
+  prerequisite no longer blocks research-module implementation.
 
 - Sprint 4 — Five-session opportunity census — closed by [PR #91](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/91), merged as `82f62107eb78ef696121edf096de7801d370970d`; the sealed result was 1,550/1,550 insufficient evidence and made no predictive claim.
 - Sprint 5 — Prospective Evidence Readiness v1 — closed by [PR #92](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/92), merged as `21cd9f9acbb976e9f29298e0f45dbcdf83167897`; the provider-free prerequisite manifest fails closed with `DECLARATION_RECEIPT_MISSING` and zero attempts.
@@ -150,9 +151,10 @@ remediation are in
   or automatically owned point-in-time membership, sector/classification,
   news, event, or corporate-action snapshot construction or acquisition.
   Missing evidence remains explicit at each cutoff, without fabrication, later
-  backfill, silent neutralization, or dropped dates. Sprint 17 / #147 remains a
-  separate parallel waiting historical qualification lane. Sprint 18 / #148
-  and Sprint 19 / #152 are closed/completed current/live deliveries.
+  backfill, silent neutralization, or dropped dates. Sprint 17 / #147 completed
+  its four capture-forward sessions and `OHLCV_ONLY` qualification through
+  PR #166; other profile limitations remain explicit in its closeout.
+  Sprint 18 / #148 and Sprint 19 / #152 are closed/completed current/live deliveries.
 
   Broader bounded per-decision-date as-of research snapshot construction belongs
   to Issue #139 and a separate accepted contract; it depends on #120/#122 unless
@@ -365,9 +367,11 @@ Industry/Packet URL attribution; late
   merged PR #153.
 
 - Issue #155's governing merge delivered the reviewed Plan 30 runtime
-  prerequisite. Issue #147 subsequently closed through PR #166. The remaining
-  ordered lane is Issue #156, then owner-prioritized maintenance Issue #145
-  before another product module starts.
+  prerequisite. Issue #147 subsequently closed through PR #166. Issues #156
+  and #145 are also closed; they are completed historical prerequisites, not
+  the remaining delivery lane. The historical #156 refused probe remains
+  `INVALID / NO VERDICT`. Parent #172's slices #186–#189 are delivered;
+  #190 owns the remaining measured-efficiency delivery and parent reconciliation.
   [Plan 34](../plans/34-swing-research-feature-map.md) records the necessary-only
   gate for any later swing-research feature; no named pattern, Volume, Relative
   Strength, or Liquidity/SMC possibility is an automatic backlog commitment.

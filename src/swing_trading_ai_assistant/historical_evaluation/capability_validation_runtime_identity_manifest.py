@@ -12,6 +12,6 @@ CAPABILITY_VALIDATION_RUNTIME_SOURCE_SHA256_V1: Final = {
     "src/swing_trading_ai_assistant/historical_evaluation/capability_validation_service.py": "ae8360f8599541131658af6c8ef8da3f7a312c061b95f378a90345fa157a4a58",
     "src/swing_trading_ai_assistant/market_data/__init__.py": "1893ac52a1c59b5f91c3fd3d73489adcc86ac4fc5f6cd47d8bfeb62b72b7a4bf",
     "src/swing_trading_ai_assistant/market_data/historical_revision_store.py": "3dbb44af9ba07efc1e6306890269c005ce36947bd471b1e0db8b68f611abc13d",
-    "src/swing_trading_ai_assistant/market_data/historical_upstox_raw_runtime_identity_manifest.py": "7e9cc0d66af06d50e83f50840ac19c5aba5b5ffcd4c09553758a1ee4ad7dbb17",
+    "src/swing_trading_ai_assistant/market_data/historical_upstox_raw_runtime_identity_manifest.py": "6cdc010ffe3c11edb4aa4bfa203e6ec204cf11149cf80628b1ba36e35b3c25e7",
     "src/swing_trading_ai_assistant/market_data/runtime_source_verifier.py": "834fb3261a269b35e582d91b7c497be276bd102078bb9d71816fe2f77a4c721a",
 }

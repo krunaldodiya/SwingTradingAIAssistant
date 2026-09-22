@@ -145,6 +145,51 @@ completed task-owned resources after capture when supported. Do not delete
 evidence or close unrelated, active, blocked, or unknown sessions. Hosts may retain
 completed sessions as records without treating them as active workers.
 
+## Get fast feedback before expensive validation
+
+For executable work, use this sequence under the canonical delivery controls:
+
+1. Run applicable formatting, lint and type checks, then the discriminating
+   regression, previously failing tests and tests affected by the change.
+2. Run the identified fast regression group. Fix failures with focused checks
+   before spending time on expensive integration or end-to-end cases.
+3. Freeze and commit the candidate, obtain the required independent reviews,
+   and resolve findings. Consume available automated PR review before expensive
+   final validation when the integration supports it. An automatically triggered
+   CI run may overlap review; disclose that ordering and avoid repeated interim
+   pushes. Do not disable required CI or treat absent feedback as approval.
+4. On the stable reviewed candidate, complete all applicable expensive tests,
+   coverage, build, installed-artifact and hosted gates. Confirm any review
+   conclusions that depended on final evidence, then perform release admission.
+
+Measure durations during an already-needed test run before selecting slow
+groups. Pytest's `--durations=30` reports slow setup, call and teardown phases.
+During repair, `--lf` selects previous failures; `--ff` prioritizes them but does
+not sort all tests by speed. `-x` stops scheduling further work after a failure;
+already-running parallel tests may still need to settle. These options do not
+replace a successful complete acceptance run.
+
+After a `slow` marker has actually been registered and assigned from evidence,
+`-m "not slow"` and `-m slow` can select separate groups. Preserve other required
+selectors, including the hosted `not private_source` exclusion, and explicitly
+account for the union of selected tests. This documentation does not register
+markers, change CI jobs or establish that the repository already has such groups.
+Partial runs must not be described as satisfying the full coverage threshold;
+any split final gate needs validated coverage aggregation or the existing full
+gate on the final revision.
+
+Keep ordered steps within an end-to-end scenario and preserve safe shared
+fixtures and exclusive-resource constraints. Diagnose accidental inter-test
+state dependence instead of relying on filename order. Profile measured costs
+before changing fixtures, clocks, I/O or worker counts; retain meaningful
+assertions and compare equivalent workloads. Fast-first stages favor early
+failure detection; parallel slow work can favor completion time on healthy
+candidates. Choose deliberately and retain all applicable acceptance checks.
+
+Pure documentation updates follow only `git diff --check`, not this executable
+validation sequence. Include small related workflow updates in the existing
+Issue/PR and its normal review; do not create an extra delivery track for them.
+
 ## Review the exact candidate
 
 1. Stabilize the candidate and stop prospective writers. For executable changes,

@@ -39,7 +39,7 @@ from .bharatstock_capture import (
     read_bharatstock_capture_revision_v2,
     schedule_identity_v2,
     selection_identity_v2,
-    validate_current_capture_request_v2,
+    validate_capture_revision_v2,
 )
 from .catalog import CatalogError, DuckDBCatalog
 from .current_evidence_acquisition import (
@@ -998,7 +998,7 @@ def _admit_retained_evidence(
         )
         if type(revision) is not CaptureRevisionV2:
             raise ValueError
-        validate_current_capture_request_v2(revision.request)
+        validate_capture_revision_v2(revision)
     except (CaptureRevisionUnavailableV2, ValueError) as error:
         raise CurrentStockResearchFailure(
             "storage", "CAPTURE_EVIDENCE_INVALID"

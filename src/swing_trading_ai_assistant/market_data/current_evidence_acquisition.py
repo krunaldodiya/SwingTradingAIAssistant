@@ -427,7 +427,7 @@ class CurrentCalendarEvidenceBundleV1:
 
     def canonical_json_bytes(self) -> bytes:
         """Serialize one bounded private evidence record for exact re-admission."""
-        if not validate_current_calendar_evidence_bundle_v1(self):
+        if not _validate_retained_calendar_bundle_v1(self):
             raise ValueError("invalid current calendar evidence")
         raw = _canonical(
             {
@@ -447,14 +447,37 @@ class CurrentCalendarEvidenceBundleV1:
         return raw
 
 
+_RETAINED_CALENDAR_WRITER_IDENTITIES_V1: Final = frozenset(
+    {
+        # Released #186 (feb186db): identical calendar replay policy.
+        "e99a63c009a99827dccf4e5b2c45c7760321670ab7b295867193670b60d1fb48",
+        # Released #187-189: event-only hardening changed the enclosing identity.
+        "d31d596fa0097312aa755050c1251de963721f638b051ba569a37c504d0fb8fe",
+    }
+)
+
+
+def _calendar_writer_identity_v1(writer: str | None) -> str:
+    # Always verify the active reader's source; a retained writer cannot replace it.
+    current = current_evidence_acquisition_runtime_code_identity_v1()
+    if writer is None:
+        return current
+    if type(writer) is not str or (
+        writer != current and writer not in _RETAINED_CALENDAR_WRITER_IDENTITIES_V1
+    ):
+        raise ValueError("invalid retained calendar writer")
+    return writer
+
+
 def _mint_calendar_bundle(
     *,
     observations: CurrentCalendarEvidenceObservationsV1,
     source_manifest_bytes: bytes,
     schedule: ExpectedSessionSchedule,
+    writer_runtime_identity: str | None = None,
 ) -> CurrentCalendarEvidenceBundleV1:
     manifest_sha256 = hashlib.sha256(source_manifest_bytes).hexdigest()
-    runtime_identity = current_evidence_acquisition_runtime_code_identity_v1()
+    runtime_identity = _calendar_writer_identity_v1(writer_runtime_identity)
     if (
         not _calendar_observation_set_is_exact_v1(observations)
         or type(source_manifest_bytes) is not bytes
@@ -479,7 +502,7 @@ def _mint_calendar_bundle(
     for name, value in values.items():
         object.__setattr__(result, name, value)
     _register_evidence_bundle(result, _calendar_bundle_binding(result))
-    if not validate_current_calendar_evidence_bundle_v1(result):
+    if not _validate_retained_calendar_bundle_v1(result):
         raise CurrentEvidenceAcquisitionError("SOURCE_MALFORMED")
     return result
 
@@ -831,6 +854,7 @@ def _calendar_bundle_components_are_exact_v1(
             coverage_from=value.schedule.covered_from,
             coverage_to=value.schedule.covered_to,
             as_of=value.schedule.as_of,
+            writer_runtime_identity=value.runtime_code_identity_sha256,
         )
         return (
             manifest_bytes == value.source_manifest_bytes
@@ -839,7 +863,7 @@ def _calendar_bundle_components_are_exact_v1(
             and schedule == value.schedule
             and schedule_digest(schedule) == value.schedule_evidence_sha256
             and value.runtime_code_identity_sha256
-            == current_evidence_acquisition_runtime_code_identity_v1()
+            == _calendar_writer_identity_v1(value.runtime_code_identity_sha256)
         )
     except (
         AttributeError,
@@ -852,6 +876,19 @@ def _calendar_bundle_components_are_exact_v1(
 
 def validate_current_calendar_evidence_bundle_v1(value: object) -> bool:
     """Revalidate one exact private calendar bundle before downstream adoption."""
+    try:
+        return (
+            type(value) is CurrentCalendarEvidenceBundleV1
+            and value.runtime_code_identity_sha256
+            == current_evidence_acquisition_runtime_code_identity_v1()
+            and _validate_retained_calendar_bundle_v1(value)
+        )
+    except (AttributeError, TypeError, ValueError):
+        return False
+
+
+def _validate_retained_calendar_bundle_v1(value: object) -> bool:
+    """Validate exact retained provenance without calling an old writer current."""
     try:
         return (
             type(value) is CurrentCalendarEvidenceBundleV1
@@ -1356,6 +1393,7 @@ def _compose_calendar_schedule_v1(  # noqa: C901
     coverage_from: date,
     coverage_to: date,
     as_of: datetime,
+    writer_runtime_identity: str | None = None,
 ) -> tuple[bytes, ExpectedSessionSchedule]:
     """Replay the one shared bounded calendar composition policy."""
     if (
@@ -1502,7 +1540,7 @@ def _compose_calendar_schedule_v1(  # noqa: C901
         "coverage_from": coverage_from.isoformat(),
         "coverage_to": coverage_to.isoformat(),
         "runtime_code_identity_sha256": (
-            current_evidence_acquisition_runtime_code_identity_v1()
+            _calendar_writer_identity_v1(writer_runtime_identity)
         ),
         "inputs": {
             "nse_holiday_masters": [
@@ -2358,6 +2396,7 @@ def parse_current_calendar_evidence_v1(
             observations=observations,
             source_manifest_bytes=source_manifest_bytes,
             schedule=schedule,
+            writer_runtime_identity=parsed["runtime_code_identity_sha256"],
         )
         if (
             result.runtime_code_identity_sha256

@@ -17,11 +17,11 @@ The linked sequence is:
 
 | Child | Observable outcome | Current boundary |
 | --- | --- | --- |
-| #186 | One single-stock command from empty private storage to independent completed-bar Price Action | First implementation slice; no release or live-stock result claimed yet |
-| #187 | Versioned integrated, independently available feature/member results | After the first usable command; reuse delivered #183 isolation |
-| #188 | Independent supported price-based context | Preserve basis/comparability and exact cohort requirements |
-| #189 | Bounded refresh, safe incremental reuse and truthful provisional states | No undocumented stream or suffix-only claim |
-| #190 | Measured acquisition efficiency | Baseline and budgets before optimization |
+| #186 | One single-stock command from empty private storage to independent completed-bar Price Action | Delivered through PR #191; closed; PNB observation limited to its recorded scope |
+| #187 | Versioned integrated, independently available feature/member results | Delivered through PR #196; closed; reuses delivered #183 isolation |
+| #188 | Independent supported price-based context | Delivered through PR #197; closed; basis/comparability and exact-cohort requirements preserved |
+| #189 | Bounded refresh, safe incremental reuse and truthful provisional states | Delivered through PR #200; closed; bounded one-shot behavior, no live-provider proof claimed |
+| #190 | Measured acquisition efficiency | Open; baseline and budgets before optimization |
 
 The governing [acceptance allocation](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/172#issuecomment-5631137469)
 preserves every remaining parent criterion. Applicable compatibility, reviews
@@ -349,12 +349,13 @@ delivery surfaces remain outside that delivered slice.
 
 Issue #154 closed/completed through PR #157 after accepting
 [Plan 33](plans/33-efficient-continuous-nifty100-capture-contract.md). Issue #156
-owns that separately bounded implementation. Owner-prioritized maintenance
-Issue #145 implements the
+delivered that separately bounded implementation. Closed maintenance Issue
+#145 delivered the
 [cross-module internal-error policy](architecture-freeze-v1.md#internal-errors-and-operator-diagnostics)
 without adding a product module, provider acquisition, or evidence vocabulary.
-Its review and release evidence are tracked in the Issue before another product
-module starts.
+These are completed historical prerequisites; their exact review and release
+records remain in their Issues. Parent #172's slices #186–#189 are delivered,
+with measured-efficiency slice #190 still in progress.
 Sprint 17 / Issue #147 has completed its separate `4/4` temporal captures. Its
 final historical qualification no longer waits on future-session evidence.
 

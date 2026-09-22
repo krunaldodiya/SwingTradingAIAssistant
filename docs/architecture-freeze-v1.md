@@ -507,11 +507,12 @@ price-integrity failures still invalidate all dependent facts. A missing
 question-specific requirement withholds that conclusion; unavailable optional
 context does not erase independent observations.
 
-The first working successor (#186, not yet released) uses the existing
+The first working successor (#186, delivered through PR #191) uses the existing
 NSE/Upstox calendar policy, retained Upstox BOD equity mapping and source-reported
 BharatStock two-session capture. It exposes the existing feature-local Price
 Action result, not an observed whole Packet, corporate-action qualification,
-strategy effectiveness or trade eligibility. The frozen Upstox raw/Plan-21/
+strategy effectiveness or trade eligibility. The authorized PNB observation is
+limited to the #186 completion evidence. The frozen Upstox raw/Plan-21/
 21-session Structure and Price Action contracts remain distinct.
 
 ## Locked modules
@@ -693,7 +694,7 @@ repository gates, and installed-artifact proof are recorded with Issue #145.
 
 ## Issue #187 additive current-research successor
 
-Issue #187 adds `bharatstock-retained-research-packet@v2` and the thin
+Issue #187, delivered through PR #196, added `bharatstock-retained-research-packet@v2` and the thin
 `current-supplied-cohort-research-packet@v5` envelope. V2 independently admits
 one-, two- and 21-completed-session BharatStock windows: candle geometry needs
 one bar, previous-close comparison needs two and Structure reuses the exact

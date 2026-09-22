@@ -1,6 +1,6 @@
 # Independent current raw price-context contract
 
-Status: **IMPLEMENTATION CANDIDATE — Issue #188; not released or live-provider proven**
+Status: **DELIVERED — Issue #188 closed through merged PR #197; deterministic acceptance evidence below; no live-provider proof claimed**
 Risk: **R3** — public financial-research evidence, provenance, temporal truthfulness, and provider-effect control.
 
 ## Purpose and public boundary

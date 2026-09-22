@@ -63,6 +63,9 @@ from swing_trading_ai_assistant.market_data.current_raw_price_context import (
 from swing_trading_ai_assistant.market_data.instruments import (
     UPSTOX_NSE_INSTRUMENTS_URL,
 )
+from swing_trading_ai_assistant.market_data.partition_publication import (
+    canonical_partition_relative_path,
+)
 from swing_trading_ai_assistant.market_data.schedule_evidence import (
     SCHEDULE_SCHEMA_VERSION_V3,
     ExpectedSessionSchedule,
@@ -1417,6 +1420,245 @@ def _two_member_request() -> CurrentRawPriceContextInputV1:
         _FIXTURE_SELECTION + timedelta(minutes=20),
         schedule_digest(fixture_schedule()),
         fixture_members(2),
+    )
+
+
+def test_member_local_effects_reinspect_only_the_affected_member(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "retained"
+    request = seed_root(root, retained_action=True, request_value=_two_member_request())
+    wire = RecordedWire(
+        [WireReply(body=historical_body()), WireReply(body=historical_body())]
+    )
+    monkeypatch.setattr(transport_module, "build_opener", wire.build_opener)
+    monkeypatch.setattr(
+        acquisition_module, "EnvironmentAccessTokenProvider", FixtureTokenProvider
+    )
+    full_inspections = 0
+    inspected_positions: list[int] = []
+    inspect_plan = acquisition_module._inspect_plan_v1
+    inspect_member = acquisition_module._inspect_member
+
+    def count_full(*args: object, **kwargs: object) -> object:
+        nonlocal full_inspections
+        full_inspections += 1
+        return inspect_plan(*args, **kwargs)
+
+    def count_member(*args: object, **kwargs: object) -> object:
+        inspected_positions.append(cast(int, args[3]))
+        return inspect_member(*args, **kwargs)
+
+    monkeypatch.setattr(acquisition_module, "_inspect_plan_v1", count_full)
+    monkeypatch.setattr(acquisition_module, "_inspect_member", count_member)
+
+    result = acquire_missing_current_raw_evidence_v1(
+        request, root, control=fixture_control(request)
+    )
+
+    assert result.outcome == "ACQUISITION_COMPLETED"
+    assert result.provider_calls == wire.attempts == 2
+    assert full_inspections == 2
+    assert inspected_positions.count(0) == inspected_positions.count(1) == 5
+    assert result.accounting is not None
+    assert tuple(
+        member[0].disposition.value for member in result.accounting.members
+    ) == ("RETAINED", "RETAINED")
+
+
+def test_member_reinspection_releases_acquired_lease_on_root_identity_loss(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "retained"
+    request = seed_root(root, retained_action=True)
+    plan = acquisition_module._read_plan(  # pyright: ignore[reportPrivateUsage]
+        root, request, fixture_control(request)
+    )
+    assert plan is not None
+    ledger = acquisition_module._AcquisitionLedgerV1(plan)  # pyright: ignore[reportPrivateUsage]
+
+    class _Lease:
+        released = False
+
+        def __enter__(self) -> _Lease:
+            return self
+
+        def __exit__(self, *_: object) -> None:
+            self.released = True
+
+    lease = _Lease()
+    monkeypatch.setattr(
+        StorageRootLease,
+        "try_admit_read_existing",
+        lambda *_: SimpleNamespace(lease=lease),
+    )
+    monkeypatch.setattr(
+        StorageRootLease,
+        "admit_existing_private_identity",
+        lambda *_: (999, 999),
+    )
+
+    with pytest.raises(RuntimeError, match="ROOT_OR_CATALOG_UNAVAILABLE"):
+        acquisition_module._reinspect_member_after_effect(  # pyright: ignore[reportPrivateUsage]
+            root,
+            (1, 1),
+            request,
+            fixture_control(request),
+            ledger,
+            0,
+        )
+    assert lease.released
+
+
+def test_member_reinspection_refuses_corrupt_schedule_before_any_opener(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "retained"
+    request = seed_root(root, retained_action=True)
+    plan = acquisition_module._read_plan(  # pyright: ignore[reportPrivateUsage]
+        root, request, fixture_control(request)
+    )
+    assert plan is not None
+    ledger = acquisition_module._AcquisitionLedgerV1(plan)  # pyright: ignore[reportPrivateUsage]
+    schedule_path = (
+        root
+        / "calendar-schedules"
+        / "sha256"
+        / (f"{request.schedule_identity_sha256}.json")
+    )
+    schedule_path.chmod(0o600)
+    schedule_path.write_bytes(b"corrupt")
+    schedule_path.chmod(0o400)
+    wire = RecordedWire([])
+    monkeypatch.setattr(transport_module, "build_opener", wire.build_opener)
+    identity = StorageRootLease.admit_existing_private_identity(root)
+    assert identity is not None
+
+    with pytest.raises(RuntimeError, match="CALENDAR_PREREQUISITE_MISSING"):
+        acquisition_module._reinspect_member_after_effect(  # pyright: ignore[reportPrivateUsage]
+            root,
+            identity,
+            request,
+            fixture_control(request),
+            ledger,
+            0,
+        )
+    assert wire.attempts == 0
+
+
+def test_member_reinspection_refreshes_target_mapping_before_any_opener(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "retained"
+    request = seed_root(root, retained_action=True)
+    plan = acquisition_module._read_plan(  # pyright: ignore[reportPrivateUsage]
+        root, request, fixture_control(request)
+    )
+    assert plan is not None
+    ledger = acquisition_module._AcquisitionLedgerV1(plan)  # pyright: ignore[reportPrivateUsage]
+    wire = RecordedWire([])
+    monkeypatch.setattr(transport_module, "build_opener", wire.build_opener)
+    monkeypatch.setattr(
+        acquisition_module,
+        "_resolve_mapping",
+        lambda *_: (
+            acquisition_module.PlannedSlotDispositionV1.CONFLICTED,
+            "RAW_MAPPING_CONFLICTED",
+            None,
+        ),
+    )
+    identity = StorageRootLease.admit_existing_private_identity(root)
+    assert identity is not None
+
+    refreshed = acquisition_module._reinspect_member_after_effect(  # pyright: ignore[reportPrivateUsage]
+        root,
+        identity,
+        request,
+        fixture_control(request),
+        ledger,
+        0,
+    )
+
+    assert refreshed.members[0].mapping_disposition.value == "CONFLICTED"
+    assert refreshed.members[0].mapping_reason == "RAW_MAPPING_CONFLICTED"
+    assert wire.attempts == 0
+
+
+def test_final_admission_rejects_unrelated_member_corruption_after_targeted_pass(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "retained"
+    request = seed_root(root, retained_action=True, request_value=_two_member_request())
+    bootstrap = RecordedWire(
+        [WireReply(body=historical_body()), WireReply(body=historical_body())]
+    )
+    monkeypatch.setattr(transport_module, "build_opener", bootstrap.build_opener)
+    monkeypatch.setattr(
+        acquisition_module, "EnvironmentAccessTokenProvider", FixtureTokenProvider
+    )
+    first = acquire_missing_current_raw_evidence_v1(
+        request, root, control=fixture_control(request)
+    )
+    assert first.outcome == "ACQUISITION_COMPLETED"
+    assert first.plan is not None
+    target_plan = first.plan.members[0].closed[0].plan
+    assert target_plan is not None
+    target = root / canonical_partition_relative_path(target_plan)
+    original_final = acquisition_module._fresh_final_admission
+
+    def corrupt_then_admit(*args: object, **kwargs: object) -> object:
+        target.chmod(0o600)
+        target.write_bytes(b"corrupt")
+        target.chmod(0o400)
+        return original_final(*args, **kwargs)
+
+    wire = RecordedWire([])
+    monkeypatch.setattr(transport_module, "build_opener", wire.build_opener)
+    monkeypatch.setattr(
+        acquisition_module, "_fresh_final_admission", corrupt_then_admit
+    )
+
+    result = acquire_missing_current_raw_evidence_v1(
+        request, root, control=fixture_control(request)
+    )
+
+    assert result.outcome == "ACQUISITION_BLOCKED"
+    assert result.provider_calls == wire.attempts == 0
+    assert result.plan is not None
+    assert result.plan.members[0].closed[0].disposition.value == "INVALID"
+    assert result.plan.members[0].closed[0].reason == "RAW_PARTITION_CORRUPT"
+    assert result.plan.members[1].closed[0].disposition.value == "REUSABLE"
+
+
+def test_member_replan_preserves_settled_peer_ledger_state(tmp_path: Path) -> None:
+    root = tmp_path / "retained"
+    request = seed_root(root, retained_action=True, request_value=_two_member_request())
+    plan = acquisition_module._read_plan(  # pyright: ignore[reportPrivateUsage]
+        root, request, fixture_control(request)
+    )
+    assert plan is not None
+    ledger = acquisition_module._AcquisitionLedgerV1(plan)  # pyright: ignore[reportPrivateUsage]
+    slot = plan.members[0].closed[0]
+    attempted_at = request.data_selection_time
+    completed_at = attempted_at + timedelta(seconds=1)
+    settled_at = completed_at + timedelta(seconds=1)
+    ledger.before_open(slot.key, attempted_at)
+    ledger.response_completed(slot.key, completed_at)
+    ledger.settled(slot.key, settled_at)
+    ledger.retained(slot.key)
+    before = ledger.snapshot()
+
+    ledger.replan_member(
+        plan.selected,
+        plan.inspection_cutoff + timedelta(seconds=1),
+        plan.members[1],
+    )
+    after = ledger.snapshot()
+
+    assert after.members[0] == before.members[0]
+    assert (after.total_calls, after.completed_calls) == (
+        before.total_calls,
+        before.completed_calls,
     )
 
 

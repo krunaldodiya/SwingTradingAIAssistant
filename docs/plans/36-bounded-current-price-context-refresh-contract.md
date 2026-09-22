@@ -1,6 +1,6 @@
 # Bounded current raw price-context refresh contract
 
-Status: **IMPLEMENTED IN THE ISSUE #189 REVIEW CANDIDATE — deterministic acceptance evidence below; not released or live-provider proven**
+Status: **DELIVERED — Issue #189 closed through merged PR #200; deterministic acceptance evidence below; no live-provider or production-latency claim**
 Risk: **R3** — public temporal truth, provenance, provider effects, and immutable publication.
 
 ## Purpose and public boundary

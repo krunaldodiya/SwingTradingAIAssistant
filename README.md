@@ -89,14 +89,16 @@ source-preserving BharatStock acquisition, exact capture reuse and independently
 available member/feature facts. Historical Yahoo records below remain historical
 delivery evidence, not an active Yahoo acquisition path.
 
-**Current working slice, not yet released:**
+**Delivered current-research slices:**
 [#187](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/187)
-adds an explicit V2 current-stock research result under #172. It keeps the
-unversioned V1 command while independently admitting one-, two- and 21-session
-BharatStock evidence into an integrated V5 envelope. Fresh regime, Industry and
-event context are not acquired by this command; #188, #189 and #190 retain their
-independent price-context, refresh and efficiency scope. This does not claim a
-live PNB result, completed #172, new analytical modules or better trading returns.
+delivered the explicit V2 current-stock research result through PR #196. It keeps
+the unversioned V1 command while independently admitting one-, two- and
+21-session BharatStock evidence into an integrated V5 envelope. Fresh regime,
+Industry and event context are not acquired by this command. Issues #188 and
+#189 delivered separate raw-price-context and bounded-refresh contracts;
+#190 remains open for measured acquisition efficiency. Parent #172 remains open.
+The separately recorded #186 PNB observation supports only its stated
+capture-to-Price-Action scope, not V2 live-provider qualification or trading returns.
 
 Use V2 only with an explicit closed question:
 
@@ -115,10 +117,10 @@ context or a local long-window failure makes only its dependent question/fact
 not ready. V2 emits readiness facts, not a recommendation; it preserves the
 invocation selection time separately from later evidence acquisition time.
 
-## Current raw price context (Issue #188 candidate)
+## Current raw price context (Issue #188 delivered)
 
-The additive, unreleased `current-price-context@v1` command accepts an
-owner-private closed request for an explicit 1–50 canonical NSE-equity cohort:
+The additive `current-price-context@v1` command, delivered through PR #197,
+accepts an owner-private closed request for an explicit 1–50 canonical NSE-equity cohort:
 
 ```bash
 market-data price-context-current \
@@ -142,9 +144,9 @@ missing or unsupported retained Industry evidence does not suppress independent
 raw facts. The command emits research facts, never an analytic recommendation,
 live/provider proof, or a claim that missing evidence is neutral.
 
-## Bounded current price-context refresh (Issue #189 review candidate)
+## Bounded current price-context refresh (Issue #189 delivered)
 
-The additive, unreleased `current-price-context@v2` boundary is selected only by
+The additive `current-price-context@v2` boundary, delivered through PR #200, is selected only by
 `--contract-version v2`; V1 remains the CLI default. V2 is still exactly one
 bounded request/response pass—not polling, streaming, subscription, background
 refresh, or a service. Its closed request owns one of `RETAINED_ONLY`,
@@ -177,8 +179,8 @@ or dual write. See
 [Plan 36](docs/plans/36-bounded-current-price-context-refresh-contract.md) for
 temporal, cancellation, conflict, and correction rules.
 
-The repository contains the Nifty 50 market-data foundation and the first two
-provider-free research cores. Delivered behavior includes:
+The repository contains the Nifty 50 market-data foundation and provider-free
+research cores. Delivered behavior includes:
 
 - the persistent downloader-v1 workflow for one, several, or all retained
   point-in-time Nifty 50 members, with Upstox raw historical/current candles,
@@ -424,10 +426,12 @@ acquisition uses the explicitly approved NSE/Upstox composition policy, not a
 generic exchange-calendar fallback. Strategy rules, recommendations, and broker
 execution are not implemented.
 
-## Single-stock current research candidate
+## Single-stock current research
 
-[#186](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/186) adds
-`current-stock-research@v1`; this candidate is not yet released or live-qualified.
+[#186](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/186) delivered
+`current-stock-research@v1` through PR #191. Its completion evidence includes one
+authorized real PNB capture-to-Price-Action observation, with no claim of general
+provider qualification, trade eligibility or a new current result.
 Use an existing empty owner-private directory (`0700`), or an admitted private
 storage root. The command does not create the root or repair permissions:
 

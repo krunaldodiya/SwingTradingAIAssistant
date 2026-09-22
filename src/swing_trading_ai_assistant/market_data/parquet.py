@@ -385,7 +385,10 @@ def _canonical_candles_from_record_batch(
     record_batch: Any,
 ) -> tuple[CanonicalCandle, ...]:
     try:
-        return tuple(CanonicalCandle(**row) for row in record_batch.to_pylist())
+        # The admitted Arrow schema uses CanonicalCandle constructor field order.
+        # Convert each column once without allocating a dictionary for every row.
+        columns = [column.to_pylist() for column in record_batch.columns]
+        return tuple(CanonicalCandle(*row) for row in zip(*columns, strict=True))
     except (OverflowError, TypeError, ValueError) as exc:
         raise CandleParquetConversionError(
             "Parquet row conversion to canonical candle failed"

@@ -49,9 +49,13 @@ from .storage_root_lease import (
 CONTRACT_VERSION_V3: Final = "bharatstock-capture@v3"
 SOURCE_PROFILE_V3: Final = "BHARATSTOCK_CAPTURE_FORWARD_DAILY_V3"
 _PROCESSING_REVISION_V3: Final = "source-reported-ohlc@v2"
-# PR185's exact V3 schema/basis remains readable, never a current writer token.
-_READ_ONLY_RUNTIME_IDENTITY_V3: Final = (
-    "bcda597760ea97f8a0762845e32ef8fe4532a1b93dfd4876cf0df418b88bd49d"
+# Released V3 writers share this schema/basis. Retained reading does not
+# authorize these identities for new capture effects.
+_READ_ONLY_RUNTIME_IDENTITIES_V3: Final = (
+    "bcda597760ea97f8a0762845e32ef8fe4532a1b93dfd4876cf0df418b88bd49d",  # PR185
+    "c5f74daf212167b3d4dac510e83e5602b2dbafa0d02a9dc9036b7c9c9cd81c10",  # #186
+    "c903f7c2e87a867c0aa8d76c1056c08d72bd91a005f670c9028d4970bb177cb3",  # #187–188
+    "29698ddcb2499ebbbee3030c731147855ba0f99a57ceac65456a93648deb9f0c",  # #189
 )
 _PREDECESSOR_SOURCE_PROFILE_V2: Final = "BHARATSTOCK_CAPTURE_FORWARD_DAILY_V2"
 _PREDECESSOR_PRICE_BASIS_V2: Final = "BHARATSTOCK_SPLIT_BONUS_FACTOR_ADJUSTED_OHLC"
@@ -346,7 +350,7 @@ class CaptureRequestV2:
             or self.selection_identity_sha256 != selection_identity_v2(self.members)
             or self.schema_identity_sha256 != _schema_identity()
             or self.runtime_code_identity_sha256
-            not in (_runtime_identity(), _READ_ONLY_RUNTIME_IDENTITY_V3)
+            not in (_runtime_identity(), *_READ_ONLY_RUNTIME_IDENTITIES_V3)
             or self.configuration_identity_sha256 != _configuration_identity()
         ):
             raise ValueError("BharatStock capture request is invalid")
