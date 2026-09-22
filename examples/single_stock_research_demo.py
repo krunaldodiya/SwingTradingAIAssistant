@@ -51,12 +51,9 @@ class SyntheticClock:
 
 
 def deny_network(event: str, _args: tuple[object, ...]) -> None:
-    if event in {
-        "socket.connect",
-        "socket.getaddrinfo",
-        "socket.sendto",
-        "socket.sendmsg",
-    }:
+    # The simulation requires no socket operation, including resolver helpers.
+    # Deny the entire audited family so alternate APIs cannot slip through.
+    if event.startswith("socket."):
         raise RuntimeError("synthetic demo prohibits network access")
 
 

@@ -104,6 +104,10 @@ def test_unknown_scenario_fails_before_execution() -> None:
     "attempt",
     [
         "socket.getaddrinfo('localhost', 1)",
+        "socket.gethostbyname('localhost')",
+        "socket.gethostbyname_ex('localhost')",
+        "socket.gethostbyaddr('127.0.0.1')",
+        "socket.getnameinfo(('127.0.0.1', 1), 0)",
         "socket.socket().connect(('127.0.0.1', 1))",
         "socket.socket(type=socket.SOCK_DGRAM).sendto(b'probe', ('127.0.0.1', 1))",
         "socket.socket(type=socket.SOCK_DGRAM).sendmsg([b'probe'], [], 0, ('127.0.0.1', 1))",
