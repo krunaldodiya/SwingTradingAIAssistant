@@ -38,6 +38,7 @@ update those documents as well as the note.
 
 ## Notes index
 
+- [2026-09-22 — Next research-assistant priorities and Linux handoff](2026-09-22-next-sprint-and-linux-handoff.md)
 - [2026-09-21 — Current-workflow efficiency investigation](2026-09-21-current-workflow-efficiency.md)
 
 - [2026-08-10 — ARK-112 disposition and Sprint 3 scope exchange](2026-08-10-ark-112-disposition-and-scope-exchange.md)
