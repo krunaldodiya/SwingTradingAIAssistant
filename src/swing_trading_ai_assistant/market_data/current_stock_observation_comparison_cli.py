@@ -84,6 +84,19 @@ def _instant(value: str) -> datetime:
         ) from error
 
 
+def _valid_symbol(value: object) -> bool:
+    return (
+        type(value) is str
+        and 1 <= len(value) <= 32
+        and value[0].isascii()
+        and value[0].isalnum()
+        and all(
+            character in "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.&_-"
+            for character in value
+        )
+    )
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = _Parser(prog="market-data research-compare")
     parser.add_argument("command", choices=("research-compare",))
@@ -112,7 +125,8 @@ def main(
     try:
         args = _parser().parse_args(argv)
         if (
-            not args.storage_root.is_absolute()
+            not _valid_symbol(args.symbol)
+            or not args.storage_root.is_absolute()
             or args.previous_selection_time >= args.current_selection_time
         ):
             raise ValueError("invalid comparison request")

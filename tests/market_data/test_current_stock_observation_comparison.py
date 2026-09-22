@@ -785,6 +785,49 @@ def test_cli_rejects_oversized_time_before_observation(
     assert captured.err == "request_invalid\n"
 
 
+@pytest.mark.parametrize("symbol", ("A" * 33, "pnb", "../PNB"))
+def test_cli_rejects_malformed_symbol_before_observation(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    symbol: str,
+) -> None:
+    calls = 0
+
+    def unexpected(*_args: object, **_kwargs: object) -> CurrentStockResearchResultV2:
+        nonlocal calls
+        calls += 1
+        raise AssertionError("malformed request reached observation service")
+
+    exit_code = comparison_cli(
+        [
+            "research-compare",
+            "--symbol",
+            symbol,
+            "--storage-root",
+            str(tmp_path),
+            "--contract-version",
+            "v1",
+            "--question",
+            "PRICE_BEHAVIOR",
+            "--previous-selection-time",
+            "2026-08-26T04:15:00.000000Z",
+            "--current-selection-time",
+            "2026-08-27T04:15:00.000000Z",
+            "--output",
+            "json",
+        ],
+        observation_service=unexpected,
+    )
+
+    captured = capsys.readouterr()
+    assert (exit_code, calls, captured.out, captured.err) == (
+        2,
+        0,
+        "",
+        "request_invalid\n",
+    )
+
+
 def test_interrupted_first_observation_prevents_second_and_returns_typed_result(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
