@@ -49,7 +49,7 @@ CURRENT_RAW_INDUSTRY_PARTICIPATION_RUNTIME_SOURCE_SHA256_V1: Final[dict[str, str
     "src/swing_trading_ai_assistant/market_data/open_month_coverage.py": "7b84533396c852579f429188d239f08ab42683f57755e2e9e90c26f6bd8d54e0",
     "src/swing_trading_ai_assistant/market_data/open_month_download.py": "071e7c8c002d9f2fa1b4c0badeeb316acb2b43f1350660512c001274b6c94277",
     "src/swing_trading_ai_assistant/market_data/open_month_query.py": "10f280a60d2074cf7f02f9cbdae05548e0ffa2751b3e064f043e65eddcc19494",
-    "src/swing_trading_ai_assistant/market_data/parquet.py": "fbc91650a9f9fc10aecb3091973b441d5d82317b9bff558bf447122d63d88ca4",
+    "src/swing_trading_ai_assistant/market_data/parquet.py": "5d64c3de5faae2072c14d64b4c3f52b5b2435c5a362a01a05f556a0de0e7f8dd",
     "src/swing_trading_ai_assistant/market_data/partition_directory_maintenance.py": "a8e4e29dcf85e9f10481d0c207bdb8ca8ba685a9c15af4f71c76072c873fdfaa",
     "src/swing_trading_ai_assistant/market_data/partition_ingestion.py": "b253ff5dddd072f13b688591d410f3253a26819c37c48752aa5250106f087d38",
     "src/swing_trading_ai_assistant/market_data/partition_publication.py": "dcfd3ae76ef8d94c0f46ade75a1c524a5f135b1562ac46254c4a7c36ba76018f",

@@ -396,3 +396,42 @@ all six original immutable files remained unchanged. This offline proof does
 not substitute for the pending real refresh-to-feature check. The final candidate
 must complete the existing performance protocol (one warmup and three measured
 processes for each cohort); the original baselines need not be repeated.
+
+## Second and final optimization experiment — 2026-09-22
+
+The final compatibility candidate ddec85c passed 5,149 local tests, package
+verification and the approved two-request PNB refresh. Its one monitored
+performance continuation failed on N2 measured repetition 2: cold stopped at
+19.014625 seconds against the unchanged 19-second ceiling. Warmup and repetition
+1 passed; repetition 3 and N50 did not run. Preserve that failure and the earlier
+903cbf0 failure. Neither is a successful acceptance sample.
+
+The retained diagnostic profile identifies batch-to-candle conversion as a
+substantial exercised cost (934 calls; 6.151 seconds own, 19.111 cumulative under
+profiling). Those figures include profiling overhead and mandatory validation;
+they do not predict native savings. The second and last permitted experiment
+replaces transient row dictionaries with per-column Python lists and positional
+construction, only in `market_data/parquet.py`. The approved 22-column order must
+match CanonicalCandle's constructor. Every row still invokes its existing
+validators. No schema, writer, cache, read count, resource guard, recheck, provider,
+research formula or failure policy changes. Coordinator owns this helper,
+focused tests and all directly/transitively affected source manifests.
+
+Before implementation, the focused matrix is frozen: field-order alignment;
+all-field round trip with nullable/non-null optional fields, exact timestamps,
+dates, floats and int64 volume; empty and multiple batches; invalid later row
+rejecting the entire batch; preserved conversion cause and close-error precedence;
+physical schema rejection and existing decoded/file/text resource guards.
+Existing schema tests cover value validators; new tests fill conversion-specific
+gaps. The profile and failed public measurements reproduce the performance
+problem; semantic tests are expected to pass both implementations.
+
+After focused verification and stable-byte independent functional and security
+review, run the unchanged frozen public harness once: N1, N2, N50 each one
+warmup and three measured fresh processes, serialized, stopping on any failed
+ceiling. No budget changes, replacement samples or third optimization experiment.
+All raw results/counts must match the original baseline apart from declared
+runtime identity hashes. Previous N1 measurements cannot approve this changed
+execution path. Full/package/installed/hosted gates remain required for the final
+candidate. The completed live refresh is preserved; assess reader/source impact
+offline, without reusing consumed provider request authority.
