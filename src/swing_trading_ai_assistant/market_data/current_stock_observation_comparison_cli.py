@@ -4,16 +4,10 @@ from __future__ import annotations
 
 import argparse
 import sys
-from collections.abc import Callable
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import NoReturn, Protocol
 
-from .bharatstock import (
-    BharatStockError,
-    BharatStockHistory,
-    BharatStockInstrument,
-)
 from .current_stock_observation_comparison import (
     compare_current_stock_observations_v1,
     invalid_current_stock_observation_comparison_v1,
@@ -21,9 +15,7 @@ from .current_stock_observation_comparison import (
 from .current_stock_research_v2 import (
     CurrentStockResearchResultV2,
     QuestionV2,
-    research_current_stock_v2,
 )
-from .http import HttpResponse, HttpTransportError, ProviderErrorCategory
 
 
 class CurrentStockObservationPortV1(Protocol):
@@ -35,35 +27,6 @@ class CurrentStockObservationPortV1(Protocol):
         question: QuestionV2,
         selection_time: datetime,
     ) -> CurrentStockResearchResultV2: ...
-
-
-class _FixedClock:
-    def __init__(self, instant: datetime) -> None:
-        self.instant = instant
-
-    def now(self) -> datetime:
-        return self.instant
-
-
-class _RetainedOnlyTransport:
-    def get(self, url: str, headers: dict[str, str]) -> HttpResponse:
-        del url, headers
-        raise HttpTransportError(ProviderErrorCategory.AUTHORIZATION)
-
-
-class _RetainedOnlyPrices:
-    def history(
-        self,
-        instrument: BharatStockInstrument,
-        start: date,
-        end: date,
-        *,
-        effect_guard: Callable[[], None] | None = None,
-    ) -> BharatStockHistory:
-        del instrument, start, end
-        if callable(effect_guard):
-            effect_guard()
-        raise BharatStockError("AUTHORIZATION", member_local=True)
 
 
 class _Parser(argparse.ArgumentParser):
@@ -98,7 +61,7 @@ def _valid_symbol(value: object) -> bool:
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = _Parser(prog="market-data research-compare")
+    parser = _Parser(prog="single-stock-research-comparison-demo research-compare")
     parser.add_argument("command", choices=("research-compare",))
     parser.add_argument("--symbol", required=True)
     parser.add_argument(
@@ -120,7 +83,7 @@ def _parser() -> argparse.ArgumentParser:
 def main(
     argv: list[str] | None = None,
     *,
-    observation_service: CurrentStockObservationPortV1 | None = None,
+    observation_service: CurrentStockObservationPortV1,
 ) -> int:
     try:
         args = _parser().parse_args(argv)
@@ -135,22 +98,11 @@ def main(
         return 2
 
     def observe(selection_time: datetime) -> CurrentStockResearchResultV2:
-        if observation_service is not None:
-            return observation_service(
-                args.symbol,
-                args.storage_root,
-                question=args.question,
-                selection_time=selection_time,
-            )
-        return research_current_stock_v2(
+        return observation_service(
             args.symbol,
             args.storage_root,
             question=args.question,
-            refresh=False,
-            clock=_FixedClock(selection_time),
-            calendar_transport=_RetainedOnlyTransport(),
-            snapshot_transport=_RetainedOnlyTransport(),
-            price_client=_RetainedOnlyPrices(),  # type: ignore[arg-type]
+            selection_time=selection_time,
         )
 
     try:

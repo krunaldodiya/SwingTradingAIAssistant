@@ -26,9 +26,9 @@ uv run python examples/single_stock_research_comparison_demo.py \
 ```
 
 The wrapper labels fixed synthetic PNB observations on stderr. It invokes the
-same bounded comparison CLI adapter as the installed command, while injected
-calendar, mapping and price adapters create both observations through the real
-V2 admission, calculation and serialization path. A process-wide Python audit
+bounded in-process comparison CLI adapter with an explicit observation port.
+Injected calendar, mapping and price adapters create both observations through
+the real V2 admission, calculation and serialization path. A process-wide Python audit
 hook denies the socket family. No credential, provider request, owner file or
 private capture is used. The control is for this trusted Python demo; it is not
 an operating-system sandbox for native code or inherited connected descriptors.
@@ -42,9 +42,9 @@ CURRENT_STRUCTURE has two. A result never exports raw bars, pivots or events.
 ## Consume the comparison safely
 
 1. Establish provenance from the observed command execution. A copied JSON
-   document and its self-declared hash do not prove admission. The production
-   command compares objects minted and validated in the same process; it does
-   not accept serialized observations as trusted input.
+   document and its self-declared hash do not prove admission. The demonstration
+   compares objects minted and validated in the same process; it does not accept
+   serialized observations as trusted input.
 2. Require `contract_version=current-stock-observation-comparison@v1`, status,
    code, runtime/schema/configuration identities and
    `result_identity_sha256`. Stop on `NON_COMPARABLE`; report its code without
@@ -68,30 +68,23 @@ The observed synthetic response is recorded in
 [single-stock-research-comparison-observation.md](single-stock-research-comparison-observation.md).
 It is one qualitative assistant observation, not a universal model evaluation.
 
-## Installed command with genuine evidence
+## Production retained-history command deferred
 
-```sh
-market-data research-compare --symbol PNB \
-  --storage-root /absolute/owner-private/root \
-  --contract-version v1 --question PRICE_BEHAVIOR \
-  --previous-selection-time 2026-08-26T04:15:00.000000Z \
-  --current-selection-time 2026-08-27T04:15:00.000000Z \
-  --output json
-```
+Issue #204 does not install `market-data research-compare`. The existing
+`market-data` entry point and delivered V1/V2 runtime identities remain
+unchanged. The in-process CLI adapter requires an explicit admitted-observation
+port and is exercised by the fixed synthetic demonstration above.
 
-The installed entrypoint dispatches only `research-compare` to the additive
-adapter and delegates all existing commands byte-for-byte to their delivered
-CLI. Each selected observation calls the existing V2 service with refresh
-disabled through retained-only calendar, mapping and price adapters. This
-comparison command never acquires missing evidence: an absent exact retained
-dependency yields a typed non-comparable result. The retained-only boundary
-prevents a fresh response from being stamped with a caller-selected historical
-clock. Other V2 commands retain their existing acquisition behavior; disabled
-refresh alone is not an offline guarantee for those commands. Establish private-
-storage and model-destination authority before genuine comparison use.
+The unchanged V2 service acquires calendar evidence before it consults retained
+mapping and price evidence, so it cannot safely retrieve two historical
+observations using caller-selected clocks. Adding a production retained-history
+command therefore requires a separately authorized retained-observation
+reconstruction or archive capability. This slice does not add that capability,
+alter the V2 acquisition boundary, or imply that disabled refresh is an offline
+guarantee.
 
-Inputs are exactly two canonical UTC selection times, one symbol, one absolute
-root and one of PRICE_BEHAVIOR or CURRENT_STRUCTURE. Both admitted observations
+Adapter inputs are exactly two canonical UTC selection times, one symbol, one
+absolute root and one of PRICE_BEHAVIOR or CURRENT_STRUCTURE. Both admitted observations
 must have the current runtime, the same canonical stock/question/price basis,
 strictly increasing selection, completed-session and evidence-known times, and
 evidence known by its own deadline. Invalid observation, missing packet,
