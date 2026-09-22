@@ -349,12 +349,13 @@ delivery surfaces remain outside that delivered slice.
 
 Issue #154 closed/completed through PR #157 after accepting
 [Plan 33](plans/33-efficient-continuous-nifty100-capture-contract.md). Issue #156
-owns that separately bounded implementation. Owner-prioritized maintenance
-Issue #145 implements the
+delivered that separately bounded implementation. Closed maintenance Issue
+#145 delivered the
 [cross-module internal-error policy](architecture-freeze-v1.md#internal-errors-and-operator-diagnostics)
 without adding a product module, provider acquisition, or evidence vocabulary.
-Its review and release evidence are tracked in the Issue before another product
-module starts.
+These are completed historical prerequisites; their exact review and release
+records remain in their Issues. Parent #172's slices #186–#189 are delivered,
+with measured-efficiency slice #190 still in progress.
 Sprint 17 / Issue #147 has completed its separate `4/4` temporal captures. Its
 final historical qualification no longer waits on future-session evidence.
 

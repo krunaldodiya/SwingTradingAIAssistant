@@ -1,9 +1,9 @@
 {
-  "status": "N1/N2 budgets passed; N50/reviews/gates pending",
+  "status": "N1/N2/N50 measured budgets passed; final revision reviews and release gates pending",
   "source_identity_record": "source-identities.json",
   "N1": {
     "cohort": 1,
-    "status": "complete small-cohort evidence only; overall acceptance pending",
+    "status": "measured budgets passed; final release pending",
     "modes": {
       "ACQUIRE_MISSING": {
         "seconds": [
@@ -66,7 +66,7 @@
   },
   "N2": {
     "cohort": 2,
-    "status": "small-cohort evidence only; full-cohort and release pending",
+    "status": "measured budgets passed; final release pending",
     "modes": {
       "ACQUIRE_MISSING": {
         "seconds": [
@@ -135,5 +135,223 @@
         "other_fields_exactly_equal_to_baseline": true
       }
     }
+  },
+  "measured_commit": "1e5c5286d6d0ae278ee967889ed5f8ad9630b9fb",
+  "measured_tree": "50d5e29aa1676a12f8bfb033585822773a7f40d8",
+  "N50": {
+    "cohort": 50,
+    "measured_repetitions": 3,
+    "discarded_warmups": 1,
+    "interrupted_attempt": "n50-rep3.jsonl; preserved incomplete, terminal resource evidence unavailable; recovery-decision.json explains fresh-process replacement",
+    "interrupted_cold_seconds": 435.8351487159962,
+    "interrupted_cold_attempts": 151,
+    "interrupted_sampled_rss": null,
+    "interruption_cause": "unknown; process and session absent on resume",
+    "recovered_repetition": "rep3-recovery-20260922",
+    "baseline_median": null,
+    "relative_improvement": null,
+    "limit": "Offline fixed logical clock; no live latency or deadline claim",
+    "modes": {
+      "ACQUIRE_MISSING": {
+        "seconds": [
+          434.8501434009959,
+          436.9601045099989,
+          458.845826858
+        ],
+        "median": 436.9601045099989,
+        "minimum": 434.8501434009959,
+        "maximum": 458.845826858,
+        "range_over_median": 0.054915044209613975,
+        "peak_sampled_rss_bytes": 197402624,
+        "attempts_per_call": 151,
+        "budgets_pass": true
+      },
+      "RETAINED_ONLY": {
+        "seconds": [
+          117.5142374269999,
+          125.10609387300065,
+          119.049290079
+        ],
+        "median": 119.049290079,
+        "minimum": 117.5142374269999,
+        "maximum": 125.10609387300065,
+        "range_over_median": 0.06377069901855661,
+        "peak_sampled_rss_bytes": 178786304,
+        "attempts_per_call": 0,
+        "budgets_pass": true
+      },
+      "REFRESH_ONCE": {
+        "seconds": [
+          392.40202000400313,
+          384.44239969099726,
+          383.6153400149999
+        ],
+        "median": 384.44239969099726,
+        "minimum": 383.6153400149999,
+        "maximum": 392.40202000400313,
+        "range_over_median": 0.022855647545810997,
+        "peak_sampled_rss_bytes": 181821440,
+        "attempts_per_call": 50,
+        "budgets_pass": true
+      }
+    }
+  },
+  "retained_measurement_files": {
+    "baseline_worker.py": "0e6fda9d980b0874297b8ffd5f16e91b3e4da4a8020ca6def2b4d9b4b8d90a33",
+    "candidate_runner.py": "4665d528dacf6c0a5a85277f1889e6ca87b79e56170b98b0b7ca1ebd51f29225",
+    "source-identities.json": "b6c67038232af91c4504f4fce94870d0e19aa83899c83ef2babaeaf654d6817e",
+    "summarize_recovered_cohort.py": "ebe440468d7812b7c749c30b8d0304a846cdcf18f05b68d95c849aa704ce99d2",
+    "n50-rep0.jsonl": "b8a6c47b534f2823cdf80666cd96bb4494fa9a4c6343cf7bd6b2c332aad4d4aa",
+    "n50-rep0.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "n50-rep0-resources.json": "b1341202eb8bd85a6fd151e6c6901cb6277f47972fbe5dab9401832338adf453",
+    "n50-rep1.jsonl": "03c79984fd54333d69eb4c127749f98101e4183d943963d0dc7ae1e4a0533e90",
+    "n50-rep1.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "n50-rep1-resources.json": "f4499d5a8ed32da8ac88a43ea23bb3479ea4869eb9730c5f1e3c630dd18e1909",
+    "n50-rep2.jsonl": "96832b518fd51b3fbdd0adf84a9b99ce02b0778b64ed5425dd0aee5778184615",
+    "n50-rep2.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "n50-rep2-resources.json": "577fc38d63f4b05d9b07a9a8d979ffd2f0843920d051fd05bb2184ec51b264f2",
+    "rep3-recovery-20260922/n50-rep3.jsonl": "e9d2f94b1e8a46d2d5219058d7b84f5def57c9b80ee12864bbd3a0c78fd81020",
+    "rep3-recovery-20260922/n50-rep3.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "rep3-recovery-20260922/n50-rep3-resources.json": "b41a8253ae27f20e818a225b3bdc294930a8075739bf80e245b9a92137e3354b"
+  },
+  "N50_resource_receipts": [
+    {
+      "n": 50,
+      "repetition": 0,
+      "warmup": true,
+      "exit_code": 0,
+      "process_peak_rss_bytes": 198402048,
+      "public_call_rss": {
+        "ACQUIRE_MISSING": {
+          "start_rss_bytes": 97533952,
+          "peak_rss_bytes": 198402048,
+          "samples": 19405,
+          "max_sample_gap_seconds": 0.10279650500160642
+        },
+        "RETAINED_ONLY": {
+          "start_rss_bytes": 184446976,
+          "peak_rss_bytes": 186638336,
+          "samples": 5412,
+          "max_sample_gap_seconds": 0.08933997999702115
+        },
+        "REFRESH_ONCE": {
+          "start_rss_bytes": 144572416,
+          "peak_rss_bytes": 153935872,
+          "samples": 17223,
+          "max_sample_gap_seconds": 0.1332959130013478
+        }
+      },
+      "platform": "macOS-26.6.2-x86_64-i386-64bit-Mach-O",
+      "python": "3.13.7 (main, Sep 18 2025, 19:55:22) [Clang 20.1.4 ]",
+      "worker_sha256": "0e6fda9d980b0874297b8ffd5f16e91b3e4da4a8020ca6def2b4d9b4b8d90a33",
+      "budget_exceeded": null
+    },
+    {
+      "n": 50,
+      "repetition": 1,
+      "warmup": false,
+      "exit_code": 0,
+      "process_peak_rss_bytes": 193392640,
+      "public_call_rss": {
+        "ACQUIRE_MISSING": {
+          "start_rss_bytes": 97013760,
+          "peak_rss_bytes": 193392640,
+          "samples": 19344,
+          "max_sample_gap_seconds": 0.10565892000158783
+        },
+        "RETAINED_ONLY": {
+          "start_rss_bytes": 175779840,
+          "peak_rss_bytes": 178728960,
+          "samples": 5260,
+          "max_sample_gap_seconds": 0.0729839850027929
+        },
+        "REFRESH_ONCE": {
+          "start_rss_bytes": 175939584,
+          "peak_rss_bytes": 181821440,
+          "samples": 17406,
+          "max_sample_gap_seconds": 0.10983719999785535
+        }
+      },
+      "platform": "macOS-26.6.2-x86_64-i386-64bit-Mach-O",
+      "python": "3.13.7 (main, Sep 18 2025, 19:55:22) [Clang 20.1.4 ]",
+      "worker_sha256": "0e6fda9d980b0874297b8ffd5f16e91b3e4da4a8020ca6def2b4d9b4b8d90a33",
+      "budget_exceeded": null
+    },
+    {
+      "n": 50,
+      "repetition": 2,
+      "warmup": false,
+      "exit_code": 0,
+      "process_peak_rss_bytes": 197402624,
+      "public_call_rss": {
+        "ACQUIRE_MISSING": {
+          "start_rss_bytes": 98529280,
+          "peak_rss_bytes": 197402624,
+          "samples": 19341,
+          "max_sample_gap_seconds": 0.12193095099792117
+        },
+        "RETAINED_ONLY": {
+          "start_rss_bytes": 176795648,
+          "peak_rss_bytes": 178786304,
+          "samples": 5469,
+          "max_sample_gap_seconds": 0.09614183899975615
+        },
+        "REFRESH_ONCE": {
+          "start_rss_bytes": 167636992,
+          "peak_rss_bytes": 169721856,
+          "samples": 17023,
+          "max_sample_gap_seconds": 0.1092437350016553
+        }
+      },
+      "platform": "macOS-26.6.2-x86_64-i386-64bit-Mach-O",
+      "python": "3.13.7 (main, Sep 18 2025, 19:55:22) [Clang 20.1.4 ]",
+      "worker_sha256": "0e6fda9d980b0874297b8ffd5f16e91b3e4da4a8020ca6def2b4d9b4b8d90a33",
+      "budget_exceeded": null
+    },
+    {
+      "n": 50,
+      "repetition": 3,
+      "warmup": false,
+      "exit_code": 0,
+      "process_peak_rss_bytes": 195989504,
+      "public_call_rss": {
+        "ACQUIRE_MISSING": {
+          "start_rss_bytes": 96718848,
+          "peak_rss_bytes": 195989504,
+          "samples": 20091,
+          "max_sample_gap_seconds": 0.14053482000008444
+        },
+        "RETAINED_ONLY": {
+          "start_rss_bytes": 154320896,
+          "peak_rss_bytes": 156467200,
+          "samples": 4902,
+          "max_sample_gap_seconds": 0.07972939800004042
+        },
+        "REFRESH_ONCE": {
+          "start_rss_bytes": 148832256,
+          "peak_rss_bytes": 156405760,
+          "samples": 15657,
+          "max_sample_gap_seconds": 0.09041877699996803
+        }
+      },
+      "platform": "macOS-26.6.2-x86_64-i386-64bit-Mach-O",
+      "python": "3.13.7 (main, Sep 18 2025, 19:55:22) [Clang 20.1.4 ]",
+      "worker_sha256": "0e6fda9d980b0874297b8ffd5f16e91b3e4da4a8020ca6def2b4d9b4b8d90a33",
+      "budget_exceeded": null
+    }
+  ],
+  "interrupted_N50_attempt": {
+    "status": "incomplete; not accepted",
+    "observed_at": "2026-09-22T02:34:54.969599+00:00",
+    "reason": "Original session handle missing, no matching driver/worker process, no terminal resource receipt; last output retained-only start. Termination cause unknown.",
+    "original_files": {
+      "n50-rep3.jsonl": "8930b09752f1db54083e68893e3f72707ad24cacb3f1732a198f6c08d5a571ed",
+      "n50-rep3.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "recovery": "Exactly one fresh-process repetition 3 using unchanged worker/sampler, same interpreter, source and budgets. Preserve original partial cold result; no restart of warmup or repetitions 1/2. No additional optimization. Separate output directory; no source edits or concurrent heavy work.",
+    "completed_cold_seconds": 435.8351487159962,
+    "completed_cold_attempts": 151,
+    "sampled_memory": "unavailable; no terminal receipt",
+    "acceptance": "incomplete; excluded from completed-process medians, retained as additional cold observation"
   }
 }

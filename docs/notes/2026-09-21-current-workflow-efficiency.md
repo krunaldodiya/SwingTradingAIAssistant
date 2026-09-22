@@ -296,3 +296,38 @@ Local raw observations and executable measurement scripts are retained under
 `~/.codex/artifacts/issue190-20260921/`; a final delivery must provide a durable,
 reviewable measurement package rather than treating this partial note as proof
 of completed #190 acceptance.
+
+## Completed whole-cohort measurement — 2026-09-22
+
+Measured runtime commit `1e5c5286d6d0ae278ee967889ed5f8ad9630b9fb`,
+tree `50d5e29aa1676a12f8bfb033585822773a7f40d8`. One discarded warmup
+and three complete measured fresh processes passed the frozen N50 ceilings.
+Each process used the same 50-stock, 21-full-session fixture and unchanged worker.
+
+| Mode | Median seconds | Min–max seconds | Maximum sampled MiB | Attempts |
+| --- | ---: | ---: | ---: | ---: |
+| ACQUIRE_MISSING | 436.960 | 434.850–458.846 | 188.3 | 151 |
+| RETAINED_ONLY | 119.049 | 117.514–125.106 | 170.5 | 0 |
+| REFRESH_ONCE | 384.442 | 383.615–392.402 | 173.4 | 50 |
+
+Every completed measured call satisfied 600/180/600 seconds and 1,024 MiB.
+All 50 members remained ordered and OBSERVED, canonical decoding passed, and
+per-member numerical facts matched the N1 fixture reference. Counts were
+151/0/50 with zero retries or live network. The original N50 baseline never
+completed, so no before median or percentage improvement is claimed.
+
+The original third repetition ended without a terminal resource receipt while
+the owner had paused work. On resume the process and session were absent.
+It retained a 435.835-second cold result with 151 attempts and then a retained
+stage start. Its termination cause is unknown. Original files and their hashes
+are preserved as incomplete evidence, including that additional cold result;
+no memory or successful full-process claim is inferred. Exactly one replacement
+fresh process completed in a separate directory with unchanged worker, sampler,
+runtime sources, interpreter and budgets. Earlier completed runs were reused.
+
+The candidate JSON retains completed resource receipts, sample gaps, all timings,
+raw-output hashes and the interruption/recovery record. Fixed logical clocks
+and sampled RSS limit these claims to offline orchestration; this is not live
+provider latency, a production SLA or proof of hard synchronous cancellation.
+Final revision review, configured full gates, installed package and hosted
+checks remain release prerequisites. Earlier pending notes above are historical.
