@@ -39,6 +39,7 @@ from swing_trading_ai_assistant.market_data.storage_root_lease import (
     StorageRootLease,
     StorageRootLeaseError,
 )
+from swing_trading_ai_assistant.research_packet import bharatstock_v2
 from swing_trading_ai_assistant.research_packet.bharatstock import (
     build_bharatstock_research_packet_v1,
 )
@@ -1784,3 +1785,68 @@ def test_inner_price_request_stops_after_guard_loss(
         assert result.reason == "ACQUISITION_DEADLINE_EXCEEDED"
     else:
         assert result.code == "STORE_UNAVAILABLE"
+
+
+@pytest.mark.parametrize(
+    "writer",
+    [
+        "c5f74daf212167b3d4dac510e83e5602b2dbafa0d02a9dc9036b7c9c9cd81c10",
+        "c903f7c2e87a867c0aa8d76c1056c08d72bd91a005f670c9028d4970bb177cb3",
+        "29698ddcb2499ebbbee3030c731147855ba0f99a57ceac65456a93648deb9f0c",
+    ],
+)
+def test_released_v3_capture_is_readable_without_authorizing_new_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, writer: str
+) -> None:
+    root = tmp_path / "capture"
+    _retain_schedule(root)
+    current_request = _request()
+    with monkeypatch.context() as old_writer:
+        old_writer.setattr(core, "_runtime_identity", lambda: writer)
+        request = replace(current_request, runtime_code_identity_sha256=writer)
+        captured = core.capture_bharatstock_v2(request, root, root, client=_Client())
+        assert captured.revision is not None
+        raw = captured.revision.canonical_json_bytes()
+        revision_sha = captured.revision.revision_identity_sha256
+        comparison_capture = core.capture_bharatstock_v2(
+            replace(request, sessions=_SESSIONS[-2:]), root, root, client=_Client()
+        )
+        assert comparison_capture.revision is not None
+        comparison_sha = comparison_capture.revision.revision_identity_sha256
+    original_files = {path: path.read_bytes() for path in root.rglob("*.json")}
+    retained = core.read_bharatstock_capture_revision_v2(root, revision_sha)
+    core.validate_capture_revision_v2(retained)
+    assert retained.canonical_json_bytes() == raw
+    assert retained.request.runtime_code_identity_sha256 == writer
+    packet = build_bharatstock_research_packet_v1(retained)
+    assert packet.members[0].price_action_evidence_state == "OBSERVED"
+    binding = core.read_bharatstock_capture_binding_v2(root, comparison_sha)
+    admitted = core.validate_retained_capture_binding_v2(binding)
+    source = bharatstock_v2._source(  # pyright: ignore[reportPrivateUsage]
+        "PREVIOUS_CLOSE_COMPARISON",
+        admitted,
+        bharatstock_v2.bharatstock_research_runtime_code_identity_v2(),
+    )
+    assert source.capture_runtime_code_identity_sha256 == writer
+    assert source.capture_revision_identity_sha256 == comparison_sha
+    with pytest.raises(ValueError):
+        replace(source, capture_runtime_code_identity_sha256="0" * 64)
+    with pytest.raises(ValueError):
+        replace(source, price_basis="BHARATSTOCK_SPLIT_BONUS_FACTOR_ADJUSTED_OHLC")
+    client = _Client()
+    with pytest.raises(ValueError):
+        core.validate_current_capture_request_v2(retained.request)
+    with pytest.raises(ValueError):
+        core.capture_bharatstock_v2(retained.request, root, root, client=client)
+    with pytest.raises(ValueError):
+        core.parse_bharatstock_capture_request_v2(
+            json.dumps(retained.request.canonical_value(), sort_keys=True).encode()
+        )
+    with pytest.raises(ValueError):
+        replace(retained.request, runtime_code_identity_sha256="0" * 64)
+    forged = replace(retained)
+    object.__setattr__(forged.request, "runtime_code_identity_sha256", "0" * 64)
+    with pytest.raises(ValueError):
+        core.validate_capture_revision_v2(forged)
+    assert client.calls == []
+    assert {path: path.read_bytes() for path in root.rglob("*.json")} == original_files

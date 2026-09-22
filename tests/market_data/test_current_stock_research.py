@@ -10,6 +10,7 @@ from dataclasses import dataclass, fields, replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from email.message import Message
+from functools import partial
 from http.client import HTTPResponse
 from io import BytesIO
 from pathlib import Path
@@ -1534,14 +1535,28 @@ def test_inactivity_revalidates_the_bounded_window_without_mutating_old_evidence
 
 @pytest.mark.parametrize("refresh", [False, True])
 @pytest.mark.parametrize(
-    "writer",
+    ("writer", "capture_writer"),
     [
-        "e99a63c009a99827dccf4e5b2c45c7760321670ab7b295867193670b60d1fb48",
-        "d31d596fa0097312aa755050c1251de963721f638b051ba569a37c504d0fb8fe",
+        (
+            "e99a63c009a99827dccf4e5b2c45c7760321670ab7b295867193670b60d1fb48",
+            "c5f74daf212167b3d4dac510e83e5602b2dbafa0d02a9dc9036b7c9c9cd81c10",
+        ),
+        (
+            "d31d596fa0097312aa755050c1251de963721f638b051ba569a37c504d0fb8fe",
+            "c903f7c2e87a867c0aa8d76c1056c08d72bd91a005f670c9028d4970bb177cb3",
+        ),
+        (
+            "d31d596fa0097312aa755050c1251de963721f638b051ba569a37c504d0fb8fe",
+            "29698ddcb2499ebbbee3030c731147855ba0f99a57ceac65456a93648deb9f0c",
+        ),
     ],
 )
 def test_released_calendar_survives_reader_upgrade_and_refresh(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, writer: str, refresh: bool
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    writer: str,
+    capture_writer: str,
+    refresh: bool,
 ) -> None:
     clock, sources = _Clock(), _OfficialSources()
     prices = _Prices(clock)
@@ -1552,6 +1567,15 @@ def test_released_calendar_survives_reader_upgrade_and_refresh(
             lambda: writer,
         )
         old_writer.setattr(workflow, "_runtime_identity", lambda: "a" * 64)
+        old_writer.setattr(capture_api, "_runtime_identity", lambda: capture_writer)
+        old_writer.setattr(
+            workflow,
+            "CaptureRequestV2",
+            partial(
+                capture_api.CaptureRequestV2,
+                runtime_code_identity_sha256=capture_writer,
+            ),
+        )
         first = _research(tmp_path, clock, sources, prices)
         assert first.status == "OBSERVED"
     originals = {

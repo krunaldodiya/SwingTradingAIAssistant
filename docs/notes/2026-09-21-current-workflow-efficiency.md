@@ -370,3 +370,29 @@ an automatic performance or release approval of this correction. Applicable
 regression, review, package, hosted and real refresh gates must complete on the
 corrected candidate. The zero-request failed attempt remains retained and does
 not satisfy the parent's live refresh-to-feature criterion.
+
+Complete retained-record admission then exposed the corresponding capture
+reader gap. The V3 reader previously supported only the current writer and
+PR185. It now also preserves the exact released #186, #187/#188 and #189 writer
+identities, independently recomputed from their source inventories:
+
+- #186: `c5f74daf212167b3d4dac510e83e5602b2dbafa0d02a9dc9036b7c9c9cd81c10`
+- #187/#188: `c903f7c2e87a867c0aa8d76c1056c08d72bd91a005f670c9028d4970bb177cb3`
+- #189: `29698ddcb2499ebbbee3030c731147855ba0f99a57ceac65456a93648deb9f0c`
+
+These writers retain the same V3 schema, configuration and source-reported
+price/volume basis. Full revision and admitted-chain validation remain in force.
+The current-stock workflow validates the retained revision instead of requiring
+its historical request to authorize new writes. New capture effects and request
+parsing remain current-writer-only. Both research projections retain the actual
+historical writer; the V2 source tuple still binds the exact schema, configuration,
+provider, profile and basis. V2 predecessor support is unchanged.
+
+The combined calendar/capture upgrade regression failed in four historical
+cases before repair. After repair, all six historical refresh/inactivity cases
+and four direct retained-reader cases passed. A network-denied, read-only check
+also admitted the complete original PNB receipt, calendar, mapping and capture;
+all six original immutable files remained unchanged. This offline proof does
+not substitute for the pending real refresh-to-feature check. The final candidate
+must complete the existing performance protocol (one warmup and three measured
+processes for each cohort); the original baselines need not be repeated.

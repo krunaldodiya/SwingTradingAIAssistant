@@ -25,7 +25,7 @@ from swing_trading_ai_assistant.market_data.bharatstock_capture import (
     _PREDECESSOR_CONFIGURATION_IDENTITY_V2,  # pyright: ignore[reportPrivateUsage]
     _PREDECESSOR_RUNTIME_IDENTITY_V2,  # pyright: ignore[reportPrivateUsage]
     _PREDECESSOR_SCHEMA_IDENTITY_V2,  # pyright: ignore[reportPrivateUsage]
-    _READ_ONLY_RUNTIME_IDENTITY_V3,  # pyright: ignore[reportPrivateUsage]
+    _READ_ONLY_RUNTIME_IDENTITIES_V3,  # pyright: ignore[reportPrivateUsage]
     RetainedCaptureBindingV2,
     RetainedCaptureRevisionV2,
     selection_identity_v2,
@@ -503,15 +503,18 @@ class BharatStockFeatureSourceV2:
                     "BHARATSTOCK_SOURCE_REPORTED_OHLC",
                     "SOURCE_REPORTED",
                 ),
-                (
-                    "bharatstock-capture@v3",
-                    _capture_schema_identity(),
-                    _capture_configuration_identity(),
-                    _READ_ONLY_RUNTIME_IDENTITY_V3,
-                    "bharatstock-api@v1",
-                    "BHARATSTOCK_CAPTURE_FORWARD_DAILY_V3",
-                    "BHARATSTOCK_SOURCE_REPORTED_OHLC",
-                    "SOURCE_REPORTED",
+                *(
+                    (
+                        "bharatstock-capture@v3",
+                        _capture_schema_identity(),
+                        _capture_configuration_identity(),
+                        writer,
+                        "bharatstock-api@v1",
+                        "BHARATSTOCK_CAPTURE_FORWARD_DAILY_V3",
+                        "BHARATSTOCK_SOURCE_REPORTED_OHLC",
+                        "SOURCE_REPORTED",
+                    )
+                    for writer in _READ_ONLY_RUNTIME_IDENTITIES_V3
                 ),
                 (
                     "bharatstock-capture@v2",
