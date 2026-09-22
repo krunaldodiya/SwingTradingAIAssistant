@@ -435,3 +435,23 @@ runtime identity hashes. Previous N1 measurements cannot approve this changed
 execution path. Full/package/installed/hosted gates remain required for the final
 candidate. The completed live refresh is preserved; assess reader/source impact
 offline, without reusing consumed provider request authority.
+
+## Second experiment performance result — 2026-09-22
+
+Measured commit `244bc1d541548dc12414ccf8f5373ed11c35372e`, tree `5fe9f4b9b2b3b90b72d61ef4db146a02b19c495e`. One discarded warmup and three measured fresh processes per cohort passed the unchanged frozen limits. Earlier measurements and failed attempts above remain historical evidence. Final verification and release remain pending.
+
+| Stocks | Mode | Median seconds | Min–max seconds | Peak sampled MiB | Requests |
+| ---: | --- | ---: | ---: | ---: | ---: |
+| 1 | ACQUIRE_MISSING | 8.610 | 8.564–8.689 | 152.5 | 4 |
+| 1 | RETAINED_ONLY | 2.580 | 2.578–2.618 | 151.6 | 0 |
+| 1 | REFRESH_ONCE | 7.495 | 7.406–7.701 | 153.1 | 1 |
+| 2 | ACQUIRE_MISSING | 15.913 | 15.631–16.245 | 166.3 | 7 |
+| 2 | RETAINED_ONLY | 4.497 | 4.404–4.644 | 160.0 | 0 |
+| 2 | REFRESH_ONCE | 13.870 | 13.562–14.205 | 163.3 | 2 |
+| 50 | ACQUIRE_MISSING | 368.226 | 356.566–397.855 | 216.7 | 151 |
+| 50 | RETAINED_ONLY | 98.494 | 94.426–99.401 | 209.0 | 0 |
+| 50 | REFRESH_ONCE | 319.048 | 308.038–319.668 | 211.9 | 50 |
+
+Every full ordered result matched its frozen reference except the four declared runtime/enclosing-result identity fields. No validation, read guard, request limit or research calculation was removed. The 50-stock before run never completed; no relative N50 speedup is claimed. Measurements use synthetic transports and logical clocks, not live provider latency or proof of hard synchronous cancellation.
+
+The approved PNB refresh was separately observed on installed ddec85c with exactly two requests and Price Action OBSERVED. Both retained captures remain readable/projectable offline on `244bc1d`, with the six old immutable files unchanged and no new provider calls. The historical live event is not relabelled as a `244bc1d` execution. The enclosing Packet remains insufficient; no trading or strategy qualification follows.
