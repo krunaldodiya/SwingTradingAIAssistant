@@ -1177,25 +1177,27 @@ def test_report_constructor_and_evaluator_effect_boundary(
 
     with pytest.raises(ValueError, match="exact evidence boundary"):
         CurrentPriceActionReportV1()
-    monkeypatch.setattr(
-        raw_test.raw_daily._DefaultCurrentSamePassRawEvidencePortV1,
-        "download_under_lease",
-        forbidden,
-    )
-    monkeypatch.setattr(Path, "open", forbidden)
-    monkeypatch.setattr(Path, "read_bytes", forbidden)
-    monkeypatch.setattr(raw_test.raw_daily, "ZoneInfo", forbidden)
-    monkeypatch.setattr(os, "getenv", forbidden)
-    monkeypatch.setattr(type(os.environ), "__getitem__", forbidden)
-    monkeypatch.setattr(socket, "create_connection", forbidden)
-    monkeypatch.setattr(socket, "getaddrinfo", forbidden)
-    monkeypatch.setattr(socket, "socket", forbidden)
-    monkeypatch.setattr(subprocess, "Popen", forbidden)
-    monkeypatch.setattr(subprocess, "run", forbidden)
-    monkeypatch.setattr(time, "monotonic", forbidden)
-    monkeypatch.setattr(time, "time", forbidden)
+    # Restore process-wide guards before pytest performs reporting and cleanup.
+    with monkeypatch.context() as effect_guard:
+        effect_guard.setattr(
+            raw_test.raw_daily._DefaultCurrentSamePassRawEvidencePortV1,
+            "download_under_lease",
+            forbidden,
+        )
+        effect_guard.setattr(Path, "open", forbidden)
+        effect_guard.setattr(Path, "read_bytes", forbidden)
+        effect_guard.setattr(raw_test.raw_daily, "ZoneInfo", forbidden)
+        effect_guard.setattr(os, "getenv", forbidden)
+        effect_guard.setattr(type(os.environ), "__getitem__", forbidden)
+        effect_guard.setattr(socket, "create_connection", forbidden)
+        effect_guard.setattr(socket, "getaddrinfo", forbidden)
+        effect_guard.setattr(socket, "socket", forbidden)
+        effect_guard.setattr(subprocess, "Popen", forbidden)
+        effect_guard.setattr(subprocess, "run", forbidden)
+        effect_guard.setattr(time, "monotonic", forbidden)
+        effect_guard.setattr(time, "time", forbidden)
 
-    assert _evaluate(context).evidence_state == "OBSERVED"
+        assert _evaluate(context).evidence_state == "OBSERVED"
 
 
 def test_public_exports_and_runtime_substitution_fail_closed(
