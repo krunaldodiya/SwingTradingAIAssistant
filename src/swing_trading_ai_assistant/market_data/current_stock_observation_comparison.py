@@ -288,7 +288,9 @@ def _completed_session(packet: BharatStockResearchPacketV2) -> date | None:
 
 def _value(value: object) -> str:
     if type(value) is Decimal:
-        return format(value, "f")
+        if value == 0:
+            return "0"
+        return format(value.normalize(), "f")
     if type(value) is date:
         return value.isoformat()
     return str(value)
@@ -307,9 +309,17 @@ def _fact(
     after = _value(current_value) if current_observed else None
     delta: str | None = None
     if previous_observed and current_observed:
-        state: ComparisonStateV1 = "UNCHANGED" if before == after else "CHANGED"
+        state: ComparisonStateV1 = (
+            "UNCHANGED"
+            if (
+                previous_value == current_value
+                if type(previous_value) is Decimal and type(current_value) is Decimal
+                else before == after
+            )
+            else "CHANGED"
+        )
         if type(previous_value) is Decimal and type(current_value) is Decimal:
-            delta = format(current_value - previous_value, "f")
+            delta = _value(current_value - previous_value)
     elif previous_observed:
         state = "NEWLY_UNAVAILABLE"
     elif current_observed:
@@ -467,6 +477,13 @@ def compare_current_stock_observations_v1(
     )
 
 
+def invalid_current_stock_observation_comparison_v1() -> (
+    CurrentStockObservationComparisonV1
+):
+    """Return the closed typed result for an interrupted/invalid observation."""
+    return _non_comparable("OBSERVATION_INVALID")
+
+
 __all__ = [
     "CONTRACT_VERSION_V1",
     "CONFIGURATION_IDENTITY_SHA256_V1",
@@ -475,4 +492,5 @@ __all__ = [
     "CurrentStockObservationComparisonV1",
     "compare_current_stock_observations_v1",
     "current_stock_observation_comparison_runtime_code_identity_v1",
+    "invalid_current_stock_observation_comparison_v1",
 ]

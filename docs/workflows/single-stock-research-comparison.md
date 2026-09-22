@@ -34,8 +34,9 @@ private capture is used. The control is for this trusted Python demo; it is not
 an operating-system sandbox for native code or inherited connected descriptors.
 
 Exit 0 means the two observations are comparable. Exit 1 carries a typed
-non-comparable result. Exit 2 means malformed CLI input and supplies no JSON to
-explain. The complete PRICE_BEHAVIOR result has nine closed fact paths;
+non-comparable result, including a redacted `OBSERVATION_INVALID` result when an
+observation is interrupted. Exit 2 is reserved for malformed CLI input and
+supplies no JSON to explain. The complete PRICE_BEHAVIOR result has nine closed fact paths;
 CURRENT_STRUCTURE has two. A result never exports raw bars, pivots or events.
 
 ## Consume the comparison safely
@@ -81,11 +82,13 @@ market-data research-compare --symbol PNB \
 The installed entrypoint dispatches only `research-compare` to the additive
 adapter and delegates all existing commands byte-for-byte to their delivered
 CLI. Each selected observation calls the existing V2 service with refresh
-disabled. Disabled refresh is not an offline guarantee: missing retained
-calendar, mapping or price evidence may trigger the existing bounded acquisition
-behavior. Establish acquisition, credential, private-storage and model-
-destination authority before genuine use. The synthetic demonstration grants
-none of those permissions.
+disabled through retained-only calendar, mapping and price adapters. This
+comparison command never acquires missing evidence: an absent exact retained
+dependency yields a typed non-comparable result. The retained-only boundary
+prevents a fresh response from being stamped with a caller-selected historical
+clock. Other V2 commands retain their existing acquisition behavior; disabled
+refresh alone is not an offline guarantee for those commands. Establish private-
+storage and model-destination authority before genuine comparison use.
 
 Inputs are exactly two canonical UTC selection times, one symbol, one absolute
 root and one of PRICE_BEHAVIOR or CURRENT_STRUCTURE. Both admitted observations

@@ -7,7 +7,7 @@ import importlib.util
 import io
 import json
 import sys
-from dataclasses import replace
+from dataclasses import fields, replace
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -15,9 +15,6 @@ from typing import cast
 
 import pytest
 
-from swing_trading_ai_assistant.market_data import (
-    current_stock_observation_comparison as comparison_module,
-)
 from swing_trading_ai_assistant.market_data import entrypoint
 from swing_trading_ai_assistant.market_data.bharatstock import (
     BharatStockClient,
@@ -25,15 +22,20 @@ from swing_trading_ai_assistant.market_data.bharatstock import (
 )
 from swing_trading_ai_assistant.market_data.current_stock_observation_comparison import (
     compare_current_stock_observations_v1,
+    current_stock_observation_comparison_runtime_code_identity_v1,
 )
 from swing_trading_ai_assistant.market_data.current_stock_observation_comparison_cli import (
     main as comparison_cli,
+)
+from swing_trading_ai_assistant.market_data.current_stock_observation_comparison_runtime_identity_manifest import (
+    CURRENT_STOCK_OBSERVATION_COMPARISON_RUNTIME_SOURCE_SHA256_V1,
 )
 from swing_trading_ai_assistant.market_data.current_stock_research_v2 import (
     CurrentStockResearchResultV2,
     research_current_stock_v2,
 )
 from swing_trading_ai_assistant.market_data.http import HttpResponse
+from swing_trading_ai_assistant.research_packet import bharatstock_v2 as packet_v2
 
 _DEMO_PATH = (
     Path(__file__).resolve().parents[2] / "examples/single_stock_research_demo.py"
@@ -233,6 +235,91 @@ def _observation(
     )
 
 
+def _with_admitted_adjusted_basis(
+    result: CurrentStockResearchResultV2,
+) -> CurrentStockResearchResultV2:
+    packet = result.packet
+    assert type(packet) is packet_v2.BharatStockResearchPacketV2
+    adjusted = "BHARATSTOCK_SPLIT_BONUS_FACTOR_ADJUSTED_OHLC"
+    slots = []
+    for slot in packet.feature_slots:
+        if slot.source is None:
+            slots.append(slot)
+            continue
+        source_values = {
+            item.name: getattr(slot.source, item.name) for item in fields(slot.source)
+        }
+        source_values.update(
+            {
+                "capture_contract_version": "bharatstock-capture@v2",
+                "capture_schema_identity_sha256": (
+                    "16a032ed40ed922c9d5d9a16c6abc3dff2297e12554ffce9b75f770b55136990"
+                ),
+                "capture_configuration_identity_sha256": (
+                    "21cc3f28838938411836094184a77ad0d39b24fd0f110b30854978c4549f2ced"
+                ),
+                "capture_runtime_code_identity_sha256": (
+                    "fcd99dbbfbf8b969d34d11d72bbcfd089f4dbaaf2ba883d7cadc47ba34e99f43"
+                ),
+                "source_profile": "BHARATSTOCK_CAPTURE_FORWARD_DAILY_V2",
+                "price_basis": adjusted,
+                "volume_basis": "SOURCE_REPORTED_UNADJUSTED",
+            }
+        )
+        source_values["source_identity_sha256"] = packet_v2._digest(  # pyright: ignore[reportPrivateUsage]
+            {
+                "provider_source": source_values["provider_source"],
+                "source_profile": source_values["source_profile"],
+                "revision_identity_sha256": source_values[
+                    "capture_revision_identity_sha256"
+                ],
+                "schedule_evidence_sha256": source_values["schedule_evidence_sha256"],
+                "schedule_source": source_values["schedule_source"],
+                "schedule_source_release": source_values["schedule_source_release"],
+                "price_basis": source_values["price_basis"],
+                "volume_basis": source_values["volume_basis"],
+            }
+        )
+        source_values["source_projection_identity_sha256"] = packet_v2._digest(  # pyright: ignore[reportPrivateUsage]
+            {
+                name: value
+                for name, value in source_values.items()
+                if name != "source_projection_identity_sha256"
+            }
+        )
+        source = packet_v2.BharatStockFeatureSourceV2(**source_values)  # type: ignore[arg-type]
+        slot_values = {item.name: getattr(slot, item.name) for item in fields(slot)}
+        slot_values["source"] = source
+        slot_values["slot_identity_sha256"] = packet_v2._digest(  # pyright: ignore[reportPrivateUsage]
+            {
+                name: value
+                for name, value in slot_values.items()
+                if name != "slot_identity_sha256"
+            }
+        )
+        slots.append(packet_v2.BharatStockFeatureSlotV2(**slot_values))  # type: ignore[arg-type]
+    members = tuple(replace(member, price_basis=adjusted) for member in packet.members)
+    preimage = {
+        item.name: getattr(packet, item.name)
+        for item in fields(packet)
+        if item.name not in {"result_identity_sha256", "_admission_seal"}
+    }
+    preimage.update({"feature_slots": tuple(slots), "members": members})
+    adjusted_packet = object.__new__(packet_v2.BharatStockResearchPacketV2)
+    for name, value in {
+        **preimage,
+        "result_identity_sha256": packet_v2._digest(preimage),  # pyright: ignore[reportPrivateUsage]
+        "_admission_seal": object(),
+    }.items():
+        object.__setattr__(adjusted_packet, name, value)
+    assert packet_v2._validate_packet(adjusted_packet)  # pyright: ignore[reportPrivateUsage]
+    packet_v2._admit(adjusted_packet)  # pyright: ignore[reportPrivateUsage]
+    packet_v2.validate_bharatstock_research_packet_v2(adjusted_packet)
+    adjusted_result = replace(result, packet=adjusted_packet)
+    adjusted_result.canonical_json_bytes()
+    return adjusted_result
+
+
 def test_price_comparison_reports_changed_unchanged_and_numeric_delta(
     tmp_path: Path,
 ) -> None:
@@ -260,6 +347,33 @@ def test_price_comparison_reports_changed_unchanged_and_numeric_delta(
     assert by_path["CANDLE_GEOMETRY.range_size"].state == "UNCHANGED"
     assert len(result.facts) == 9
     assert result.canonical_json_bytes() == result.canonical_json_bytes()
+
+
+def test_numerically_equal_decimals_are_canonical_unchanged_values(
+    tmp_path: Path,
+) -> None:
+    previous = _observation(
+        tmp_path / "previous",
+        datetime(2026, 8, 26, 4, 15, tzinfo=UTC),
+        close=Decimal("105"),
+    )
+    current = _observation(
+        tmp_path / "current",
+        datetime(2026, 8, 27, 4, 15, tzinfo=UTC),
+        close=Decimal("105.0"),
+    )
+
+    result = compare_current_stock_observations_v1(previous, current)
+
+    body = next(
+        item for item in result.facts if item.path == "CANDLE_GEOMETRY.body_size"
+    )
+    assert (body.state, body.previous_value, body.current_value, body.delta) == (
+        "UNCHANGED",
+        "5",
+        "5",
+        "0",
+    )
 
 
 def test_another_canonical_stock_uses_the_same_comparison_contract(
@@ -447,7 +561,7 @@ def test_non_comparable_precedence_is_typed(
 
 
 def test_admitted_mixed_price_basis_is_typed_before_feature_comparison(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
 ) -> None:
     previous = _observation(
         tmp_path / "previous", datetime(2026, 8, 26, 4, 15, tzinfo=UTC)
@@ -455,22 +569,10 @@ def test_admitted_mixed_price_basis_is_typed_before_feature_comparison(
     current = _observation(
         tmp_path / "current", datetime(2026, 8, 27, 4, 15, tzinfo=UTC)
     )
-    original = comparison_module._observation  # pyright: ignore[reportPrivateUsage]
-
-    def admitted_with_alternate_basis(result: CurrentStockResearchResultV2):
-        admitted = original(result)
-        assert admitted is not None
-        if result is current:
-            object.__setattr__(
-                admitted[1].members[0],
-                "price_basis",
-                "BHARATSTOCK_SPLIT_BONUS_FACTOR_ADJUSTED_OHLC",
-            )
-        return admitted
-
-    monkeypatch.setattr(
-        comparison_module, "_observation", admitted_with_alternate_basis
-    )
+    current = _with_admitted_adjusted_basis(current)
+    assert previous.packet is not None and current.packet is not None
+    packet_v2.validate_bharatstock_research_packet_v2(previous.packet)
+    packet_v2.validate_bharatstock_research_packet_v2(current.packet)
 
     result = compare_current_stock_observations_v1(previous, current)
 
@@ -479,6 +581,24 @@ def test_admitted_mixed_price_basis_is_typed_before_feature_comparison(
         "INCOMPATIBLE_PRICE_BASIS",
         (),
     )
+
+
+def test_comparison_command_source_drift_invalidates_runtime_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cli_path = (
+        "src/swing_trading_ai_assistant/market_data/"
+        "current_stock_observation_comparison_cli.py"
+    )
+    assert current_stock_observation_comparison_runtime_code_identity_v1()
+    monkeypatch.setitem(
+        CURRENT_STOCK_OBSERVATION_COMPARISON_RUNTIME_SOURCE_SHA256_V1,
+        cli_path,
+        "0" * 64,
+    )
+
+    with pytest.raises(ValueError, match="runtime identity invalid"):
+        current_stock_observation_comparison_runtime_code_identity_v1()
 
 
 def test_equal_completed_session_is_not_presented_as_change(tmp_path: Path) -> None:
@@ -665,7 +785,7 @@ def test_cli_rejects_oversized_time_before_observation(
     assert captured.err == "request_invalid\n"
 
 
-def test_interrupted_first_observation_prevents_second_and_emits_no_json(
+def test_interrupted_first_observation_prevents_second_and_returns_typed_result(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     calls = 0
@@ -697,9 +817,108 @@ def test_interrupted_first_observation_prevents_second_and_emits_no_json(
     )
 
     captured = capsys.readouterr()
-    assert (exit_code, calls, captured.out) == (2, 1, "")
-    assert captured.err == "comparison_internal_error\n"
+    payload = json.loads(captured.out)
+    assert (exit_code, calls, payload["status"], payload["code"]) == (
+        1,
+        1,
+        "NON_COMPARABLE",
+        "OBSERVATION_INVALID",
+    )
+    assert captured.err == "observation_interrupted\n"
     assert tuple(tmp_path.iterdir()) == ()
+
+
+def test_default_comparison_service_is_wired_retained_only(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: list[dict[str, object]] = []
+
+    def retained_service(
+        symbol: str,
+        root: Path,
+        **kwargs: object,
+    ) -> CurrentStockResearchResultV2:
+        assert symbol == "PNB" and root == tmp_path
+        observed.append(kwargs)
+        selection_time = cast(object, kwargs["clock"]).now()  # type: ignore[attr-defined]
+        return _observation(
+            tmp_path / f"fixture-{len(observed)}",
+            selection_time,
+            question=cast(str, kwargs["question"]),
+            close=Decimal("105") if len(observed) == 1 else Decimal("108"),
+        )
+
+    monkeypatch.setattr(
+        "swing_trading_ai_assistant.market_data.current_stock_observation_comparison_cli.research_current_stock_v2",
+        retained_service,
+    )
+    exit_code = comparison_cli(
+        [
+            "research-compare",
+            "--symbol",
+            "PNB",
+            "--storage-root",
+            str(tmp_path),
+            "--contract-version",
+            "v1",
+            "--question",
+            "PRICE_BEHAVIOR",
+            "--previous-selection-time",
+            "2026-08-26T04:15:00.000000Z",
+            "--current-selection-time",
+            "2026-08-27T04:15:00.000000Z",
+            "--output",
+            "json",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0, captured.err
+    assert len(observed) == 2
+    for kwargs in observed:
+        assert kwargs["refresh"] is False
+        with pytest.raises(Exception, match="transport failed"):
+            cast(object, kwargs["calendar_transport"]).get("https://invalid", {})  # type: ignore[attr-defined]
+        with pytest.raises(Exception, match="transport failed"):
+            cast(object, kwargs["snapshot_transport"]).get("https://invalid", {})  # type: ignore[attr-defined]
+
+
+def test_empty_retained_root_returns_typed_non_comparable_without_credential(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("BHARATSTOCK_API_KEY", raising=False)
+
+    exit_code = comparison_cli(
+        [
+            "research-compare",
+            "--symbol",
+            "PNB",
+            "--storage-root",
+            str(tmp_path),
+            "--contract-version",
+            "v1",
+            "--question",
+            "PRICE_BEHAVIOR",
+            "--previous-selection-time",
+            "2026-08-26T04:15:00.000000Z",
+            "--current-selection-time",
+            "2026-08-27T04:15:00.000000Z",
+            "--output",
+            "json",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert (exit_code, payload["status"], payload["code"]) == (
+        1,
+        "NON_COMPARABLE",
+        "OBSERVATION_UNAVAILABLE",
+    )
 
 
 def test_installed_entrypoint_routes_only_comparison_command(
