@@ -1813,7 +1813,7 @@ def test_reader_accepts_a_current_schema_archive_with_base_industry_runtime(
     raw_request = _acquire_retained_raw(root, monkeypatch)
     reference = _retain_industry_for_raw(root, raw_request)
     assert classification._CLASSIFICATION_RUNTIME_IDENTITY == (  # pyright: ignore[reportPrivateUsage]
-        "0f0b72dbfb28fa4a7bb4a265d13abafad0e505b14a8bd47c229cfa0d0f176063"
+        "d0c7eed4662f0cafe9e5d0e57243e5cce192a2df5b1b8018eb12f0603b9b2e1a"
     )
     result = _read_retained_industry(root, raw_request, reference)
     assert isinstance(result, AdmittedCurrentIndustryProjectionV1)
