@@ -3060,13 +3060,13 @@ def test_agent_swing_run_does_not_hide_latest_bar_found_by_wider_capture(
     )
 
 
-def test_agent_swing_run_prior_window_survives_holiday_at_calendar_edge(
+def test_agent_swing_run_prior_window_survives_two_holidays_at_calendar_edge(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     clock, sources = _Clock(), _watchlist_sources()
-    closure = date(2026, 8, 7)
+    closures = {date(2026, 8, 3), date(2026, 8, 7)}
     latest = clock.value.date() - timedelta(days=1)
-    _declare_closures(sources, [closure])
+    _declare_closures(sources, sorted(closures))
 
     class HolidayPrices(_Prices):
         def history(self, instrument, start, end, *, effect_guard=None):
@@ -3076,7 +3076,7 @@ def test_agent_swing_run_prior_window_survives_holiday_at_calendar_edge(
             rows = tuple(
                 row
                 for row in result.rows
-                if row.session != closure
+                if row.session not in closures
                 and not (end == latest and row.session == latest)
             )
             if not rows:
@@ -3085,6 +3085,17 @@ def test_agent_swing_run_prior_window_survives_holiday_at_calendar_edge(
 
     prices = HolidayPrices(clock)
     prices.full_history = True
+    default = research_current_stock_v2(
+        "PNB",
+        tmp_path,
+        question="INTEGRATED_CURRENT_RESEARCH",
+        clock=clock,
+        calendar_transport=sources,
+        snapshot_transport=sources,
+        price_client=cast(BharatStockClient, prices),
+    )
+    assert default.packet is not None
+    assert len(default.packet.feature_slots[2].requested_sessions) == 20
 
     def current(symbol, root, *, question, refresh=False):
         return research_current_stock_v2(

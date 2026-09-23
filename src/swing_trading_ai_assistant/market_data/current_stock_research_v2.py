@@ -621,7 +621,7 @@ def confirm_latest_completed_stock_v2(
             snapshot_transport=snapshot_transport,
             price_client=price_client,
             previous_session=False,
-            terminal_missing_diagnostic=False,
+            terminal_missing_diagnostic=True,
             selection_override=initial.data_selection_time,
             deadline_override=initial.acquisition_deadline,
         )
@@ -683,7 +683,9 @@ def _research_current_stock_v2(  # noqa: C901 - explicit stage boundaries are in
                 coverage_from=selection.astimezone(_IST).date()
                 - timedelta(
                     days=(
-                        _PREVIOUS_LOOKBACK_DAYS if previous_session else _LOOKBACK_DAYS
+                        _PREVIOUS_LOOKBACK_DAYS
+                        if previous_session or terminal_missing_diagnostic
+                        else _LOOKBACK_DAYS
                     )
                     - 1
                 ),
