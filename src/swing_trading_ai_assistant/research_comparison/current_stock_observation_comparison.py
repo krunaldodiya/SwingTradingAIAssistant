@@ -49,6 +49,28 @@ CONFIGURATION_IDENTITY_SHA256_V1: Final = hashlib.sha256(
 ).hexdigest()
 _SUPPORTED_QUESTIONS: Final = {"PRICE_BEHAVIOR", "CURRENT_STRUCTURE"}
 _MAX_FACTS: Final = 12
+_FEATURE_AVAILABILITIES: Final = {
+    "OBSERVED",
+    "UNSUPPORTED_CAPABILITY",
+    "DEPENDENCY_BLOCKED",
+    "INSUFFICIENT_EVIDENCE",
+    "NOT_ATTEMPTED",
+}
+_NUMERIC_FACT_PATHS: Final = {
+    "CANDLE_GEOMETRY.range_size",
+    "CANDLE_GEOMETRY.body_size",
+    "CANDLE_GEOMETRY.upper_wick_size",
+    "CANDLE_GEOMETRY.lower_wick_size",
+    "PREVIOUS_CLOSE_COMPARISON.open_to_previous_close_distance",
+    "PREVIOUS_CLOSE_COMPARISON.close_to_previous_close_distance",
+}
+_TEXT_FACT_PATHS: Final = {
+    "CANDLE_GEOMETRY.candle_direction",
+    "PREVIOUS_CLOSE_COMPARISON.open_vs_previous_close",
+    "PREVIOUS_CLOSE_COMPARISON.close_vs_previous_close",
+    "MARKET_STRUCTURE.structure_state",
+    "MARKET_STRUCTURE.trend",
+}
 
 ComparisonStatusV1: TypeAlias = Literal["COMPARABLE", "NON_COMPARABLE"]
 ComparisonStateV1: TypeAlias = Literal[
@@ -140,9 +162,11 @@ class CurrentStockObservationComparisonFactV1:
     delta: str | None
 
     def __post_init__(self) -> None:
+        previous_observed = self.previous_availability == "OBSERVED"
+        current_observed = self.current_availability == "OBSERVED"
         if (
             type(self.path) is not str
-            or not self.path
+            or self.path not in _NUMERIC_FACT_PATHS | _TEXT_FACT_PATHS
             or self.state
             not in {
                 "UNCHANGED",
@@ -152,9 +176,9 @@ class CurrentStockObservationComparisonFactV1:
                 "UNAVAILABLE_IN_BOTH",
             }
             or type(self.previous_availability) is not str
-            or not self.previous_availability
+            or self.previous_availability not in _FEATURE_AVAILABILITIES
             or type(self.current_availability) is not str
-            or not self.current_availability
+            or self.current_availability not in _FEATURE_AVAILABILITIES
             or any(
                 value is not None and (type(value) is not str or not value)
                 for value in (
@@ -165,16 +189,45 @@ class CurrentStockObservationComparisonFactV1:
                     self.delta,
                 )
             )
-            or (self.previous_availability == "OBSERVED")
-            != (self.previous_value is not None)
-            or (self.current_availability == "OBSERVED")
-            != (self.current_value is not None)
-            or (self.previous_availability == "OBSERVED")
-            == (self.previous_reason is not None)
-            or (self.current_availability == "OBSERVED")
-            == (self.current_reason is not None)
+            or previous_observed != (self.previous_value is not None)
+            or current_observed != (self.current_value is not None)
+            or previous_observed == (self.previous_reason is not None)
+            or current_observed == (self.current_reason is not None)
             or (self.delta is not None and self.state not in {"CHANGED", "UNCHANGED"})
+            or (self.delta is not None)
+            != (
+                previous_observed
+                and current_observed
+                and self.path in _NUMERIC_FACT_PATHS
+            )
         ):
+            raise ValueError("invalid observation comparison fact")
+        if previous_observed and current_observed:
+            same = self.previous_value == self.current_value
+            if self.delta is not None:
+                try:
+                    with localcontext(_comparison_decimal_context()):
+                        before = Decimal(cast(str, self.previous_value))
+                        after = Decimal(cast(str, self.current_value))
+                        delta = Decimal(self.delta)
+                        if (
+                            not all(
+                                value.is_finite() for value in (before, after, delta)
+                            )
+                            or after - before != delta
+                        ):
+                            raise ValueError("invalid observation comparison fact")
+                        same = before == after
+                except (InvalidOperation, Overflow, TypeError) as error:
+                    raise ValueError("invalid observation comparison fact") from error
+            expected = "UNCHANGED" if same else "CHANGED"
+        elif previous_observed:
+            expected = "NEWLY_UNAVAILABLE"
+        elif current_observed:
+            expected = "NEWLY_AVAILABLE"
+        else:
+            expected = "UNAVAILABLE_IN_BOTH"
+        if self.state != expected:
             raise ValueError("invalid observation comparison fact")
 
 
@@ -219,6 +272,7 @@ class CurrentStockObservationComparisonV1:
                 type(item) is not CurrentStockObservationComparisonFactV1
                 for item in self.facts
             )
+            or any(item.__post_init__() is not None for item in self.facts)
             or len({item.path for item in self.facts}) != len(self.facts)
             or type(self.limitations) is not tuple
             or not self.limitations

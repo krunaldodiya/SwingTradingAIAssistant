@@ -376,6 +376,64 @@ def test_numerically_equal_decimals_are_canonical_unchanged_values(
     )
 
 
+def test_exported_facts_reject_contradictory_states_and_deltas(tmp_path: Path) -> None:
+    previous = _observation(
+        tmp_path / "previous", datetime(2026, 8, 26, 4, 15, tzinfo=UTC)
+    )
+    current = _observation(
+        tmp_path / "current",
+        datetime(2026, 8, 27, 4, 15, tzinfo=UTC),
+        close=Decimal("108"),
+    )
+    facts = {
+        item.path: item
+        for item in compare_current_stock_observations_v1(previous, current).facts
+    }
+    changed = facts["CANDLE_GEOMETRY.body_size"]
+    unchanged = facts["CANDLE_GEOMETRY.range_size"]
+
+    with pytest.raises(ValueError, match="invalid observation comparison fact"):
+        replace(changed, state="NEWLY_UNAVAILABLE", delta=None)
+    with pytest.raises(ValueError, match="invalid observation comparison fact"):
+        replace(changed, state="UNCHANGED")
+    with pytest.raises(ValueError, match="invalid observation comparison fact"):
+        replace(unchanged, state="CHANGED")
+    with pytest.raises(ValueError, match="invalid observation comparison fact"):
+        replace(changed, delta="99")
+    with pytest.raises(ValueError, match="invalid observation comparison fact"):
+        replace(changed, delta=None)
+    with pytest.raises(ValueError, match="invalid observation comparison fact"):
+        replace(changed, path="UNKNOWN.body_size")
+    with pytest.raises(ValueError, match="invalid observation comparison fact"):
+        replace(
+            changed,
+            previous_availability="UNKNOWN",
+            previous_value=None,
+            previous_reason="UNKNOWN",
+            state="NEWLY_AVAILABLE",
+            delta=None,
+        )
+
+
+def test_comparison_serialization_revalidates_nested_facts(tmp_path: Path) -> None:
+    previous = _observation(
+        tmp_path / "previous", datetime(2026, 8, 26, 4, 15, tzinfo=UTC)
+    )
+    current = _observation(
+        tmp_path / "current",
+        datetime(2026, 8, 27, 4, 15, tzinfo=UTC),
+        close=Decimal("108"),
+    )
+    result = compare_current_stock_observations_v1(previous, current)
+    changed = next(
+        item for item in result.facts if item.path == "CANDLE_GEOMETRY.body_size"
+    )
+    object.__setattr__(changed, "state", "UNCHANGED")
+
+    with pytest.raises(ValueError, match="invalid observation comparison fact"):
+        result.canonical_json_bytes()
+
+
 def test_comparison_is_independent_of_ambient_decimal_context(tmp_path: Path) -> None:
     previous = _observation(
         tmp_path / "previous",
