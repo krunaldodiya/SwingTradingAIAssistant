@@ -499,6 +499,87 @@ def test_exported_fact_values_are_closed_canonical_and_bounded(tmp_path: Path) -
     )
 
 
+def test_extreme_admitted_values_require_exact_mixed_scale_delta() -> None:
+    large = "9" * 258
+    tiny = "0." + "0" * 255 + "1"
+    assert packet_v2._bounded_nonnegative_decimal(Decimal(large))  # pyright: ignore[reportPrivateUsage]
+    assert packet_v2._bounded_nonnegative_decimal(Decimal(tiny))  # pyright: ignore[reportPrivateUsage]
+
+    for previous, current in ((large, tiny), (tiny, large)):
+        with localcontext(Context(prec=600)):
+            exact = format(Decimal(current) - Decimal(previous), "f")
+        assert len(exact) == 516 - int(not exact.startswith("-"))
+        fact = comparison_module.CurrentStockObservationComparisonFactV1(
+            "CANDLE_GEOMETRY.body_size",
+            "CHANGED",
+            "OBSERVED",
+            "OBSERVED",
+            None,
+            None,
+            previous,
+            current,
+            exact,
+        )
+        assert fact.delta == exact
+        with pytest.raises(ValueError, match="invalid observation comparison fact"):
+            replace(fact, delta=("-" if exact.startswith("-") else "") + large)
+
+
+def test_exported_result_rejects_untrusted_top_level_fields(tmp_path: Path) -> None:
+    previous = _observation(
+        tmp_path / "previous", datetime(2026, 8, 26, 4, 15, tzinfo=UTC)
+    )
+    current = _observation(
+        tmp_path / "current", datetime(2026, 8, 27, 4, 15, tzinfo=UTC)
+    )
+    result = compare_current_stock_observations_v1(previous, current)
+    assert replace(result, symbol="X" * 32).symbol == "X" * 32
+    invalid_changes = (
+        {"code": "NOT_A_CODE"},
+        {"symbol": "X" * 33},
+        {"symbol": "X" * 1_000_000},
+        {"isin": "not-an-isin"},
+        {"exchange": "OTHER"},
+        {"price_basis": "PRIVATE_PRICE_BASIS"},
+        {"previous_observation_identity_sha256": "x"},
+        {"current_observation_identity_sha256": "0" * 65},
+        {"previous_selection_time": "not-a-time"},
+        {"current_selection_time": result.previous_selection_time},
+        {"previous_completed_session": result.current_completed_session},
+        {"current_evidence_known_at": result.previous_evidence_known_at},
+        {"limitations": result.limitations + ("PRIVATE=" + "x" * 1_000_000,)},
+        {"limitations": result.limitations[:-1]},
+    )
+    for changes in invalid_changes:
+        with pytest.raises(
+            ValueError, match="invalid current-stock observation comparison"
+        ):
+            replace(result, **changes)
+
+    failure = comparison_module.invalid_current_stock_observation_comparison_v1()
+    for changes in (
+        {"code": "NOT_A_CODE"},
+        {"status": "COMPARABLE"},
+        {"symbol": "PNB"},
+        {"question": "PRICE_BEHAVIOR"},
+        {"previous_observation_identity_sha256": "0" * 64},
+        {"previous_selection_time": result.previous_selection_time},
+        {"limitations": failure.limitations + ("private",)},
+    ):
+        with pytest.raises(
+            ValueError, match="invalid current-stock observation comparison"
+        ):
+            replace(failure, **changes)
+    for code in comparison_module._FAILURE_CODES:  # pyright: ignore[reportPrivateUsage]
+        assert replace(failure, code=code).code == code
+
+    object.__setattr__(result, "symbol", "PRIVATE=" + "x" * 1_000_000)
+    with pytest.raises(
+        ValueError, match="invalid current-stock observation comparison"
+    ):
+        result.canonical_json_bytes()
+
+
 def test_exported_result_requires_complete_question_fact_paths(tmp_path: Path) -> None:
     previous = _observation(
         tmp_path / "previous", datetime(2026, 8, 26, 4, 15, tzinfo=UTC)

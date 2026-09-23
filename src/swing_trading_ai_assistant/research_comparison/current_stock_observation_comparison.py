@@ -105,9 +105,36 @@ _QUESTION_FACT_PATHS: Final = {
     ),
 }
 _DECIMAL_TEXT: Final = re.compile(r"(?:0|[1-9][0-9]*)(?:\.[0-9]*[1-9])?\Z")
+_DIGEST_TEXT: Final = re.compile(r"[0-9a-f]{64}\Z")
+_ISIN_TEXT: Final = re.compile(r"[A-Z0-9]{12}\Z")
+_SYMBOL_TEXT: Final = re.compile(r"[A-Z0-9][A-Z0-9.&_-]{0,31}\Z")
 _MAX_VALUE_TEXT: Final = 258
-_MAX_DELTA_TEXT: Final = 260
+# Two admitted 258-character values can differ by 258 integer digits and
+# 256 fractional digits, plus a sign and decimal point.
+_MAX_DELTA_TEXT: Final = 516
 _MAX_REASON_TEXT: Final = 256
+_FAILURE_CODES: Final = frozenset(
+    {
+        "OBSERVATION_INVALID",
+        "OBSERVATION_UNAVAILABLE",
+        "INCOMPATIBLE_QUESTION_OR_CONTRACT",
+        "INCOMPATIBLE_STOCK",
+        "INVALID_TEMPORAL_ORDER",
+        "INCOMPATIBLE_PRICE_BASIS",
+    }
+)
+_PRICE_BASES: Final = frozenset(
+    {
+        "BHARATSTOCK_SOURCE_REPORTED_OHLC",
+        "BHARATSTOCK_SPLIT_BONUS_FACTOR_ADJUSTED_OHLC",
+    }
+)
+_LIMITATIONS: Final = (
+    "comparison_of_supplied_admitted_facts_only",
+    "not_trade_eligibility",
+    "not_recommendation_or_scoring",
+    "no_raw_ohlc_or_recalculation_by_assistant",
+)
 
 ComparisonStatusV1: TypeAlias = Literal["COMPARABLE", "NON_COMPARABLE"]
 ComparisonStateV1: TypeAlias = Literal[
@@ -121,7 +148,7 @@ ComparisonStateV1: TypeAlias = Literal[
 
 def _comparison_decimal_context() -> Context:
     return Context(
-        prec=512,
+        prec=1024,
         rounding=ROUND_HALF_EVEN,
         Emin=-999999,
         Emax=999999,
@@ -145,6 +172,22 @@ def _admitted_numeric_text(value: str, *, delta: bool = False) -> Decimal:
     if not number.is_finite() or (not delta and number < 0):
         raise ValueError("invalid observation comparison fact")
     return number
+
+
+def _utc_instant(value: object) -> bool:
+    return (
+        type(value) is datetime
+        and value.tzinfo is not None
+        and value.utcoffset() == UTC.utcoffset(None)
+    )
+
+
+def _strictly_before(left: object, right: object) -> bool:
+    if type(left) is datetime and type(right) is datetime:
+        return left < right
+    if type(left) is date and type(right) is date:
+        return left < right
+    return False
 
 
 def _same_admitted_fact_values(
@@ -328,15 +371,36 @@ class CurrentStockObservationComparisonV1:
     result_identity_sha256: str = field(init=False)
 
     def __post_init__(self) -> None:
+        comparable = self.status == "COMPARABLE"
+        metadata = (
+            self.question,
+            self.symbol,
+            self.isin,
+            self.exchange,
+            self.price_basis,
+            self.previous_observation_identity_sha256,
+            self.current_observation_identity_sha256,
+            self.previous_selection_time,
+            self.current_selection_time,
+            self.previous_completed_session,
+            self.current_completed_session,
+            self.previous_evidence_known_at,
+            self.current_evidence_known_at,
+        )
         if (
-            self.contract_version != CONTRACT_VERSION_V1
+            type(self.contract_version) is not str
+            or self.contract_version != CONTRACT_VERSION_V1
+            or type(self.schema_identity_sha256) is not str
             or self.schema_identity_sha256 != SCHEMA_IDENTITY_SHA256_V1
+            or type(self.configuration_identity_sha256) is not str
             or self.configuration_identity_sha256 != CONFIGURATION_IDENTITY_SHA256_V1
+            or type(self.runtime_code_identity_sha256) is not str
             or self.runtime_code_identity_sha256
             != current_stock_observation_comparison_runtime_code_identity_v1()
+            or type(self.status) is not str
             or self.status not in {"COMPARABLE", "NON_COMPARABLE"}
             or type(self.code) is not str
-            or not self.code
+            or self.code not in ({"COMPARISON_READY"} if comparable else _FAILURE_CODES)
             or type(self.facts) is not tuple
             or len(self.facts) > _MAX_FACTS
             or any(
@@ -346,7 +410,7 @@ class CurrentStockObservationComparisonV1:
             or any(item.__post_init__() is not None for item in self.facts)
             or len({item.path for item in self.facts}) != len(self.facts)
             or (
-                self.status == "COMPARABLE"
+                comparable
                 and (
                     type(self.question) is not str
                     or self.question not in _QUESTION_FACT_PATHS
@@ -355,29 +419,48 @@ class CurrentStockObservationComparisonV1:
                 )
             )
             or type(self.limitations) is not tuple
-            or not self.limitations
-            or any(type(item) is not str or not item for item in self.limitations)
-            or (self.status == "COMPARABLE") != bool(self.facts)
-            or (
-                self.status == "COMPARABLE"
-                and any(
-                    value is None
-                    for value in (
-                        self.question,
-                        self.symbol,
-                        self.isin,
-                        self.exchange,
-                        self.price_basis,
-                        self.previous_observation_identity_sha256,
-                        self.current_observation_identity_sha256,
-                        self.previous_selection_time,
-                        self.current_selection_time,
-                        self.previous_completed_session,
-                        self.current_completed_session,
-                        self.previous_evidence_known_at,
-                        self.current_evidence_known_at,
-                    )
+            or self.limitations != _LIMITATIONS
+            or any(type(item) is not str for item in self.limitations)
+            or comparable != bool(self.facts)
+            or (comparable and any(value is None for value in metadata))
+            or (not comparable and any(value is not None for value in metadata))
+        ):
+            raise ValueError("invalid current-stock observation comparison")
+        if comparable and (
+            type(self.symbol) is not str
+            or _SYMBOL_TEXT.fullmatch(self.symbol) is None
+            or type(self.isin) is not str
+            or _ISIN_TEXT.fullmatch(self.isin) is None
+            or self.exchange != "NSE"
+            or type(self.exchange) is not str
+            or type(self.price_basis) is not str
+            or self.price_basis not in _PRICE_BASES
+            or any(
+                type(value) is not str or _DIGEST_TEXT.fullmatch(value) is None
+                for value in (
+                    self.previous_observation_identity_sha256,
+                    self.current_observation_identity_sha256,
                 )
+            )
+            or any(
+                not _utc_instant(value)
+                for value in (
+                    self.previous_selection_time,
+                    self.current_selection_time,
+                    self.previous_evidence_known_at,
+                    self.current_evidence_known_at,
+                )
+            )
+            or type(self.previous_completed_session) is not date
+            or type(self.current_completed_session) is not date
+            or not _strictly_before(
+                self.previous_selection_time, self.current_selection_time
+            )
+            or not _strictly_before(
+                self.previous_completed_session, self.current_completed_session
+            )
+            or not _strictly_before(
+                self.previous_evidence_known_at, self.current_evidence_known_at
             )
         ):
             raise ValueError("invalid current-stock observation comparison")
@@ -391,14 +474,6 @@ class CurrentStockObservationComparisonV1:
     def canonical_json_bytes(self) -> bytes:
         self.__post_init__()
         return _canonical(self)
-
-
-_LIMITATIONS: Final = (
-    "comparison_of_supplied_admitted_facts_only",
-    "not_trade_eligibility",
-    "not_recommendation_or_scoring",
-    "no_raw_ohlc_or_recalculation_by_assistant",
-)
 
 
 def _non_comparable(code: str) -> CurrentStockObservationComparisonV1:
