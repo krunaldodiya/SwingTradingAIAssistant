@@ -68,6 +68,7 @@ jobs:
         id: publish
         env:
           GHCR_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ github.token }}
           ADMITTED_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
@@ -85,15 +86,23 @@ jobs:
           requirements_sha="$(jq -r .requirements_sha256 "$receipt")"
           test "$(docker image inspect "$local_tag" --format '{{index .Config.Labels "org.swingtradingaiassistant.wheel.sha256"}}')" = "$wheel_sha"
           test "$(docker image inspect "$local_tag" --format '{{index .Config.Labels "org.swingtradingaiassistant.requirements.sha256"}}')" = "$requirements_sha"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)" = "$ADMITTED_SHA"
+          package_path="users/${GITHUB_REPOSITORY_OWNER}/packages/container/${GITHUB_REPOSITORY#*/}"
+          package_path="${package_path,,}"
+          if gh api "$package_path" --jq .visibility > "$RUNNER_TEMP/package-visibility.txt" 2> "$RUNNER_TEMP/package-error.txt"; then
+            test "$(cat "$RUNNER_TEMP/package-visibility.txt")" = private
+          elif ! grep -q 'HTTP 404' "$RUNNER_TEMP/package-error.txt"; then
+            echo 'GHCR package visibility could not be established.' >&2
+            exit 1
+          fi
           printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
           if docker manifest inspect "$remote_tag" > "$RUNNER_TEMP/existing-manifest.json" 2> "$RUNNER_TEMP/manifest-error.txt"; then
             docker pull --platform linux/amd64 "$remote_tag"
-            test "$(docker image inspect "$remote_tag" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$ADMITTED_SHA"
-            test "$(docker image inspect "$remote_tag" --format '{{index .Config.Labels "org.opencontainers.image.version"}}')" = "$version"
-            test "$(docker image inspect "$remote_tag" --format '{{index .Config.Labels "org.opencontainers.image.source"}}')" = "https://github.com/${GITHUB_REPOSITORY}"
-            test "$(docker image inspect "$remote_tag" --format '{{index .Config.Labels "org.swingtradingaiassistant.wheel.sha256"}}')" = "$wheel_sha"
-            test "$(docker image inspect "$remote_tag" --format '{{index .Config.Labels "org.swingtradingaiassistant.requirements.sha256"}}')" = "$requirements_sha"
             published_id="$(docker image inspect "$remote_tag" --format '{{.Id}}')"
+            if test "$published_id" != "$local_id"; then
+              echo 'Existing commit-qualified tag differs from the verified image; refusing overwrite.' >&2
+              exit 1
+            fi
           else
             if ! grep -Eiq 'manifest unknown|name unknown|no such manifest|not found' "$RUNNER_TEMP/manifest-error.txt"; then
               echo 'Registry lookup failed for a reason other than a missing tag.' >&2
@@ -116,6 +125,7 @@ jobs:
             --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m --cap-drop ALL \
             --security-opt no-new-privileges "$digest" --help > "$RUNNER_TEMP/pulled-help.txt"
           test -s "$RUNNER_TEMP/pulled-help.txt"
+          test "$(gh api "$package_path" --jq .visibility)" = private
           jq -n --arg source "$ADMITTED_SHA" --arg image "$image" \
             --arg tag "$tag" --arg digest "$digest" --arg local_id "$local_id" \
             --arg published_id "$published_id" \

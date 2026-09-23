@@ -7,7 +7,7 @@ This is the first bounded distribution slice of [issue #167](https://github.com/
 | Linux x86_64, clean installed wheel | Verified by the distribution receipt. |
 | Linux x86_64, local OCI image | Verified from the same wheel and hash-checked runtime lock export. No registry image is published in this slice. |
 | Native macOS | Existing application path is preserved; this slice does not revalidate or expand its support claim. |
-| macOS Docker Desktop, Windows WSL2/Docker Desktop, other architectures | Pending later #167 conformance slices; no support claim from the Linux receipt. |
+| macOS Docker Desktop, Windows WSL2/Docker Desktop, other architectures | Not validated by this Linux receipt. The owner narrowed #167 to Linux-native/OCI proof; Windows host validation is tracked in [#208](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/208). |
 
 ## Build and verify
 
@@ -75,4 +75,4 @@ docker run --rm --read-only --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m \
 
 That last command is the existing production CLI: its usual provider authorization and evidence gates still apply. The Linux conformance run does not supply credentials or claim a successful live acquisition. Keep secrets in the existing credential boundary; no key belongs in the wheel, image, build context, receipt, or command documentation.
 
-There is no private-data migration in this slice. Back up the host private root using the existing governed backup process before changing a real installation. Roll back code by selecting the prior native environment or prior local image ID and leaving the private root untouched; re-run its installed-artifact smoke before use. Registry publication, multi-host parity, platform adapters, performance comparisons, and full install/upgrade/troubleshooting guidance remain open under #167.
+There is no private-data migration in this slice. Back up the host private root using the existing governed backup process before changing a real installation. Roll back code by selecting the prior native environment or prior local image ID and leaving the private root untouched; re-run its installed-artifact smoke before use. The later [published-image guide](published-oci.md) governs registry use and the host `~/SwingTradingAIAssistantData` mount. Performance comparisons and full install/upgrade/troubleshooting guidance remain open under #167; macOS/Windows host validation is outside its narrowed acceptance.
