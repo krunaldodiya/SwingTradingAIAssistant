@@ -124,6 +124,22 @@ jobs:
         if: steps.changes.outputs.full_gate == 'true'
         run: uv build --no-build-isolation --python .venv/bin/python
 
+      - name: Verify Linux wheel and OCI distribution
+        if: steps.changes.outputs.full_gate == 'true'
+        run: >-
+          uv run --no-sync --extra dev python scripts/verify_linux_distribution.py
+          --wheel dist/swing_trading_ai_assistant-*.whl
+          --receipt "$RUNNER_TEMP/linux-distribution-receipt.json"
+
+      - name: Retain Linux distribution receipt
+        if: steps.changes.outputs.full_gate == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: linux-distribution-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/linux-distribution-receipt.json
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Issue exact-tree CI admission
         env:
           CI_WORKFLOW_REF: ${{ github.workflow_ref }}

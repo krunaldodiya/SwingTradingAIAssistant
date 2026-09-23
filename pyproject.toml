@@ -38,6 +38,9 @@ equity-data-download = "equity_data_downloader.cli:main"
 [tool.hatch.build.targets.wheel]
 packages = ["src/equity_data_downloader", "src/swing_trading_ai_assistant"]
 
+[tool.hatch.build.targets.wheel.force-include]
+"examples/single_stock_research_demo.py" = "swing_trading_ai_assistant/_examples/single_stock_research_demo.py"
+
 [tool.pytest.ini_options]
 addopts = "-ra --strict-config --strict-markers --cov=equity_data_downloader --cov=swing_trading_ai_assistant --cov-branch --cov-report=term-missing:skip-covered --cov-fail-under=87 -n auto --dist=worksteal"
 testpaths = ["tests"]
