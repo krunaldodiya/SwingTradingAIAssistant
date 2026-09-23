@@ -1,6 +1,6 @@
 # Observed synthetic comparison explanation
 
-Issue #204; observed 2026-09-22 in Codex using the repository's fixed demo and
+Issue #204; observed 2026-09-23 in Codex using the repository's fixed demo and
 actual comparison CLI adapter. This is a qualitative response to synthetic
 facts, not current PNB research or a model-wide reliability result.
 
@@ -20,7 +20,7 @@ delta -3 (`CANDLE_GEOMETRY.upper_wick_size`). Range stays 20, delta 0
 the comparison; the assistant did not recompute them from OHLC.
 
 The complete comparison result identity is
-`365db88ff2c4dd2ec193a061fff2de8321dd1694a93ea2447af16179f20dc640`.
+`84430930e05b15b10cf0a22c77e704d491b965776f0c4722994e4b0d5fe60735`.
 Its previous/current observation identities are respectively
 `2c5c5b15e2763daea51052a77ed5ac2e41aaa4044abd9579b3fdf81d5095037e`
 and `910316da68a8f51323796f6be562711f4229d591c2b169c5a014f4d469942ad1`.
