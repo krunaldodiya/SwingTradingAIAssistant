@@ -20,7 +20,7 @@ delta -3 (`CANDLE_GEOMETRY.upper_wick_size`). Range stays 20, delta 0
 the comparison; the assistant did not recompute them from OHLC.
 
 The complete comparison result identity is
-`9077c49732ddf8b2d281e798ccb9da999095db1646b324ad270dcce34e254724`.
+`fb3e72758eef11ddc324fd82569c9020a0da3961c69486eb24cf7ad07cfaa813`.
 Its previous/current observation identities are respectively
 `2c5c5b15e2763daea51052a77ed5ac2e41aaa4044abd9579b3fdf81d5095037e`
 and `910316da68a8f51323796f6be562711f4229d591c2b169c5a014f4d469942ad1`.

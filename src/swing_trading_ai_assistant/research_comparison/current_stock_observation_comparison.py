@@ -106,7 +106,7 @@ _QUESTION_FACT_PATHS: Final = {
 }
 _DECIMAL_TEXT: Final = re.compile(r"(?:0|[1-9][0-9]*)(?:\.[0-9]*[1-9])?\Z")
 _DIGEST_TEXT: Final = re.compile(r"[0-9a-f]{64}\Z")
-_ISIN_TEXT: Final = re.compile(r"[A-Z0-9]{12}\Z")
+_ISIN_TEXT: Final = re.compile(r"[A-Z]{2}[A-Z0-9]{9}[0-9]\Z")
 _SYMBOL_TEXT: Final = re.compile(r"[A-Z0-9][A-Z0-9.&_-]{0,31}\Z")
 _MAX_VALUE_TEXT: Final = 258
 # Two admitted 258-character values can differ by 258 integer digits and
@@ -442,6 +442,8 @@ class CurrentStockObservationComparisonV1:
                     self.current_observation_identity_sha256,
                 )
             )
+            or self.previous_observation_identity_sha256
+            == self.current_observation_identity_sha256
             or any(
                 not _utc_instant(value)
                 for value in (

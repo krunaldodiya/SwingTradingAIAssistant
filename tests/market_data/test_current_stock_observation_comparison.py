@@ -539,10 +539,16 @@ def test_exported_result_rejects_untrusted_top_level_fields(tmp_path: Path) -> N
         {"symbol": "X" * 33},
         {"symbol": "X" * 1_000_000},
         {"isin": "not-an-isin"},
+        {"isin": "000000000000"},
+        {"isin": "1NE160A01022"},
+        {"isin": "INE160A0102X"},
         {"exchange": "OTHER"},
         {"price_basis": "PRIVATE_PRICE_BASIS"},
         {"previous_observation_identity_sha256": "x"},
         {"current_observation_identity_sha256": "0" * 65},
+        {
+            "current_observation_identity_sha256": result.previous_observation_identity_sha256
+        },
         {"previous_selection_time": "not-a-time"},
         {"current_selection_time": result.previous_selection_time},
         {"previous_completed_session": result.current_completed_session},
