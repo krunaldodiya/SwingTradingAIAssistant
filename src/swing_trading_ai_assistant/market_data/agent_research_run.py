@@ -372,6 +372,8 @@ def _previous_packet_shape(
         or initial.acquisition_deadline != candidate.acquisition_deadline
         or first.mapping_projection.members[0].mapping_identity_sha256
         != second.mapping_projection.members[0].mapping_identity_sha256
+        or first.mapping_projection.schedule_identity_sha256
+        != second.mapping_projection.schedule_identity_sha256
     ):
         return False
     second = validate_bharatstock_research_packet_v2(second)

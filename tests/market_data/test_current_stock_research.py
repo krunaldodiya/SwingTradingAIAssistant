@@ -3152,8 +3152,9 @@ def test_agent_swing_run_prior_window_survives_two_holidays_at_calendar_edge(
     assert row["lag_official_sessions"] == 1
 
 
-def test_agent_swing_run_rejects_changed_calendar_during_confirmation(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+@pytest.mark.parametrize("change_phase", ("confirmation", "previous"))
+def test_agent_swing_run_rejects_changed_calendar_during_fallback(
+    change_phase: str, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     clock, sources = _Clock(), _watchlist_sources()
     latest = clock.value.date() - timedelta(days=1)
@@ -3189,7 +3190,8 @@ def test_agent_swing_run_rejects_changed_calendar_during_confirmation(
         )
 
     def confirm(symbol, root, initial):
-        _declare_closures(sources, [date(2026, 8, 3)])
+        if change_phase == "confirmation":
+            _declare_closures(sources, [date(2026, 8, 3)])
         return workflow_v2.confirm_latest_completed_stock_v2(
             symbol,
             root,
@@ -3200,8 +3202,19 @@ def test_agent_swing_run_rejects_changed_calendar_during_confirmation(
             price_client=cast(BharatStockClient, prices),
         )
 
-    def forbidden(_symbol, _root, _initial):
-        raise AssertionError("changed official schedule forbids fallback")
+    def previous(symbol, root, initial):
+        if change_phase != "previous":
+            raise AssertionError("changed official schedule forbids P attempt")
+        _declare_closures(sources, [date(2026, 7, 20)])
+        return workflow_v2.research_previous_completed_stock_v2(
+            symbol,
+            root,
+            initial,
+            clock=clock,
+            calendar_transport=sources,
+            snapshot_transport=sources,
+            price_client=cast(BharatStockClient, prices),
+        )
 
     assert (
         main(
@@ -3218,13 +3231,18 @@ def test_agent_swing_run_rejects_changed_calendar_during_confirmation(
             ],
             current_stock_research_v2=current,
             current_stock_research_confirm_v2=confirm,
-            current_stock_research_previous_v2=forbidden,
+            current_stock_research_previous_v2=previous,
         )
         == 1
     )
     row = json.loads(capsys.readouterr().out)["members"][0]
-    assert row["fallback_outcome"] == "LATEST_NOT_CONFIRMED"
+    assert row["fallback_outcome"] == (
+        "LATEST_NOT_CONFIRMED"
+        if change_phase == "confirmation"
+        else "PREVIOUS_WINDOW_UNAVAILABLE"
+    )
     assert row["selected_evidence_end_session"] is None
+    assert row["previous_window_attempt"] is None
 
 
 def test_agent_swing_run_recovers_after_confirmation_interruption(

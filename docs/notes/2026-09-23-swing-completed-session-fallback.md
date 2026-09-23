@@ -38,9 +38,13 @@ official close, S is already the prior completed trading session.
    Confirm S is still absent after the wider S-anchored captures, within the
    original decision deadline; an observed S fact or an invalid/conflicting
    wider outcome blocks fallback. The versioned mode may acquire up to 40
-   calendar days of official schedule on its initial, confirmation, and P-anchored requests
-   solely to establish S plus 21 prior sessions after holidays; the default
+   calendar days of official schedule on its initial, confirmation, and
+   P-anchored requests solely to establish S plus 21 prior sessions after
+   holidays; the default
    public V2 question retains its 32-day request.
+   All three opt-in observations must retain the same official schedule identity;
+   a revision between confirmation and P blocks fallback even if the last 21
+   trading dates did not change.
    The agent run uses a distinct capture request identity to mark a missing
    terminal S only when the provider returns exactly the preceding requested
    rows for the correct stock within the original cutoff. Ambiguous legacy
