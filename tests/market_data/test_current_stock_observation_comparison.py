@@ -25,6 +25,9 @@ from swing_trading_ai_assistant.market_data.current_stock_research_v2 import (
     research_current_stock_v2,
 )
 from swing_trading_ai_assistant.market_data.http import HttpResponse
+from swing_trading_ai_assistant.research_comparison import (
+    current_stock_observation_comparison as comparison_module,
+)
 from swing_trading_ai_assistant.research_comparison.current_stock_observation_comparison import (
     compare_current_stock_observations_v1,
     current_stock_observation_comparison_runtime_code_identity_v1,
@@ -432,6 +435,150 @@ def test_comparison_serialization_revalidates_nested_facts(tmp_path: Path) -> No
 
     with pytest.raises(ValueError, match="invalid observation comparison fact"):
         result.canonical_json_bytes()
+    object.__setattr__(changed, "state", "CHANGED")
+    direction = next(
+        item for item in result.facts if item.path == "CANDLE_GEOMETRY.candle_direction"
+    )
+    object.__setattr__(direction, "current_value", "BUY_NOW")
+    with pytest.raises(ValueError, match="invalid observation comparison fact"):
+        result.canonical_json_bytes()
+
+
+def test_exported_fact_values_are_closed_canonical_and_bounded(tmp_path: Path) -> None:
+    previous = _observation(
+        tmp_path / "previous", datetime(2026, 8, 26, 4, 15, tzinfo=UTC)
+    )
+    current = _observation(
+        tmp_path / "current",
+        datetime(2026, 8, 27, 4, 15, tzinfo=UTC),
+        close=Decimal("108"),
+    )
+    facts = {
+        item.path: item
+        for item in compare_current_stock_observations_v1(previous, current).facts
+    }
+    direction = facts["CANDLE_GEOMETRY.candle_direction"]
+    body = facts["CANDLE_GEOMETRY.body_size"]
+    previous_close_direction = facts[
+        "PREVIOUS_CLOSE_COMPARISON.close_vs_previous_close"
+    ]
+
+    with pytest.raises(ValueError, match="invalid observation comparison fact"):
+        replace(direction, current_value="BUY_NOW", state="CHANGED")
+    with pytest.raises(ValueError, match="invalid observation comparison fact"):
+        replace(previous_close_direction, current_value="BUY_NOW", state="CHANGED")
+    with pytest.raises(ValueError, match="invalid observation comparison fact"):
+        replace(body, previous_value="-5", current_value="-8", delta="-3")
+    with pytest.raises(ValueError, match="invalid observation comparison fact"):
+        replace(
+            body,
+            previous_value="1.0",
+            current_value="1.00",
+            delta="0.000",
+            state="UNCHANGED",
+        )
+    with pytest.raises(ValueError, match="invalid observation comparison fact"):
+        replace(
+            body,
+            previous_value="1" * 259,
+            current_value="1" * 259,
+            delta="0",
+            state="UNCHANGED",
+        )
+    with pytest.raises(ValueError, match="invalid observation comparison fact"):
+        replace(body, previous_value="1" * 1_000_000)
+    assert (
+        replace(
+            body,
+            previous_value="1" * 258,
+            current_value="1" * 258,
+            delta="0",
+            state="UNCHANGED",
+        ).state
+        == "UNCHANGED"
+    )
+
+
+def test_exported_result_requires_complete_question_fact_paths(tmp_path: Path) -> None:
+    previous = _observation(
+        tmp_path / "previous", datetime(2026, 8, 26, 4, 15, tzinfo=UTC)
+    )
+    current = _observation(
+        tmp_path / "current", datetime(2026, 8, 27, 4, 15, tzinfo=UTC)
+    )
+    result = compare_current_stock_observations_v1(previous, current)
+
+    with pytest.raises(
+        ValueError, match="invalid current-stock observation comparison"
+    ):
+        replace(result, facts=result.facts[:1])
+
+    previous_structure = _observation(
+        tmp_path / "previous_structure",
+        datetime(2026, 8, 26, 4, 15, tzinfo=UTC),
+        question="CURRENT_STRUCTURE",
+    )
+    current_structure = _observation(
+        tmp_path / "current_structure",
+        datetime(2026, 8, 27, 4, 15, tzinfo=UTC),
+        question="CURRENT_STRUCTURE",
+    )
+    structure = compare_current_stock_observations_v1(
+        previous_structure, current_structure
+    )
+    with pytest.raises(
+        ValueError, match="invalid current-stock observation comparison"
+    ):
+        replace(structure, facts=structure.facts[:1])
+    with pytest.raises(ValueError, match="invalid observation comparison fact"):
+        replace(structure.facts[0], current_value="BUY_NOW", state="CHANGED")
+    with pytest.raises(ValueError, match="invalid observation comparison fact"):
+        replace(structure.facts[1], current_value="BUY_NOW", state="CHANGED")
+
+
+def test_exported_reason_is_bounded_before_serialization(tmp_path: Path) -> None:
+    previous = _observation(
+        tmp_path / "previous", datetime(2026, 8, 26, 4, 15, tzinfo=UTC)
+    )
+    current = _observation(
+        tmp_path / "current",
+        datetime(2026, 8, 27, 4, 15, tzinfo=UTC),
+        one_session=True,
+    )
+    comparison = compare_current_stock_observations_v1(previous, current)
+    unavailable = next(
+        item for item in comparison.facts if item.state == "NEWLY_UNAVAILABLE"
+    )
+    assert replace(unavailable, current_reason="R" * 256).current_reason == "R" * 256
+    with pytest.raises(ValueError, match="invalid observation comparison fact"):
+        replace(unavailable, current_reason="R" * 257)
+
+
+def test_invalid_internal_fact_projection_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    previous = _observation(
+        tmp_path / "previous", datetime(2026, 8, 26, 4, 15, tzinfo=UTC)
+    )
+    current = _observation(
+        tmp_path / "current", datetime(2026, 8, 27, 4, 15, tzinfo=UTC)
+    )
+    original = comparison_module._feature_values  # pyright: ignore[reportPrivateUsage]
+
+    def omit_required_fact(
+        question: str, feature: packet_v2.BharatStockMemberFeatureV2
+    ) -> tuple[tuple[str, object | None], ...]:
+        values = original(question, feature)
+        return values[:-1] if feature.feature == "CANDLE_GEOMETRY" else values
+
+    monkeypatch.setattr(comparison_module, "_feature_values", omit_required_fact)
+    result = compare_current_stock_observations_v1(previous, current)
+
+    assert (result.status, result.code, result.facts) == (
+        "NON_COMPARABLE",
+        "OBSERVATION_INVALID",
+        (),
+    )
 
 
 def test_comparison_is_independent_of_ambient_decimal_context(tmp_path: Path) -> None:

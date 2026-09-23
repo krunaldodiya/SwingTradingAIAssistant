@@ -37,7 +37,7 @@ def test_demo_runs_actual_cli_and_reports_tool_computed_change() -> None:
     assert value["question"] == "PRICE_BEHAVIOR"
     assert (
         value["result_identity_sha256"]
-        == "a1865e6aaab58f7ff8dce1144a971487d476f1f3dbe4d1a43a2cac4a64570574"
+        == "d203575b2eb9b054a3c812606bc83cd87ad20f7382789b74f3d377c4e542208d"
     )
     assert (
         value["previous_observation_identity_sha256"]

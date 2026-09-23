@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass, field, fields, is_dataclass
 from datetime import UTC, date, datetime
 from decimal import (
@@ -71,6 +72,42 @@ _TEXT_FACT_PATHS: Final = {
     "MARKET_STRUCTURE.structure_state",
     "MARKET_STRUCTURE.trend",
 }
+_TEXT_VALUE_DOMAINS: Final = {
+    "CANDLE_GEOMETRY.candle_direction": frozenset({"UP", "DOWN", "UNCHANGED"}),
+    "PREVIOUS_CLOSE_COMPARISON.open_vs_previous_close": frozenset(
+        {"UP", "DOWN", "UNCHANGED"}
+    ),
+    "PREVIOUS_CLOSE_COMPARISON.close_vs_previous_close": frozenset(
+        {"UP", "DOWN", "UNCHANGED"}
+    ),
+    "MARKET_STRUCTURE.structure_state": frozenset(
+        {"CONFIRMED", "INSUFFICIENT_STRUCTURE"}
+    ),
+    "MARKET_STRUCTURE.trend": frozenset(
+        {"UPTREND", "DOWNTREND", "RANGE_OR_TRANSITION", "INSUFFICIENT_STRUCTURE"}
+    ),
+}
+_QUESTION_FACT_PATHS: Final = {
+    "PRICE_BEHAVIOR": (
+        "CANDLE_GEOMETRY.candle_direction",
+        "CANDLE_GEOMETRY.range_size",
+        "CANDLE_GEOMETRY.body_size",
+        "CANDLE_GEOMETRY.upper_wick_size",
+        "CANDLE_GEOMETRY.lower_wick_size",
+        "PREVIOUS_CLOSE_COMPARISON.open_vs_previous_close",
+        "PREVIOUS_CLOSE_COMPARISON.open_to_previous_close_distance",
+        "PREVIOUS_CLOSE_COMPARISON.close_vs_previous_close",
+        "PREVIOUS_CLOSE_COMPARISON.close_to_previous_close_distance",
+    ),
+    "CURRENT_STRUCTURE": (
+        "MARKET_STRUCTURE.structure_state",
+        "MARKET_STRUCTURE.trend",
+    ),
+}
+_DECIMAL_TEXT: Final = re.compile(r"(?:0|[1-9][0-9]*)(?:\.[0-9]*[1-9])?\Z")
+_MAX_VALUE_TEXT: Final = 258
+_MAX_DELTA_TEXT: Final = 260
+_MAX_REASON_TEXT: Final = 256
 
 ComparisonStatusV1: TypeAlias = Literal["COMPARABLE", "NON_COMPARABLE"]
 ComparisonStateV1: TypeAlias = Literal[
@@ -93,6 +130,50 @@ def _comparison_decimal_context() -> Context:
         flags=[],
         traps=[InvalidOperation, DivisionByZero, Overflow],
     )
+
+
+def _admitted_numeric_text(value: str, *, delta: bool = False) -> Decimal:
+    limit = _MAX_DELTA_TEXT if delta else _MAX_VALUE_TEXT
+    unsigned = value[1:] if delta and value.startswith("-") else value
+    if (
+        len(value) > limit
+        or _DECIMAL_TEXT.fullmatch(unsigned) is None
+        or (delta and value == "-0")
+    ):
+        raise ValueError("invalid observation comparison fact")
+    number = Decimal(value)
+    if not number.is_finite() or (not delta and number < 0):
+        raise ValueError("invalid observation comparison fact")
+    return number
+
+
+def _same_admitted_fact_values(
+    path: str,
+    previous_value: str | None,
+    current_value: str | None,
+    delta: str | None,
+) -> bool:
+    if path in _NUMERIC_FACT_PATHS:
+        before = (
+            None if previous_value is None else _admitted_numeric_text(previous_value)
+        )
+        after = None if current_value is None else _admitted_numeric_text(current_value)
+        if delta is not None:
+            try:
+                with localcontext(_comparison_decimal_context()):
+                    computed = _admitted_numeric_text(delta, delta=True)
+                    if before is None or after is None or after - before != computed:
+                        raise ValueError("invalid observation comparison fact")
+            except (InvalidOperation, Overflow, TypeError) as error:
+                raise ValueError("invalid observation comparison fact") from error
+        return before == after
+    domain = _TEXT_VALUE_DOMAINS[path]
+    if any(
+        value is not None and value not in domain
+        for value in (previous_value, current_value)
+    ):
+        raise ValueError("invalid observation comparison fact")
+    return previous_value == current_value
 
 
 def _wire(value: object) -> object:
@@ -189,6 +270,10 @@ class CurrentStockObservationComparisonFactV1:
                     self.delta,
                 )
             )
+            or any(
+                reason is not None and len(reason) > _MAX_REASON_TEXT
+                for reason in (self.previous_reason, self.current_reason)
+            )
             or previous_observed != (self.previous_value is not None)
             or current_observed != (self.current_value is not None)
             or previous_observed == (self.previous_reason is not None)
@@ -202,24 +287,10 @@ class CurrentStockObservationComparisonFactV1:
             )
         ):
             raise ValueError("invalid observation comparison fact")
+        same = _same_admitted_fact_values(
+            self.path, self.previous_value, self.current_value, self.delta
+        )
         if previous_observed and current_observed:
-            same = self.previous_value == self.current_value
-            if self.delta is not None:
-                try:
-                    with localcontext(_comparison_decimal_context()):
-                        before = Decimal(cast(str, self.previous_value))
-                        after = Decimal(cast(str, self.current_value))
-                        delta = Decimal(self.delta)
-                        if (
-                            not all(
-                                value.is_finite() for value in (before, after, delta)
-                            )
-                            or after - before != delta
-                        ):
-                            raise ValueError("invalid observation comparison fact")
-                        same = before == after
-                except (InvalidOperation, Overflow, TypeError) as error:
-                    raise ValueError("invalid observation comparison fact") from error
             expected = "UNCHANGED" if same else "CHANGED"
         elif previous_observed:
             expected = "NEWLY_UNAVAILABLE"
@@ -274,6 +345,15 @@ class CurrentStockObservationComparisonV1:
             )
             or any(item.__post_init__() is not None for item in self.facts)
             or len({item.path for item in self.facts}) != len(self.facts)
+            or (
+                self.status == "COMPARABLE"
+                and (
+                    type(self.question) is not str
+                    or self.question not in _QUESTION_FACT_PATHS
+                    or tuple(item.path for item in self.facts)
+                    != _QUESTION_FACT_PATHS[self.question]
+                )
+            )
             or type(self.limitations) is not tuple
             or not self.limitations
             or any(type(item) is not str or not item for item in self.limitations)
@@ -487,6 +567,30 @@ def _feature_values(
     raise ValueError("unsupported comparison feature")
 
 
+def _comparison_facts(
+    previous_packet: BharatStockResearchPacketV2,
+    current_packet: BharatStockResearchPacketV2,
+    question: str,
+) -> tuple[CurrentStockObservationComparisonFactV1, ...]:
+    previous_by_feature = {
+        item.feature: item for item in previous_packet.members[0].features
+    }
+    current_by_feature = {
+        item.feature: item for item in current_packet.members[0].features
+    }
+    facts: list[CurrentStockObservationComparisonFactV1] = []
+    for feature_name in previous_packet.requested_features:
+        previous_feature = previous_by_feature[feature_name]
+        current_feature = current_by_feature[feature_name]
+        previous_values = _feature_values(question, previous_feature)
+        current_values = dict(_feature_values(question, current_feature))
+        facts.extend(
+            _fact(path, previous_feature, current_feature, value, current_values[path])
+            for path, value in previous_values
+        )
+    return tuple(facts)
+
+
 def compare_current_stock_observations_v1(
     previous: CurrentStockResearchResultV2,
     current: CurrentStockResearchResultV2,
@@ -541,47 +645,33 @@ def _compare_current_stock_observations_v1(
         or previous_member.price_basis != current_member.price_basis
     ):
         return _non_comparable("INCOMPATIBLE_PRICE_BASIS")
-    previous_by_feature = {item.feature: item for item in previous_member.features}
-    current_by_feature = {item.feature: item for item in current_member.features}
-    facts: list[CurrentStockObservationComparisonFactV1] = []
-    for feature_name in previous_packet.requested_features:
-        previous_feature = previous_by_feature[feature_name]
-        current_feature = current_by_feature[feature_name]
-        previous_values = _feature_values(previous.question, previous_feature)
-        current_values = dict(_feature_values(current.question, current_feature))
-        facts.extend(
-            _fact(
-                path,
-                previous_feature,
-                current_feature,
-                value,
-                current_values[path],
-            )
-            for path, value in previous_values
+    try:
+        facts = _comparison_facts(previous_packet, current_packet, previous.question)
+        return CurrentStockObservationComparisonV1(
+            CONTRACT_VERSION_V1,
+            SCHEMA_IDENTITY_SHA256_V1,
+            CONFIGURATION_IDENTITY_SHA256_V1,
+            current_stock_observation_comparison_runtime_code_identity_v1(),
+            "COMPARABLE",
+            "COMPARISON_READY",
+            previous.question,
+            previous.symbol,
+            previous_member.member.isin,
+            previous_member.member.exchange,
+            previous_member.price_basis,
+            hashlib.sha256(previous_raw).hexdigest(),
+            hashlib.sha256(current_raw).hexdigest(),
+            previous.data_selection_time,
+            current.data_selection_time,
+            previous_session,
+            current_session,
+            previous.evidence_known_at,
+            current.evidence_known_at,
+            facts,
+            _LIMITATIONS,
         )
-    return CurrentStockObservationComparisonV1(
-        CONTRACT_VERSION_V1,
-        SCHEMA_IDENTITY_SHA256_V1,
-        CONFIGURATION_IDENTITY_SHA256_V1,
-        current_stock_observation_comparison_runtime_code_identity_v1(),
-        "COMPARABLE",
-        "COMPARISON_READY",
-        previous.question,
-        previous.symbol,
-        previous_member.member.isin,
-        previous_member.member.exchange,
-        previous_member.price_basis,
-        hashlib.sha256(previous_raw).hexdigest(),
-        hashlib.sha256(current_raw).hexdigest(),
-        previous.data_selection_time,
-        current.data_selection_time,
-        previous_session,
-        current_session,
-        previous.evidence_known_at,
-        current.evidence_known_at,
-        tuple(facts),
-        _LIMITATIONS,
-    )
+    except (ArithmeticError, AttributeError, KeyError, TypeError, ValueError):
+        return _non_comparable("OBSERVATION_INVALID")
 
 
 def invalid_current_stock_observation_comparison_v1() -> (
