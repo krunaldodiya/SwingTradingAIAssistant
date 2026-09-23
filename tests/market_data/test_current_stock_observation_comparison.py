@@ -640,7 +640,7 @@ def test_equal_completed_session_is_not_presented_as_change(tmp_path: Path) -> N
 
 
 @pytest.mark.parametrize("offset_minutes", (0, -1))
-def test_equal_or_reversed_evidence_known_time_is_not_presented_as_change(
+def test_substituted_equal_or_reversed_evidence_known_time_is_invalid_observation(
     tmp_path: Path, offset_minutes: int
 ) -> None:
     previous = _observation(
@@ -659,10 +659,7 @@ def test_equal_or_reversed_evidence_known_time_is_not_presented_as_change(
 
     result = compare_current_stock_observations_v1(previous, current)
 
-    assert (result.status, result.code) == (
-        "NON_COMPARABLE",
-        "INVALID_TEMPORAL_ORDER",
-    )
+    assert (result.status, result.code) == ("NON_COMPARABLE", "OBSERVATION_INVALID")
 
 
 def test_evidence_known_after_deadline_fails_closed_as_invalid_observation(
@@ -681,6 +678,33 @@ def test_evidence_known_after_deadline_fails_closed_as_invalid_observation(
             minute=current.acquisition_deadline.minute + 1
         ),
     )
+
+    result = compare_current_stock_observations_v1(previous, current)
+
+    assert (result.status, result.code) == ("NON_COMPARABLE", "OBSERVATION_INVALID")
+
+
+@pytest.mark.parametrize("changed", ("previous", "current"))
+def test_evidence_known_time_must_match_admitted_packet_sources(
+    tmp_path: Path, changed: str
+) -> None:
+    previous = _observation(
+        tmp_path / "previous", datetime(2026, 8, 26, 4, 15, tzinfo=UTC)
+    )
+    current = _observation(
+        tmp_path / "current", datetime(2026, 8, 27, 4, 15, tzinfo=UTC)
+    )
+    assert previous.evidence_known_at is not None
+    assert current.evidence_known_at is not None
+    if changed == "previous":
+        previous = replace(
+            previous,
+            evidence_known_at=previous.evidence_known_at - timedelta(minutes=1),
+        )
+    else:
+        current = replace(
+            current, evidence_known_at=current.evidence_known_at - timedelta(minutes=1)
+        )
 
     result = compare_current_stock_observations_v1(previous, current)
 

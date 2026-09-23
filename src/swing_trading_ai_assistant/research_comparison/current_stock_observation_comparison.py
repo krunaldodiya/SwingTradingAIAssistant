@@ -303,8 +303,23 @@ def _observation(
         return None
     if type(result.packet) is not BharatStockResearchPacketV2:
         return (raw, cast(BharatStockResearchPacketV2, result.packet))
-    validate_bharatstock_research_packet_v2(result.packet)
-    return raw, result.packet
+    packet = validate_bharatstock_research_packet_v2(result.packet)
+    known_values = [
+        source.known_at
+        for slot, source in zip(
+            packet.feature_slots,
+            (packet.geometry_source, packet.comparison_source, packet.structure_source),
+            strict=True,
+        )
+        if source is not None
+        and any(
+            coverage.feature == slot.feature and coverage.observed > 0
+            for coverage in packet.coverage
+        )
+    ]
+    if result.evidence_known_at != (max(known_values) if known_values else None):
+        return None
+    return raw, packet
 
 
 def _completed_session(packet: BharatStockResearchPacketV2) -> date | None:
