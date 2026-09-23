@@ -4,7 +4,7 @@ from typing import Final
 
 CURRENT_PRICE_CONTEXT_RUNTIME_SOURCE_SHA256_V2: Final[dict[str, str]] = {
     "src/swing_trading_ai_assistant/market_data/catalog.py": "ae17eac5475a39d5ff08173e9b2154c0cf33778f573e7d894656a2ba685294ac",
-    "src/swing_trading_ai_assistant/market_data/cli.py": "bcd4a9dcbdfbb7f4180ffef7bf56eadd62d19c95bc59ce1d7fe185a18e1dee6f",
+    "src/swing_trading_ai_assistant/market_data/cli.py": "88ef3e1aa74ec40d3f75d391e71450cac1cd1542ed0e00ab9a08736c129547f6",
     "src/swing_trading_ai_assistant/market_data/current_raw_acquisition.py": "f1a277c0ea35bc57c3eb41c62763c9f5df33de0062dfa758697b301cb2ff980c",
     "src/swing_trading_ai_assistant/market_data/current_raw_acquisition_transport.py": "79ae5ec7826ca987eba103d34e2665f8457f4f602593d3ef736597ce69219651",
     "src/swing_trading_ai_assistant/market_data/current_raw_price_context.py": "87443910329fb06b8edc4c583376b8df390b7532c1f533e2eacc0f47cea48712",
@@ -16,6 +16,6 @@ CURRENT_PRICE_CONTEXT_RUNTIME_SOURCE_SHA256_V2: Final[dict[str, str]] = {
     "src/swing_trading_ai_assistant/market_data/storage_root_lease.py": "f93eac4f668dbdb0e236a3a54452a8d022c5700e91452536acafb1300b22f6ff",
     "src/swing_trading_ai_assistant/research_packet/__init__.py": "b7dcf830515526b5fef268f91ea60fce3524a92fd7683f48505a336f037cea5f",
     "src/swing_trading_ai_assistant/research_packet/current_price_context.py": "d5e16db2378da4dfcfaa3a711d84967875926485104e4a2b7c66da46d82204c0",
-    "src/swing_trading_ai_assistant/research_packet/current_price_context_runtime_identity_manifest.py": "17a8246cbc9370f0f2202a02d9f3402b7814c04c3bc2b74635b18e4221a8d614",
+    "src/swing_trading_ai_assistant/research_packet/current_price_context_runtime_identity_manifest.py": "a9fe992094546f6e96512daf3dbeab614a7165eb6e6615cfbbae0fbd343e2d88",
     "src/swing_trading_ai_assistant/research_packet/current_price_context_v2.py": "051474a5f798fe036af46424c6bcc5f05027062f06ecb9c739af5537a48a7d66",
 }

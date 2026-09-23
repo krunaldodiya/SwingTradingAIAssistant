@@ -1,12 +1,13 @@
 # Swing research when the latest daily candle is delayed
 
-**Decision:** accepted by the owner on 2026-09-23. **Delivery:** pending; the
-current `research-run-current` CLI has not implemented this fallback. This note
-sets the next behavior without revising the delivered V1/V2 contracts or claiming
-that the existing command already follows it.
+**Decision:** accepted by the owner on 2026-09-23. **Implementation:** Sprint 23
+[issue #215](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/215)
+adds this behavior to `research-run-current --contract-version v2`. The default
+`v1` agent output and existing stock-research V1/V2 questions retain their
+strict latest-completed-session behavior.
 
 **Owner and risk:** the repository owner directs this research behavior. Its
-future implementation is R3 because session selection changes public financial
+implementation is R3 because session selection changes public financial
 research evidence. The affected consumers are the agent-run dossier and any
 later strategy that reads it; historical snapshots, credentials, provider
 choice and the 21-session calculation are unchanged. The one-session bound is
@@ -62,12 +63,11 @@ strategy or trade-signal contract decides whether one-session-lagged evidence
 is sufficiently fresh for its claim; this decision does not authorize a
 BUY/HOLD/EXIT signal or a new performance assertion.
 
-Implementation needs a versioned result that distinguishes S-anchored facts
-from the one-session fallback, while preserving existing V1/V2 readers and
-retained evidence. A documentation update alone is not a runtime change;
-implementation, regression checks and independent domain/provenance review
-must precede any delivered-behavior claim. Rollback should restore S-only
-selection without deleting valid captured evidence.
+The versioned agent result exposes `latest_official_completed_session`,
+`selected_evidence_end_session`, `lag_official_sessions`, and
+`fallback_outcome` for each stock. Its selected facts retain their source and
+capture identities. Switching back to the default `v1` agent contract restores
+S-only selection without deleting valid captured evidence.
 
 ## Acceptance examples for implementation
 

@@ -2886,6 +2886,422 @@ def test_agent_research_run_projects_three_stocks_without_raw_data(
     assert str(tmp_path) not in output.out
 
 
+def test_agent_swing_run_uses_previous_complete_21_sessions_when_latest_bar_lags(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    clock, sources = _Clock(), _watchlist_sources()
+    latest = clock.value.date() - timedelta(days=1)
+
+    class LaggedPrices(_Prices):
+        def history(self, instrument, start, end, *, effect_guard=None):
+            if start == end == latest:
+                raise BharatStockError("EMPTY_HISTORY", member_local=True)
+            result = super().history(instrument, start, end, effect_guard=effect_guard)
+            return (
+                replace(
+                    result,
+                    rows=tuple(row for row in result.rows if row.session != latest),
+                )
+                if end == latest
+                else result
+            )
+
+    prices = LaggedPrices(clock)
+    prices.full_history = True
+
+    def current(symbol, root, *, question, refresh=False):
+        return research_current_stock_v2(
+            symbol,
+            root,
+            question=question,
+            refresh=refresh,
+            clock=clock,
+            calendar_transport=sources,
+            snapshot_transport=sources,
+            price_client=cast(BharatStockClient, prices),
+        )
+
+    def previous(symbol, root, initial):
+        return workflow_v2.research_previous_completed_stock_v2(
+            symbol,
+            root,
+            initial,
+            clock=clock,
+            calendar_transport=sources,
+            snapshot_transport=sources,
+            price_client=cast(BharatStockClient, prices),
+        )
+
+    assert (
+        main(
+            [
+                "research-run-current",
+                "--contract-version",
+                "v2",
+                "--symbol",
+                "PNB",
+                "--storage-root",
+                str(tmp_path),
+                "--output",
+                "json",
+            ],
+            current_stock_research_v2=current,
+            current_stock_research_previous_v2=previous,
+        )
+        == 0
+    )
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    report = json.loads(captured.out)
+    row = report["members"][0]
+    assert report["contract_version"] == "agent-current-research-run@v2"
+    assert row["latest_official_completed_session"] == latest.isoformat()
+    assert (
+        row["selected_evidence_end_session"] == (latest - timedelta(days=1)).isoformat()
+    )
+    assert row["lag_official_sessions"] == 1
+    assert row["fallback_outcome"] == "APPLIED"
+    assert all(
+        feature["fact"]["session"] == row["selected_evidence_end_session"]
+        for feature in row["features"].values()
+    )
+    assert "source_bars" not in captured.out and str(tmp_path) not in captured.out
+
+
+@pytest.mark.parametrize(
+    ("category", "member_local"),
+    (("PRICE_EVIDENCE_INVALID", True), ("AUTHENTICATION", False)),
+)
+def test_agent_swing_run_does_not_fallback_after_nonmissing_price_failure(
+    category: str,
+    member_local: bool,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    clock, sources = _Clock(), _watchlist_sources()
+    prices = _Prices(clock)
+    prices.failure = BharatStockError(category, member_local=member_local)
+
+    def current(symbol, root, *, question, refresh=False):
+        return research_current_stock_v2(
+            symbol,
+            root,
+            question=question,
+            refresh=refresh,
+            clock=clock,
+            calendar_transport=sources,
+            snapshot_transport=sources,
+            price_client=cast(BharatStockClient, prices),
+        )
+
+    def forbidden(_symbol, _root, _initial):
+        raise AssertionError("fallback must not acquire")
+
+    assert (
+        main(
+            [
+                "research-run-current",
+                "--contract-version",
+                "v2",
+                "--symbol",
+                "PNB",
+                "--storage-root",
+                str(tmp_path),
+                "--output",
+                "json",
+            ],
+            current_stock_research_v2=current,
+            current_stock_research_previous_v2=forbidden,
+        )
+        == 1
+    )
+    row = json.loads(capsys.readouterr().out)["members"][0]
+    assert row["fallback_outcome"] == "NOT_ELIGIBLE"
+    assert row["features"]["CANDLE_GEOMETRY"]["fact"] is None
+
+
+def test_agent_swing_run_keeps_missing_fact_when_previous_window_is_incomplete(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    clock, sources = _Clock(), _watchlist_sources()
+    latest = clock.value.date() - timedelta(days=1)
+    previous_day = latest - timedelta(days=1)
+
+    class TwoMissingPrices(_Prices):
+        def history(self, instrument, start, end, *, effect_guard=None):
+            if start == end and end in {latest, previous_day}:
+                raise BharatStockError("EMPTY_HISTORY", member_local=True)
+            result = super().history(instrument, start, end, effect_guard=effect_guard)
+            rows = tuple(
+                row for row in result.rows if row.session not in {latest, previous_day}
+            )
+            if not rows:
+                raise BharatStockError("EMPTY_HISTORY", member_local=True)
+            return replace(
+                result,
+                rows=rows,
+            )
+
+    prices = TwoMissingPrices(clock)
+    prices.full_history = True
+
+    def current(symbol, root, *, question, refresh=False):
+        return research_current_stock_v2(
+            symbol,
+            root,
+            question=question,
+            refresh=refresh,
+            clock=clock,
+            calendar_transport=sources,
+            snapshot_transport=sources,
+            price_client=cast(BharatStockClient, prices),
+        )
+
+    def previous(symbol, root, initial):
+        return workflow_v2.research_previous_completed_stock_v2(
+            symbol,
+            root,
+            initial,
+            clock=clock,
+            calendar_transport=sources,
+            snapshot_transport=sources,
+            price_client=cast(BharatStockClient, prices),
+        )
+
+    assert (
+        main(
+            [
+                "research-run-current",
+                "--contract-version",
+                "v2",
+                "--symbol",
+                "PNB",
+                "--storage-root",
+                str(tmp_path),
+                "--output",
+                "json",
+            ],
+            current_stock_research_v2=current,
+            current_stock_research_previous_v2=previous,
+        )
+        == 1
+    )
+    row = json.loads(capsys.readouterr().out)["members"][0]
+    assert row["fallback_outcome"] == "PREVIOUS_WINDOW_UNAVAILABLE"
+    assert row["selected_evidence_end_session"] is None
+    assert row["lag_official_sessions"] is None
+    assert row["features"]["MARKET_STRUCTURE"]["fact"] is None
+
+
+@pytest.mark.parametrize(
+    ("current_time", "expected_latest"),
+    (
+        (datetime(2026, 8, 26, 4, 15, tzinfo=UTC), date(2026, 8, 25)),
+        (datetime(2026, 8, 29, 8, 0, tzinfo=UTC), date(2026, 8, 28)),
+    ),
+)
+def test_agent_swing_run_does_not_call_fallback_when_latest_bar_is_available(
+    current_time: datetime,
+    expected_latest: date,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    clock, sources = _Clock(), _watchlist_sources()
+    clock.value = current_time
+    prices = _Prices(clock)
+    prices.full_history = True
+
+    def current(symbol, root, *, question, refresh=False):
+        return research_current_stock_v2(
+            symbol,
+            root,
+            question=question,
+            refresh=refresh,
+            clock=clock,
+            calendar_transport=sources,
+            snapshot_transport=sources,
+            price_client=cast(BharatStockClient, prices),
+        )
+
+    def forbidden(_symbol, _root, _initial):
+        raise AssertionError("fallback must not acquire")
+
+    assert (
+        main(
+            [
+                "research-run-current",
+                "--contract-version",
+                "v2",
+                "--symbol",
+                "PNB",
+                "--storage-root",
+                str(tmp_path),
+                "--output",
+                "json",
+            ],
+            current_stock_research_v2=current,
+            current_stock_research_previous_v2=forbidden,
+        )
+        == 0
+    )
+    row = json.loads(capsys.readouterr().out)["members"][0]
+    assert row["fallback_outcome"] == "NOT_NEEDED"
+    assert row["latest_official_completed_session"] == expected_latest.isoformat()
+    assert row["lag_official_sessions"] == 0
+    assert (
+        row["selected_evidence_end_session"] == row["latest_official_completed_session"]
+    )
+
+
+def test_agent_swing_run_prior_attempt_shares_the_original_deadline(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    clock, sources = _Clock(), _watchlist_sources()
+    latest = clock.value.date() - timedelta(days=1)
+    attempts_before_fallback: list[int] = []
+
+    class LaggedPrices(_Prices):
+        def history(self, instrument, start, end, *, effect_guard=None):
+            if start == end == latest:
+                raise BharatStockError("EMPTY_HISTORY", member_local=True)
+            result = super().history(instrument, start, end, effect_guard=effect_guard)
+            if end == latest:
+                return replace(
+                    result,
+                    rows=tuple(row for row in result.rows if row.session != latest),
+                )
+            return result
+
+    prices = LaggedPrices(clock)
+    prices.full_history = True
+
+    def current(symbol, root, *, question, refresh=False):
+        result = research_current_stock_v2(
+            symbol,
+            root,
+            question=question,
+            refresh=refresh,
+            clock=clock,
+            calendar_transport=sources,
+            snapshot_transport=sources,
+            price_client=cast(BharatStockClient, prices),
+        )
+        attempts_before_fallback.append(len(prices.calls))
+        clock.value = result.acquisition_deadline + timedelta(seconds=1)
+        return result
+
+    def previous(symbol, root, initial):
+        result = workflow_v2.research_previous_completed_stock_v2(
+            symbol,
+            root,
+            initial,
+            clock=clock,
+            calendar_transport=sources,
+            snapshot_transport=sources,
+            price_client=cast(BharatStockClient, prices),
+        )
+        assert len(prices.calls) == attempts_before_fallback[0]
+        return result
+
+    assert (
+        main(
+            [
+                "research-run-current",
+                "--contract-version",
+                "v2",
+                "--symbol",
+                "PNB",
+                "--storage-root",
+                str(tmp_path),
+                "--output",
+                "json",
+            ],
+            current_stock_research_v2=current,
+            current_stock_research_previous_v2=previous,
+        )
+        == 1
+    )
+    row = json.loads(capsys.readouterr().out)["members"][0]
+    assert row["fallback_outcome"] == "PREVIOUS_WINDOW_UNAVAILABLE"
+    assert row["lag_official_sessions"] is None
+
+
+def test_agent_swing_run_labels_mixed_latest_and_previous_stock_dates(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    clock, sources = _Clock(), _watchlist_sources()
+    latest = clock.value.date() - timedelta(days=1)
+
+    class MixedPrices(_Prices):
+        def history(self, instrument, start, end, *, effect_guard=None):
+            if instrument.symbol == "RELIANCE" and start == end == latest:
+                raise BharatStockError("EMPTY_HISTORY", member_local=True)
+            result = super().history(instrument, start, end, effect_guard=effect_guard)
+            if instrument.symbol == "RELIANCE" and end == latest:
+                return replace(
+                    result,
+                    rows=tuple(row for row in result.rows if row.session != latest),
+                )
+            return result
+
+    prices = MixedPrices(clock)
+    prices.full_history = True
+
+    def current(symbol, root, *, question, refresh=False):
+        return research_current_stock_v2(
+            symbol,
+            root,
+            question=question,
+            refresh=refresh,
+            clock=clock,
+            calendar_transport=sources,
+            snapshot_transport=sources,
+            price_client=cast(BharatStockClient, prices),
+        )
+
+    def previous(symbol, root, initial):
+        assert symbol == "RELIANCE"
+        return workflow_v2.research_previous_completed_stock_v2(
+            symbol,
+            root,
+            initial,
+            clock=clock,
+            calendar_transport=sources,
+            snapshot_transport=sources,
+            price_client=cast(BharatStockClient, prices),
+        )
+
+    assert (
+        main(
+            [
+                "research-run-current",
+                "--contract-version",
+                "v2",
+                "--symbol",
+                "PNB",
+                "--symbol",
+                "RELIANCE",
+                "--storage-root",
+                str(tmp_path),
+                "--output",
+                "json",
+            ],
+            current_stock_research_v2=current,
+            current_stock_research_previous_v2=previous,
+        )
+        == 0
+    )
+    report = json.loads(capsys.readouterr().out)
+    first, second = report["members"]
+    assert first["fallback_outcome"] == "NOT_NEEDED"
+    assert first["selected_evidence_end_session"] == latest.isoformat()
+    assert first["lag_official_sessions"] == 0
+    assert second["fallback_outcome"] == "APPLIED"
+    assert second["selected_evidence_end_session"] != latest.isoformat()
+    assert second["lag_official_sessions"] == 1
+    assert report["jointly_comparable"] is False
+
+
 def test_agent_research_run_rejects_invalid_list_before_research(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

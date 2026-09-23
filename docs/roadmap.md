@@ -14,8 +14,9 @@ sprint numbers and GitHub milestone assignments remain unset.
 The owner accepted a [one-completed-session provider-lag fallback for swing
 research](notes/2026-09-23-swing-completed-session-fallback.md) on September 23.
 Its 21-session window and displayed end date are specified there; implementation
-is pending and the delivered research CLI still requires the latest officially
-completed session. Do not count the documented fallback as a delivered feature.
+is tracked in [Sprint 23 issue #215](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/215)
+as an opt-in `research-run-current --contract-version v2` agent result. The
+default `v1` contract still requires the latest officially completed session.
 
 ## Current delivery priority
 

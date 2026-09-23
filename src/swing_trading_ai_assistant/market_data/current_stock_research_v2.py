@@ -541,6 +541,46 @@ def research_current_stock_v2(
             calendar_transport=calendar_transport,
             snapshot_transport=snapshot_transport,
             price_client=price_client,
+            previous_session=False,
+            selection_override=None,
+            deadline_override=None,
+        )
+    except legacy._ClockCallbackFailure as error:  # pyright: ignore[reportPrivateUsage]
+        raise error.error from None
+
+
+def research_previous_completed_stock_v2(
+    symbol: str,
+    storage_root: Path,
+    initial: CurrentStockResearchResultV2,
+    *,
+    clock: legacy.CurrentStockResearchClockV1 | None = None,
+    calendar_transport: HttpTransport | None = None,
+    snapshot_transport: HttpTransport | None = None,
+    price_client: BharatStockClient | None = None,
+) -> CurrentStockResearchResultV2:
+    """Acquire an independently dated prior-session packet for agent fallback.
+
+    This is not the public V2 current question: its evidence remains known at the
+    actual current selection time, and only a versioned agent result may label it
+    as one-session-lagged research.
+    """
+    initial.canonical_json_bytes()
+    if initial.symbol != symbol or initial.question != "INTEGRATED_CURRENT_RESEARCH":
+        raise legacy.CurrentStockResearchInputError("prior-session request mismatch")
+    try:
+        return _research_current_stock_v2(
+            symbol,
+            storage_root,
+            question="INTEGRATED_CURRENT_RESEARCH",
+            refresh=False,
+            clock=clock,
+            calendar_transport=calendar_transport,
+            snapshot_transport=snapshot_transport,
+            price_client=price_client,
+            previous_session=True,
+            selection_override=initial.data_selection_time,
+            deadline_override=initial.acquisition_deadline,
         )
     except legacy._ClockCallbackFailure as error:  # pyright: ignore[reportPrivateUsage]
         raise error.error from None
@@ -556,16 +596,25 @@ def _research_current_stock_v2(  # noqa: C901 - explicit stage boundaries are in
     calendar_transport: HttpTransport | None,
     snapshot_transport: HttpTransport | None,
     price_client: BharatStockClient | None,
+    previous_session: bool,
+    selection_override: datetime | None,
+    deadline_override: datetime | None,
 ) -> CurrentStockResearchResultV2:
     symbol, root = legacy._admit_input(  # pyright: ignore[reportPrivateUsage]
         symbol, storage_root, refresh
     )
     active_clock = legacy._SystemClock() if clock is None else clock  # pyright: ignore[reportPrivateUsage]
-    selection = legacy._now(active_clock)  # pyright: ignore[reportPrivateUsage]
+    selection = (
+        legacy._now(active_clock)  # pyright: ignore[reportPrivateUsage]
+        if selection_override is None
+        else selection_override
+    )
     window = legacy._Window(  # pyright: ignore[reportPrivateUsage]
         active_clock,
         selection,
-        legacy._deadline(selection),  # pyright: ignore[reportPrivateUsage]
+        legacy._deadline(selection)  # pyright: ignore[reportPrivateUsage]
+        if deadline_override is None
+        else deadline_override,
     )
     runtime = _runtime_identity()
     try:
@@ -607,10 +656,15 @@ def _research_current_stock_v2(  # noqa: C901 - explicit stage boundaries are in
                 if question == "CURRENT_STRUCTURE"
                 else (1,)
             )
-            completed_sessions = tuple(
+            official_completed_sessions = tuple(
                 item.trade_date
                 for item in calendar.schedule.sessions
                 if item.close_at <= selection
+            )
+            completed_sessions = (
+                official_completed_sessions[:-1]
+                if previous_session
+                else official_completed_sessions
             )
             # Calendar insufficiency is local to the wider requirement.  Do not
             # suppress a valid one- or two-session capture merely because the

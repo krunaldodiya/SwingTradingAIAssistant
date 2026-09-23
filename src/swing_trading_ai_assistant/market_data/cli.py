@@ -9,6 +9,7 @@ import re
 import stat
 import sys
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -33,7 +34,10 @@ from swing_trading_ai_assistant.research_packet.current_price_context_v2 import 
 )
 
 from .account_rate_limit import ThreadSafeAccountRateLimiterV1
-from .agent_research_run import run_agent_research_current
+from .agent_research_run import (
+    run_agent_research_current,
+    run_agent_swing_research_current,
+)
 from .bounded_nifty50_workflow import (
     BoundedNifty50DownloadReportV1,
     BoundedNifty50DownloadRequestV1,
@@ -73,6 +77,7 @@ from .current_stock_research_v2 import (
     CurrentStockResearchResultV2,
     QuestionV2,
     research_current_stock_v2,
+    research_previous_completed_stock_v2,
 )
 from .daily_ohlcv import (
     DailyQueryServiceV1,
@@ -575,6 +580,7 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="ABSOLUTE_OWNER_PRIVATE_ROOT",
     )
     agent_run.add_argument("--output", choices=("json",), required=True)
+    agent_run.add_argument("--contract-version", choices=("v1", "v2"), default="v1")
     probe = commands.add_parser(
         "probe-upstox",
         help="validate a master-catalog instrument without writing candle data",
@@ -617,6 +623,10 @@ def main(  # noqa: C901 - command dispatch remains explicit.
     current_cohort_service: CurrentCohortServicePortV1 | None = None,
     current_stock_research: CurrentStockResearchPortV1 | None = None,
     current_stock_research_v2: CurrentStockResearchPortV2 | None = None,
+    current_stock_research_previous_v2: Callable[
+        [str, Path, CurrentStockResearchResultV2], CurrentStockResearchResultV2
+    ]
+    | None = None,
     trusted_clock: _ClockV1 | None = None,
 ) -> int:
     try:
@@ -637,7 +647,11 @@ def main(  # noqa: C901 - command dispatch remains explicit.
         if args.command == "watchlist-screen-current":
             return _run_watchlist_screen_command(args, current_stock_research_v2)
         if args.command == "research-run-current":
-            return _run_agent_research_command(args, current_stock_research_v2)
+            return _run_agent_research_command(
+                args,
+                current_stock_research_v2,
+                current_stock_research_previous_v2,
+            )
         if args.command in {"regime-current", "price-context-current"}:
             return _run_current_packet_command(args, trusted_clock or _SystemClock())
         if args.command == "historical-ohlcv-upstox-raw":
@@ -677,14 +691,31 @@ def _run_watchlist_screen_command(
 
 
 def _run_agent_research_command(
-    args: argparse.Namespace, service: CurrentStockResearchPortV2 | None
+    args: argparse.Namespace,
+    service: CurrentStockResearchPortV2 | None,
+    previous_service: Callable[
+        [str, Path, CurrentStockResearchResultV2], CurrentStockResearchResultV2
+    ]
+    | None,
 ) -> int:
     try:
-        report = run_agent_research_current(
-            tuple(args.symbol),
-            args.storage_root,
-            research=research_current_stock_v2 if service is None else service,
-        )
+        if args.contract_version == "v2":
+            report = run_agent_swing_research_current(
+                tuple(args.symbol),
+                args.storage_root,
+                research=research_current_stock_v2 if service is None else service,
+                previous_research=(
+                    research_previous_completed_stock_v2
+                    if previous_service is None
+                    else previous_service
+                ),
+            )
+        else:
+            report = run_agent_research_current(
+                tuple(args.symbol),
+                args.storage_root,
+                research=research_current_stock_v2 if service is None else service,
+            )
     except CurrentStockResearchInputError:
         sys.stderr.write("request_invalid\n")
         return 2
