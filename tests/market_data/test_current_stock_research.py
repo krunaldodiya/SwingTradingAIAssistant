@@ -36,6 +36,7 @@ from swing_trading_ai_assistant.market_data import (
     current_stock_research_v2 as workflow_v2,
 )
 from swing_trading_ai_assistant.market_data import instrument_snapshot as snapshots
+from swing_trading_ai_assistant.market_data import watchlist_screen as watchlist_api
 from swing_trading_ai_assistant.market_data.bharatstock import (
     BharatStockClient,
     BharatStockDailyPrice,
@@ -83,6 +84,420 @@ from swing_trading_ai_assistant.market_structure.current_live import (
 from swing_trading_ai_assistant.research_packet import bharatstock_v2 as packet_v2
 
 _NOW = datetime(2026, 8, 26, 4, 15, tzinfo=UTC)
+
+
+def _watchlist_sources() -> _OfficialSources:
+    sources = _OfficialSources()
+    sources.rows.append(
+        {
+            "segment": "NSE_EQ",
+            "name": "Reliance Industries",
+            "exchange": "NSE",
+            "isin": "INE002A01018",
+            "instrument_type": "EQ",
+            "instrument_key": "NSE_EQ|INE002A01018",
+            "trading_symbol": "RELIANCE",
+        }
+    )
+    sources.rows.append(
+        {
+            "segment": "NSE_EQ",
+            "name": "Tata Consultancy Services",
+            "exchange": "NSE",
+            "isin": "INE467B01029",
+            "instrument_type": "EQ",
+            "instrument_key": "NSE_EQ|INE467B01029",
+            "trading_symbol": "TCS",
+        }
+    )
+    return sources
+
+
+def test_watchlist_screen_admitted_match_nonmatch_and_no_raw_bars(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    clock, sources = _Clock(), _watchlist_sources()
+    prices = _Prices(clock)
+
+    def research(
+        symbol: str,
+        storage_root: Path,
+        *,
+        question: Literal[
+            "LATEST_COMPLETED_CANDLE",
+            "PRICE_BEHAVIOR",
+            "CURRENT_STRUCTURE",
+            "INTEGRATED_CURRENT_RESEARCH",
+        ],
+        refresh: bool = False,
+    ) -> CurrentStockResearchResultV2:
+        prices.close = Decimal(
+            105 if symbol == "PNB" else 95 if symbol == "RELIANCE" else 100
+        )
+        return research_current_stock_v2(
+            symbol,
+            storage_root,
+            question=question,
+            refresh=refresh,
+            clock=clock,
+            calendar_transport=sources,
+            snapshot_transport=sources,
+            price_client=cast(BharatStockClient, prices),
+        )
+
+    assert (
+        main(
+            [
+                "watchlist-screen-current",
+                "--symbol",
+                "PNB",
+                "--symbol",
+                "RELIANCE",
+                "--symbol",
+                "TCS",
+                "--storage-root",
+                str(tmp_path),
+                "--close-direction",
+                "UP",
+                "--output",
+                "json",
+            ],
+            current_stock_research_v2=research,
+        )
+        == 0
+    )
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert captured.err == ""
+    assert payload["contract_version"] == "explicit-watchlist-price-screen@v1"
+    assert len(payload["runtime_code_identity_sha256"]) == 64
+    assert payload["jointly_comparable"] is True
+    assert [row["status"] for row in payload["members"]] == [
+        "MATCH",
+        "NO_MATCH",
+        "NO_MATCH",
+    ]
+    assert [row["close_vs_previous_close"] for row in payload["members"]] == [
+        "UP",
+        "DOWN",
+        "UNCHANGED",
+    ]
+    assert all(row["feature_source_identity_sha256"] for row in payload["members"])
+    assert all(row["feature_known_at"] for row in payload["members"])
+    assert all(row["research_evidence_known_at"] for row in payload["members"])
+    assert "source_bars" not in captured.out
+    assert "private provider detail" not in captured.out
+    assert len(prices.calls) == 6
+
+
+def test_watchlist_screen_rejects_bad_selection_before_provider_call(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def forbidden(*_args: object, **_kwargs: object) -> CurrentStockResearchResultV2:
+        raise AssertionError("provider called")
+
+    for symbols in (("PNB", "PNB"), tuple(f"S{i}" for i in range(11)), ("pnb", "REL")):
+        assert (
+            main(
+                [
+                    "watchlist-screen-current",
+                    *[part for symbol in symbols for part in ("--symbol", symbol)],
+                    "--storage-root",
+                    str(tmp_path),
+                    "--close-direction",
+                    "UP",
+                    "--output",
+                    "json",
+                ],
+                current_stock_research_v2=forbidden,
+            )
+            == 2
+        )
+        captured = capsys.readouterr()
+        assert captured.out == "" and captured.err == "request_invalid\n"
+
+
+@pytest.mark.parametrize(
+    ("failure_reason", "expected_support"),
+    (("EMPTY_HISTORY", "NOT_ESTABLISHED"), ("IDENTITY_MISMATCH", "CONFLICTED")),
+)
+def test_watchlist_screen_preserves_admitted_member_when_peer_lacks_evidence(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    failure_reason: str,
+    expected_support: str,
+) -> None:
+    clock, sources = _Clock(), _watchlist_sources()
+    prices = _Prices(clock)
+
+    def research(
+        symbol: str,
+        storage_root: Path,
+        *,
+        question: Literal[
+            "LATEST_COMPLETED_CANDLE",
+            "PRICE_BEHAVIOR",
+            "CURRENT_STRUCTURE",
+            "INTEGRATED_CURRENT_RESEARCH",
+        ],
+        refresh: bool = False,
+    ) -> CurrentStockResearchResultV2:
+        prices.failure = (
+            BharatStockError(failure_reason, member_local=True)
+            if symbol == "RELIANCE"
+            else None
+        )
+        return research_current_stock_v2(
+            symbol,
+            storage_root,
+            question=question,
+            refresh=refresh,
+            clock=clock,
+            calendar_transport=sources,
+            snapshot_transport=sources,
+            price_client=cast(BharatStockClient, prices),
+        )
+
+    assert (
+        main(
+            [
+                "watchlist-screen-current",
+                "--symbol",
+                "PNB",
+                "--symbol",
+                "RELIANCE",
+                "--storage-root",
+                str(tmp_path),
+                "--close-direction",
+                "UP",
+                "--output",
+                "json",
+            ],
+            current_stock_research_v2=research,
+        )
+        == 1
+    )
+    report = json.loads(capsys.readouterr().out)
+    assert report["members"][0]["status"] == "MATCH"
+    assert report["members"][1]["status"] == "UNKNOWN"
+    assert report["members"][1]["feature_availability"] != "OBSERVED"
+    assert report["members"][1]["feature_support"] == expected_support
+    assert report["jointly_comparable"] is False
+
+
+def test_watchlist_screen_rejects_duplicate_canonical_identity_after_mapping(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    clock, sources = _Clock(), _watchlist_sources()
+    sources.rows[1]["isin"] = sources.rows[0]["isin"]
+    sources.rows[1]["instrument_key"] = sources.rows[0]["instrument_key"]
+    prices = _Prices(clock)
+
+    def research(
+        symbol: str,
+        storage_root: Path,
+        *,
+        question: Literal[
+            "LATEST_COMPLETED_CANDLE",
+            "PRICE_BEHAVIOR",
+            "CURRENT_STRUCTURE",
+            "INTEGRATED_CURRENT_RESEARCH",
+        ],
+        refresh: bool = False,
+    ) -> CurrentStockResearchResultV2:
+        return research_current_stock_v2(
+            symbol,
+            storage_root,
+            question=question,
+            refresh=refresh,
+            clock=clock,
+            calendar_transport=sources,
+            snapshot_transport=sources,
+            price_client=cast(BharatStockClient, prices),
+        )
+
+    assert (
+        main(
+            [
+                "watchlist-screen-current",
+                "--symbol",
+                "PNB",
+                "--symbol",
+                "RELIANCE",
+                "--storage-root",
+                str(tmp_path),
+                "--close-direction",
+                "UP",
+                "--output",
+                "json",
+            ],
+            current_stock_research_v2=research,
+        )
+        == 2
+    )
+    captured = capsys.readouterr()
+    assert captured.out == "" and captured.err == "request_invalid\n"
+
+
+def test_watchlist_screen_marks_different_completed_sessions_incomparable(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    clock, sources = _Clock(), _watchlist_sources()
+    prices = _Prices(clock)
+
+    def research(
+        symbol: str,
+        storage_root: Path,
+        *,
+        question: Literal[
+            "LATEST_COMPLETED_CANDLE",
+            "PRICE_BEHAVIOR",
+            "CURRENT_STRUCTURE",
+            "INTEGRATED_CURRENT_RESEARCH",
+        ],
+        refresh: bool = False,
+    ) -> CurrentStockResearchResultV2:
+        if symbol == "RELIANCE":
+            clock.value = _NOW + timedelta(days=1)
+        return research_current_stock_v2(
+            symbol,
+            storage_root,
+            question=question,
+            refresh=refresh,
+            clock=clock,
+            calendar_transport=sources,
+            snapshot_transport=sources,
+            price_client=cast(BharatStockClient, prices),
+        )
+
+    assert (
+        main(
+            [
+                "watchlist-screen-current",
+                "--symbol",
+                "PNB",
+                "--symbol",
+                "RELIANCE",
+                "--storage-root",
+                str(tmp_path),
+                "--close-direction",
+                "UP",
+                "--output",
+                "json",
+            ],
+            current_stock_research_v2=research,
+        )
+        == 0
+    )
+    report = json.loads(capsys.readouterr().out)
+    assert [row["status"] for row in report["members"]] == ["MATCH", "MATCH"]
+    assert report["members"][0]["session"] != report["members"][1]["session"]
+    assert report["jointly_comparable"] is False
+
+
+def test_watchlist_screen_unexpected_provider_failure_emits_no_partial_json(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    clock, sources = _Clock(), _watchlist_sources()
+    prices = _Prices(clock)
+
+    def research(
+        symbol: str,
+        storage_root: Path,
+        *,
+        question: Literal[
+            "LATEST_COMPLETED_CANDLE",
+            "PRICE_BEHAVIOR",
+            "CURRENT_STRUCTURE",
+            "INTEGRATED_CURRENT_RESEARCH",
+        ],
+        refresh: bool = False,
+    ) -> CurrentStockResearchResultV2:
+        if symbol == "RELIANCE":
+            raise RuntimeError("PRIVATE_PROVIDER_PAYLOAD")
+        return research_current_stock_v2(
+            symbol,
+            storage_root,
+            question=question,
+            refresh=refresh,
+            clock=clock,
+            calendar_transport=sources,
+            snapshot_transport=sources,
+            price_client=cast(BharatStockClient, prices),
+        )
+
+    assert (
+        main(
+            [
+                "watchlist-screen-current",
+                "--symbol",
+                "PNB",
+                "--symbol",
+                "RELIANCE",
+                "--storage-root",
+                str(tmp_path),
+                "--close-direction",
+                "UP",
+                "--output",
+                "json",
+            ],
+            current_stock_research_v2=research,
+        )
+        == 2
+    )
+    captured = capsys.readouterr()
+    assert captured.out == "" and captured.err == "internal_error\n"
+
+
+def test_watchlist_screen_different_price_bases_are_not_joint() -> None:
+    # Current V2 capture emits only source-reported OHLC; test the projection's
+    # basis guard without forging an admitted adjusted-basis packet.
+    shared = ("2026-08-25", "BHARATSTOCK_SOURCE_REPORTED_OHLC", "s" * 64, "BHARATSTOCK")
+    adjusted = (
+        "2026-08-25",
+        "BHARATSTOCK_SPLIT_BONUS_FACTOR_ADJUSTED_OHLC",
+        "s" * 64,
+        "BHARATSTOCK",
+    )
+    assert watchlist_api._jointly_comparable([shared, shared], 2)  # pyright: ignore[reportPrivateUsage]
+    assert not watchlist_api._jointly_comparable([shared, adjusted], 2)  # pyright: ignore[reportPrivateUsage]
+
+
+def test_watchlist_screen_rejects_runtime_source_drift_before_provider_call(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def forbidden(*_args: object, **_kwargs: object) -> CurrentStockResearchResultV2:
+        raise AssertionError("provider called")
+
+    relative = "src/swing_trading_ai_assistant/market_data/watchlist_screen.py"
+    monkeypatch.setitem(
+        watchlist_api.WATCHLIST_SCREEN_RUNTIME_SOURCE_SHA256_V1,
+        relative,
+        "0" * 64,
+    )
+    assert (
+        main(
+            [
+                "watchlist-screen-current",
+                "--symbol",
+                "PNB",
+                "--symbol",
+                "RELIANCE",
+                "--storage-root",
+                str(tmp_path),
+                "--close-direction",
+                "UP",
+                "--output",
+                "json",
+            ],
+            current_stock_research_v2=forbidden,
+        )
+        == 2
+    )
+    captured = capsys.readouterr()
+    assert captured.out == "" and captured.err == "internal_error\n"
 
 
 @dataclass

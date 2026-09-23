@@ -12,7 +12,7 @@ import threading
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
-from typing import Any, Literal, Never, Protocol
+from typing import Any, Literal, Never, Protocol, cast
 
 from dotenv import load_dotenv
 
@@ -178,6 +178,7 @@ from .range_ingestion import (
 )
 from .schedule_evidence import ScheduleEvidenceValidationError
 from .storage_root_lease import StorageRootLease, StorageRootLeaseError
+from .watchlist_screen import screen_watchlist_current
 from .workflow_coordination import PublicationGateV1
 
 _DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}\Z")
@@ -546,6 +547,21 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     research_current.add_argument("--output", choices=("json",), required=True)
+    watchlist = commands.add_parser(
+        "watchlist-screen-current",
+        help="screen an explicit bounded stock list using admitted V2 price facts",
+    )
+    watchlist.add_argument("--symbol", action="append", required=True)
+    watchlist.add_argument(
+        "--storage-root",
+        type=Path,
+        required=True,
+        metavar="ABSOLUTE_OWNER_PRIVATE_ROOT",
+    )
+    watchlist.add_argument(
+        "--close-direction", choices=("UP", "DOWN", "UNCHANGED"), required=True
+    )
+    watchlist.add_argument("--output", choices=("json",), required=True)
     probe = commands.add_parser(
         "probe-upstox",
         help="validate a master-catalog instrument without writing candle data",
@@ -579,7 +595,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(
+def main(  # noqa: C901 - command dispatch remains explicit.
     argv: list[str] | None = None,
     *,
     download_service: PublicDownloadPortV1 | None = None,
@@ -605,6 +621,8 @@ def main(
             return _run_research_current_command(
                 args, current_stock_research, current_stock_research_v2
             )
+        if args.command == "watchlist-screen-current":
+            return _run_watchlist_screen_command(args, current_stock_research_v2)
         if args.command in {"regime-current", "price-context-current"}:
             return _run_current_packet_command(args, trusted_clock or _SystemClock())
         if args.command == "historical-ohlcv-upstox-raw":
@@ -620,6 +638,27 @@ def main(
     except Exception:
         sys.stderr.write("internal_error\n")
         return 2
+
+
+def _run_watchlist_screen_command(
+    args: argparse.Namespace, service: CurrentStockResearchPortV2 | None
+) -> int:
+    try:
+        report = screen_watchlist_current(
+            tuple(args.symbol),
+            args.storage_root,
+            direction=args.close_direction,
+            research=research_current_stock_v2 if service is None else service,
+        )
+    except CurrentStockResearchInputError:
+        sys.stderr.write("request_invalid\n")
+        return 2
+    payload = (
+        json.dumps(report, sort_keys=True, separators=(",", ":")) + "\n"
+    ).encode()
+    sys.stdout.buffer.write(payload)
+    members = cast(list[dict[str, object]], report["members"])
+    return 0 if all(row["status"] != "UNKNOWN" for row in members) else 1
 
 
 def _run_research_current_command(
