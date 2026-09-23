@@ -3380,21 +3380,21 @@ def test_agent_swing_run_keeps_missing_fact_when_previous_window_is_incomplete(
     latest = clock.value.date() - timedelta(days=1)
     previous_day = latest - timedelta(days=1)
 
-    class TwoMissingPrices(_Prices):
+    class PartialPreviousPrices(_Prices):
         def history(self, instrument, start, end, *, effect_guard=None):
-            if start == end and end in {latest, previous_day}:
+            if start == end == latest:
                 raise BharatStockError("EMPTY_HISTORY", member_local=True)
             result = super().history(instrument, start, end, effect_guard=effect_guard)
-            omitted = latest if end == latest else previous_day
-            rows = tuple(row for row in result.rows if row.session != omitted)
-            if not rows:
-                raise BharatStockError("EMPTY_HISTORY", member_local=True)
-            return replace(
-                result,
-                rows=rows,
-            )
+            if end == latest:
+                return replace(
+                    result,
+                    rows=tuple(row for row in result.rows if row.session != latest),
+                )
+            if end == previous_day and len(result.rows) == 21:
+                return replace(result, rows=result.rows[1:])
+            return result
 
-    prices = TwoMissingPrices(clock)
+    prices = PartialPreviousPrices(clock)
     prices.full_history = True
 
     def current(symbol, root, *, question, refresh=False):
@@ -3451,6 +3451,22 @@ def test_agent_swing_run_keeps_missing_fact_when_previous_window_is_incomplete(
     assert row["selected_evidence_end_session"] is None
     assert row["lag_official_sessions"] is None
     assert row["features"]["MARKET_STRUCTURE"]["fact"] is None
+    attempted = row["previous_window_attempt"]
+    assert attempted["anchor_session"] == previous_day.isoformat()
+    assert (
+        attempted["features"]["CANDLE_GEOMETRY"]["fact"]["session"]
+        == previous_day.isoformat()
+    )
+    assert (
+        attempted["features"]["PREVIOUS_CLOSE_COMPARISON"]["fact"]["session"]
+        == previous_day.isoformat()
+    )
+    assert (
+        attempted["features"]["MARKET_STRUCTURE"]["availability"]
+        == "INSUFFICIENT_EVIDENCE"
+    )
+    assert attempted["features"]["MARKET_STRUCTURE"]["reason"] == "HISTORY_INCOMPLETE"
+    assert attempted["features"]["MARKET_STRUCTURE"]["fact"] is None
 
 
 @pytest.mark.parametrize(

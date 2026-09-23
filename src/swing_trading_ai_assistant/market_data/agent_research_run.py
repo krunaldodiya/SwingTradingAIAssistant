@@ -355,7 +355,7 @@ def _confirmed_latest_absence(
     )
 
 
-def _admitted_previous_packet(
+def _previous_packet_shape(
     initial: CurrentStockResearchResultV2,
     candidate: CurrentStockResearchResultV2,
     previous: date,
@@ -365,7 +365,8 @@ def _admitted_previous_packet(
     if (
         type(first) is not BharatStockResearchPacketV2
         or type(second) is not BharatStockResearchPacketV2
-        or second.shared_stop_code is not None
+        or candidate.question != "INTEGRATED_CURRENT_RESEARCH"
+        or candidate.symbol != initial.symbol
         or first.members[0].member != second.members[0].member
         or initial.data_selection_time != candidate.data_selection_time
         or initial.acquisition_deadline != candidate.acquisition_deadline
@@ -392,6 +393,32 @@ def _admitted_previous_packet(
         "PREVIOUS_CLOSE_COMPARISON": 2,
         "MARKET_STRUCTURE": 21,
     }
+    return all(
+        len(slot.requested_sessions) == lengths[slot.feature]
+        and slot.requested_sessions[-1] == previous
+        for slot in second.feature_slots
+        if slot.feature in lengths
+    )
+
+
+def _admitted_previous_packet(
+    initial: CurrentStockResearchResultV2,
+    candidate: CurrentStockResearchResultV2,
+    previous: date,
+) -> bool:
+    if not _previous_packet_shape(initial, candidate, previous):
+        return False
+    second = candidate.packet
+    if (
+        type(second) is not BharatStockResearchPacketV2
+        or second.shared_stop_code is not None
+    ):
+        return False
+    lengths = {
+        "CANDLE_GEOMETRY": 1,
+        "PREVIOUS_CLOSE_COMPARISON": 2,
+        "MARKET_STRUCTURE": 21,
+    }
     sources: set[tuple[str, str, str]] = set()
     for slot in second.feature_slots:
         expected = lengths.get(slot.feature)
@@ -400,7 +427,6 @@ def _admitted_previous_packet(
         if (
             slot.state != "RETAINED_REVISION"
             or len(slot.requested_sessions) != expected
-            or slot.requested_sessions[-1] != previous
         ):
             return False
         feature = second.members[0].feature(slot.feature)
@@ -434,6 +460,7 @@ def run_agent_swing_research_current(  # noqa: C901 - selection and output check
 ) -> dict[str, object]:
     """Versioned agent result with at most one admitted prior-session anchor."""
     decisions: dict[str, tuple[date | None, str]] = {}
+    previous_attempts: dict[str, dict[str, object]] = {}
 
     def choose(
         symbol: str, root: Path, *, question: str, refresh: bool = False
@@ -470,6 +497,33 @@ def run_agent_swing_research_current(  # noqa: C901 - selection and output check
         if _admitted_previous_packet(initial, candidate, previous):
             decisions[symbol] = (latest, "APPLIED")
             return candidate
+        if _previous_packet_shape(initial, candidate, previous):
+            attempted_report = run_agent_research_current(
+                (symbol,), root, research=lambda *_args, **_kwargs: candidate
+            )
+            attempted_members = attempted_report["members"]
+            if type(attempted_members) is not list:
+                raise ValueError("unexpected prior research projection")
+            attempted_members = cast(list[object], attempted_members)
+            if len(attempted_members) != 1:
+                raise ValueError("unexpected prior research projection")
+            attempted_row = attempted_members[0]
+            if type(attempted_row) is not dict:
+                raise ValueError("unexpected prior research member")
+            attempted_row = cast(dict[str, object], attempted_row)
+            previous_attempts[symbol] = {
+                "anchor_session": previous.isoformat(),
+                "research_status": attempted_row["research_status"],
+                "research_code": attempted_row["research_code"],
+                "research_evidence_known_at": attempted_row[
+                    "research_evidence_known_at"
+                ],
+                "research_result_identity_sha256": attempted_row[
+                    "research_result_identity_sha256"
+                ],
+                "price_basis": attempted_row["price_basis"],
+                "features": attempted_row["features"],
+            }
         decisions[symbol] = (latest, "PREVIOUS_WINDOW_UNAVAILABLE")
         return initial
 
@@ -509,6 +563,7 @@ def run_agent_swing_research_current(  # noqa: C901 - selection and output check
             else None
         )
         row["fallback_outcome"] = outcome
+        row["previous_window_attempt"] = previous_attempts.get(requested_symbol)
     limitations = report["limitations"]
     if type(limitations) is not list:
         raise ValueError("unexpected agent research limitations")

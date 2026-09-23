@@ -44,7 +44,11 @@ official close, S is already the prior completed trading session.
    terminal S only when the provider returns exactly the preceding requested
    rows for the correct stock within the original cutoff. Ambiguous legacy
    `HISTORY_INCOMPLETE` never qualifies. The public V2 research question keeps
-   its existing request identity and failure reasons.
+   its existing request shape and failure-reason behavior; changed runtime
+   source identity naturally gives new captures new request hashes.
+   If P's complete window fails after some independent P facts were admitted,
+   keep the selected dossier unset and expose those P feature outcomes only in
+   a separate `previous_window_attempt` record with its anchor and provenance.
    Require a complete, admitted 21-session window ending at P (P and its
    previous 20). Shift the one-session candle, two-session previous-close and
    21-session structure windows **together** for that stock. Do not mix a

@@ -23,9 +23,11 @@ missing-final-bar result from the versioned capture path qualifies; an ambiguous
 incomplete-history result does not. All three price/structure features shift together
 only when P's complete window is admitted. Each stock reports S, its selected
 evidence end date, a zero- or one-session lag, and the fallback outcome. Mixed
-S/P dates make the batch `jointly_comparable=false`. Missing P, invalid or
-conflicting evidence, shared provider failure and deadline failure do not
-trigger an older search or a substitute provider. See the [September 23 decision
+S/P dates make the batch `jointly_comparable=false`. Incomplete P evidence
+leaves the selected dossier unset while the separate `previous_window_attempt`
+field retains any independently admitted P facts and precise feature-level
+insufficiency. Missing P, conflicting evidence, shared provider failure and
+deadline failure do not trigger an older search or a substitute provider. See the [September 23 decision
 note](../notes/2026-09-23-swing-completed-session-fallback.md). Omitting the
 option (or requesting `v1`) preserves the original S-only agent contract.
 

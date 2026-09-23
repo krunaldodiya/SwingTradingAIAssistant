@@ -16,6 +16,6 @@ CURRENT_PRICE_CONTEXT_RUNTIME_SOURCE_SHA256_V2: Final[dict[str, str]] = {
     "src/swing_trading_ai_assistant/market_data/storage_root_lease.py": "f93eac4f668dbdb0e236a3a54452a8d022c5700e91452536acafb1300b22f6ff",
     "src/swing_trading_ai_assistant/research_packet/__init__.py": "b7dcf830515526b5fef268f91ea60fce3524a92fd7683f48505a336f037cea5f",
     "src/swing_trading_ai_assistant/research_packet/current_price_context.py": "d5e16db2378da4dfcfaa3a711d84967875926485104e4a2b7c66da46d82204c0",
-    "src/swing_trading_ai_assistant/research_packet/current_price_context_runtime_identity_manifest.py": "8296fd9e2ef3aff2f09a88ba7280fa8f5bfe09bba2b15f82725e5e07ea5668f1",
+    "src/swing_trading_ai_assistant/research_packet/current_price_context_runtime_identity_manifest.py": "161fb13b4f271b306da99f7bd06f6385efd0c438bab7f6cf58fad37172fa612d",
     "src/swing_trading_ai_assistant/research_packet/current_price_context_v2.py": "051474a5f798fe036af46424c6bcc5f05027062f06ecb9c739af5537a48a7d66",
 }
