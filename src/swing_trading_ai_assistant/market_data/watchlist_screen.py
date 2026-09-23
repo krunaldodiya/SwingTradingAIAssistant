@@ -21,6 +21,10 @@ from swing_trading_ai_assistant.research_packet.bharatstock_v2 import (
 
 from .current_stock_research import CurrentStockResearchInputError
 from .current_stock_research_v2 import CurrentStockResearchResultV2
+from .runtime_source_verifier import runtime_source_sha256
+from .watchlist_screen_runtime_identity_manifest import (
+    WATCHLIST_SCREEN_RUNTIME_SOURCE_SHA256_V1,
+)
 
 Direction = Literal["UP", "DOWN", "UNCHANGED"]
 ResearchService = Callable[..., CurrentStockResearchResultV2]
@@ -40,6 +44,25 @@ def _instant(value: datetime | None) -> str | None:
 def _identity(value: object) -> str:
     raw = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(raw + b"\n").hexdigest()
+
+
+def _runtime_code_identity() -> str:
+    root = Path(__file__).parent.parent
+    observed: dict[str, str] = {}
+    for relative, expected in WATCHLIST_SCREEN_RUNTIME_SOURCE_SHA256_V1.items():
+        module = ".".join(Path(relative).with_suffix("").parts[1:])
+        actual = runtime_source_sha256(module, root, relative)
+        if actual != expected:
+            raise ValueError("watchlist screen runtime identity invalid")
+        observed[relative] = actual
+    return _identity(observed)
+
+
+def _jointly_comparable(
+    observed: list[tuple[str, str, str, str]], expected_count: int
+) -> bool:
+    """Require complete session, basis, schedule and source-profile agreement."""
+    return len(observed) == expected_count and len(set(observed)) == 1
 
 
 def screen_watchlist_current(  # noqa: C901 - explicit evidence states stay local.
@@ -66,6 +89,8 @@ def screen_watchlist_current(  # noqa: C901 - explicit evidence states stay loca
         or not storage_root.is_absolute()
     ):
         raise CurrentStockResearchInputError("invalid watchlist screen input")
+
+    runtime_identity = _runtime_code_identity()
 
     members: list[dict[str, object]] = []
     canonical: list[BharatStockInstrument] = []
@@ -169,9 +194,10 @@ def screen_watchlist_current(  # noqa: C901 - explicit evidence states stay loca
 
     if len({(item.isin, item.exchange) for item in canonical}) != len(canonical):
         raise CurrentStockResearchInputError("duplicate canonical watchlist member")
-    comparable = len(observed) == len(symbols) and len(set(observed)) == 1
+    comparable = _jointly_comparable(observed, len(symbols))
     return {
         "contract_version": "explicit-watchlist-price-screen@v1",
+        "runtime_code_identity_sha256": runtime_identity,
         "criterion": {"close_vs_previous_close": direction},
         "requested_order_identity_sha256": _identity(list(symbols)),
         "canonical_order_identity_sha256": (

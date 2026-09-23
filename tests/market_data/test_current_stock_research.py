@@ -36,6 +36,7 @@ from swing_trading_ai_assistant.market_data import (
     current_stock_research_v2 as workflow_v2,
 )
 from swing_trading_ai_assistant.market_data import instrument_snapshot as snapshots
+from swing_trading_ai_assistant.market_data import watchlist_screen as watchlist_api
 from swing_trading_ai_assistant.market_data.bharatstock import (
     BharatStockClient,
     BharatStockDailyPrice,
@@ -169,6 +170,7 @@ def test_watchlist_screen_admitted_match_nonmatch_and_no_raw_bars(
     payload = json.loads(captured.out)
     assert captured.err == ""
     assert payload["contract_version"] == "explicit-watchlist-price-screen@v1"
+    assert len(payload["runtime_code_identity_sha256"]) == 64
     assert payload["jointly_comparable"] is True
     assert [row["status"] for row in payload["members"]] == [
         "MATCH",
@@ -440,6 +442,57 @@ def test_watchlist_screen_unexpected_provider_failure_emits_no_partial_json(
                 "json",
             ],
             current_stock_research_v2=research,
+        )
+        == 2
+    )
+    captured = capsys.readouterr()
+    assert captured.out == "" and captured.err == "internal_error\n"
+
+
+def test_watchlist_screen_different_price_bases_are_not_joint() -> None:
+    # Current V2 capture emits only source-reported OHLC; test the projection's
+    # basis guard without forging an admitted adjusted-basis packet.
+    shared = ("2026-08-25", "BHARATSTOCK_SOURCE_REPORTED_OHLC", "s" * 64, "BHARATSTOCK")
+    adjusted = (
+        "2026-08-25",
+        "BHARATSTOCK_SPLIT_BONUS_FACTOR_ADJUSTED_OHLC",
+        "s" * 64,
+        "BHARATSTOCK",
+    )
+    assert watchlist_api._jointly_comparable([shared, shared], 2)  # pyright: ignore[reportPrivateUsage]
+    assert not watchlist_api._jointly_comparable([shared, adjusted], 2)  # pyright: ignore[reportPrivateUsage]
+
+
+def test_watchlist_screen_rejects_runtime_source_drift_before_provider_call(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def forbidden(*_args: object, **_kwargs: object) -> CurrentStockResearchResultV2:
+        raise AssertionError("provider called")
+
+    relative = "src/swing_trading_ai_assistant/market_data/watchlist_screen.py"
+    monkeypatch.setitem(
+        watchlist_api.WATCHLIST_SCREEN_RUNTIME_SOURCE_SHA256_V1,
+        relative,
+        "0" * 64,
+    )
+    assert (
+        main(
+            [
+                "watchlist-screen-current",
+                "--symbol",
+                "PNB",
+                "--symbol",
+                "RELIANCE",
+                "--storage-root",
+                str(tmp_path),
+                "--close-direction",
+                "UP",
+                "--output",
+                "json",
+            ],
+            current_stock_research_v2=forbidden,
         )
         == 2
     )
