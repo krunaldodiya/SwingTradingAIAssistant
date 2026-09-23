@@ -323,6 +323,52 @@ def test_private_empty_admission_creates_only_locked_private_file(
     result.lease.close()
 
 
+def test_private_empty_admission_rewinds_directory_cursor_after_lock_creation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir(mode=0o700)
+    metadata = root.stat()
+    root_identity = (metadata.st_dev, metadata.st_ino)
+    original_listdir = os.listdir
+    original_lseek = os.lseek
+    enumerated = False
+    rewound = False
+
+    def matches_root(value: int | str | bytes | os.PathLike[str]) -> bool:
+        if not isinstance(value, int):
+            return False
+        metadata = os.fstat(value)
+        return (metadata.st_dev, metadata.st_ino) == root_identity
+
+    def cursor_sensitive_listdir(
+        value: int | str | bytes | os.PathLike[str],
+    ) -> list[str]:
+        nonlocal enumerated, rewound
+        if matches_root(value):
+            if enumerated and not rewound:
+                return []
+            enumerated = True
+            rewound = False
+        return original_listdir(value)
+
+    def tracked_lseek(descriptor: int, position: int, whence: int) -> int:
+        nonlocal rewound
+        if matches_root(descriptor) and position == 0 and whence == os.SEEK_SET:
+            rewound = True
+        return original_lseek(descriptor, position, whence)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(lease_module.os, "listdir", cursor_sensitive_listdir)
+        patch.setattr(lease_module.os, "lseek", tracked_lseek)
+        result = StorageRootLease.try_acquire_private_empty(root)
+
+    assert result.outcome is LeaseOutcome.ACQUIRED
+    assert result.lease is not None
+    result.lease.close()
+    assert [item.name for item in root.iterdir()] == [".ingestion.lock"]
+
+
 def test_private_empty_failure_preserves_its_lock_and_concurrent_entry(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

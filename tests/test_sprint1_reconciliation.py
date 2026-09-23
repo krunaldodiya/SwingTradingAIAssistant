@@ -47,6 +47,7 @@ _APPROVED_ACTIONS = (
     "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2",
     "astral-sh/setup-uv@61cb8a9741eeb8a550a1b8544337180c0fc8476b # v7.2.0",
     "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2",
+    "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2",
     "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2",
     "astral-sh/setup-uv@61cb8a9741eeb8a550a1b8544337180c0fc8476b # v7.2.0",
 )
@@ -60,6 +61,8 @@ _APPROVED_STEP_NAMES = (
     "Run focused lifecycle documentation gate",
     "Run authoritative quality gate",
     "Build distribution",
+    "Verify Linux wheel and OCI distribution",
+    "Retain Linux distribution receipt",
     "Issue exact-tree CI admission",
     "Retain exact-tree CI admission",
     "Check out repository",
@@ -94,6 +97,9 @@ _REQUIRED_CI_FRAGMENTS = (
     "          steps.admission.outputs.admitted != 'true'",
     '          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"',
     '          uv run --no-sync --extra dev pytest -m "not private_source"',
+    "          uv run --no-sync --extra dev python scripts/verify_linux_distribution.py",
+    '          --receipt "$RUNNER_TEMP/linux-distribution-receipt.json"',
+    "          name: linux-distribution-${{ github.run_id }}-${{ github.run_attempt }}",
 )
 
 

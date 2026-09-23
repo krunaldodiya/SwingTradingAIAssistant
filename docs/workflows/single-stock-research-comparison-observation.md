@@ -24,6 +24,9 @@ The complete comparison result identity is
 Its previous/current observation identities are respectively
 `2c5c5b15e2763daea51052a77ed5ac2e41aaa4044abd9579b3fdf81d5095037e`
 and `910316da68a8f51323796f6be562711f4229d591c2b169c5a014f4d469942ad1`.
+These identities record the 2026-09-23 observation. A later source-at-rest
+revision changes the runtime-bound identities while preserving these synthetic
+facts and deltas.
 
 ## Interpretation
 
