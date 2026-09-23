@@ -3,7 +3,7 @@
 from typing import Final
 
 WATCHLIST_SCREEN_RUNTIME_SOURCE_SHA256_V1: Final[dict[str, str]] = {
-    "src/swing_trading_ai_assistant/market_data/cli.py": "bcd4a9dcbdfbb7f4180ffef7bf56eadd62d19c95bc59ce1d7fe185a18e1dee6f",
+    "src/swing_trading_ai_assistant/market_data/cli.py": "0ae8a08571e91943fbb00fd5cac6a175afe88a4946d99e385a325c6c8653c1aa",
     "src/swing_trading_ai_assistant/market_data/runtime_source_verifier.py": "834fb3261a269b35e582d91b7c497be276bd102078bb9d71816fe2f77a4c721a",
     "src/swing_trading_ai_assistant/market_data/watchlist_screen.py": "d5acce34fa05cb5d96c70a4201163b5306d9d719877d32d1ce9ceb49e7c06b7b",
 }

@@ -83,6 +83,9 @@ _IST: Final = ZoneInfo("Asia/Kolkata")
 # fewer than 21 completed sessions: report Structure insufficiency while
 # preserving independently supported geometry and comparison facts.
 _LOOKBACK_DAYS: Final = 32
+# The opt-in agent fallback needs S plus 21 predecessors. Preserve the default
+# question's 32-day selection while allowing a bounded holiday margin for P.
+_PREVIOUS_LOOKBACK_DAYS: Final = 40
 _LIMITATIONS: Final = (
     "current_research_question_readiness_only",
     "source_reported_bharatstock_ohlc",
@@ -439,6 +442,7 @@ def _capture_request(
     sessions: tuple[date, ...],
     deadline: datetime,
     calendar: object,
+    terminal_missing_diagnostic: bool = False,
 ) -> CaptureRequestV2:
     admitted_member = cast(legacy.BharatStockInstrument, member)
     admitted_calendar = cast(legacy.CurrentCalendarEvidenceBundleV1, calendar)
@@ -453,6 +457,9 @@ def _capture_request(
             admitted_calendar.schedule
         ),
         selection_identity_sha256=legacy.selection_identity_v2((admitted_member,)),
+        terminal_missing_policy=(
+            "EXACT_LAST_SESSION" if terminal_missing_diagnostic else "LEGACY"
+        ),
     )
 
 
@@ -527,6 +534,7 @@ def research_current_stock_v2(
     calendar_transport: HttpTransport | None = None,
     snapshot_transport: HttpTransport | None = None,
     price_client: BharatStockClient | None = None,
+    terminal_missing_diagnostic: bool = False,
 ) -> CurrentStockResearchResultV2:
     """Acquire independent price windows and compose a truthful V5 result."""
     if question not in _REQUIRED:
@@ -541,6 +549,81 @@ def research_current_stock_v2(
             calendar_transport=calendar_transport,
             snapshot_transport=snapshot_transport,
             price_client=price_client,
+            previous_session=False,
+            terminal_missing_diagnostic=terminal_missing_diagnostic,
+            selection_override=None,
+            deadline_override=None,
+        )
+    except legacy._ClockCallbackFailure as error:  # pyright: ignore[reportPrivateUsage]
+        raise error.error from None
+
+
+def research_previous_completed_stock_v2(
+    symbol: str,
+    storage_root: Path,
+    initial: CurrentStockResearchResultV2,
+    *,
+    clock: legacy.CurrentStockResearchClockV1 | None = None,
+    calendar_transport: HttpTransport | None = None,
+    snapshot_transport: HttpTransport | None = None,
+    price_client: BharatStockClient | None = None,
+) -> CurrentStockResearchResultV2:
+    """Acquire an independently dated prior-session packet for agent fallback.
+
+    This is not the public V2 current question: its evidence remains known at the
+    actual current selection time, and only a versioned agent result may label it
+    as one-session-lagged research.
+    """
+    initial.canonical_json_bytes()
+    if initial.symbol != symbol or initial.question != "INTEGRATED_CURRENT_RESEARCH":
+        raise legacy.CurrentStockResearchInputError("prior-session request mismatch")
+    try:
+        return _research_current_stock_v2(
+            symbol,
+            storage_root,
+            question="INTEGRATED_CURRENT_RESEARCH",
+            refresh=False,
+            clock=clock,
+            calendar_transport=calendar_transport,
+            snapshot_transport=snapshot_transport,
+            price_client=price_client,
+            previous_session=True,
+            terminal_missing_diagnostic=False,
+            selection_override=initial.data_selection_time,
+            deadline_override=initial.acquisition_deadline,
+        )
+    except legacy._ClockCallbackFailure as error:  # pyright: ignore[reportPrivateUsage]
+        raise error.error from None
+
+
+def confirm_latest_completed_stock_v2(
+    symbol: str,
+    storage_root: Path,
+    initial: CurrentStockResearchResultV2,
+    *,
+    clock: legacy.CurrentStockResearchClockV1 | None = None,
+    calendar_transport: HttpTransport | None = None,
+    snapshot_transport: HttpTransport | None = None,
+    price_client: BharatStockClient | None = None,
+) -> CurrentStockResearchResultV2:
+    """Recheck S after wider captures, under the original selection and deadline."""
+    initial.canonical_json_bytes()
+    if initial.symbol != symbol or initial.question != "INTEGRATED_CURRENT_RESEARCH":
+        raise legacy.CurrentStockResearchInputError("latest confirmation mismatch")
+    try:
+        return _research_current_stock_v2(
+            symbol,
+            storage_root,
+            question="LATEST_COMPLETED_CANDLE",
+            refresh=True,
+            clock=clock,
+            calendar_transport=calendar_transport,
+            snapshot_transport=snapshot_transport,
+            price_client=price_client,
+            previous_session=False,
+            terminal_missing_diagnostic=True,
+            selection_override=initial.data_selection_time,
+            deadline_override=initial.acquisition_deadline,
         )
     except legacy._ClockCallbackFailure as error:  # pyright: ignore[reportPrivateUsage]
         raise error.error from None
@@ -556,16 +639,26 @@ def _research_current_stock_v2(  # noqa: C901 - explicit stage boundaries are in
     calendar_transport: HttpTransport | None,
     snapshot_transport: HttpTransport | None,
     price_client: BharatStockClient | None,
+    previous_session: bool,
+    terminal_missing_diagnostic: bool,
+    selection_override: datetime | None,
+    deadline_override: datetime | None,
 ) -> CurrentStockResearchResultV2:
     symbol, root = legacy._admit_input(  # pyright: ignore[reportPrivateUsage]
         symbol, storage_root, refresh
     )
     active_clock = legacy._SystemClock() if clock is None else clock  # pyright: ignore[reportPrivateUsage]
-    selection = legacy._now(active_clock)  # pyright: ignore[reportPrivateUsage]
+    selection = (
+        legacy._now(active_clock)  # pyright: ignore[reportPrivateUsage]
+        if selection_override is None
+        else selection_override
+    )
     window = legacy._Window(  # pyright: ignore[reportPrivateUsage]
         active_clock,
         selection,
-        legacy._deadline(selection),  # pyright: ignore[reportPrivateUsage]
+        legacy._deadline(selection)  # pyright: ignore[reportPrivateUsage]
+        if deadline_override is None
+        else deadline_override,
     )
     runtime = _runtime_identity()
     try:
@@ -588,7 +681,14 @@ def _research_current_stock_v2(  # noqa: C901 - explicit stage boundaries are in
                 ),
                 clock=window.now,
                 coverage_from=selection.astimezone(_IST).date()
-                - timedelta(days=_LOOKBACK_DAYS - 1),
+                - timedelta(
+                    days=(
+                        _PREVIOUS_LOOKBACK_DAYS
+                        if previous_session or terminal_missing_diagnostic
+                        else _LOOKBACK_DAYS
+                    )
+                    - 1
+                ),
                 as_of=window.deadline,
             )
             window.ensure_live()
@@ -607,10 +707,15 @@ def _research_current_stock_v2(  # noqa: C901 - explicit stage boundaries are in
                 if question == "CURRENT_STRUCTURE"
                 else (1,)
             )
-            completed_sessions = tuple(
+            official_completed_sessions = tuple(
                 item.trade_date
                 for item in calendar.schedule.sessions
                 if item.close_at <= selection
+            )
+            completed_sessions = (
+                official_completed_sessions[:-1]
+                if previous_session
+                else official_completed_sessions
             )
             # Calendar insufficiency is local to the wider requirement.  Do not
             # suppress a valid one- or two-session capture merely because the
@@ -659,6 +764,7 @@ def _research_current_stock_v2(  # noqa: C901 - explicit stage boundaries are in
                     sessions=completed_sessions[-count:],
                     deadline=window.deadline,
                     calendar=calendar,
+                    terminal_missing_diagnostic=terminal_missing_diagnostic,
                 )
                 for count in {feature_windows[item] for item in requested_price}
             }

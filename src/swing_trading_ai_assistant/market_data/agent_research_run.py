@@ -5,8 +5,9 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
+from typing import cast
 
 from swing_trading_ai_assistant.market_data.bharatstock import BharatStockInstrument
 from swing_trading_ai_assistant.market_data.bharatstock_capture import (
@@ -30,6 +31,10 @@ from .current_stock_research_v2 import CurrentStockResearchResultV2
 from .runtime_source_verifier import runtime_source_sha256
 
 ResearchService = Callable[..., CurrentStockResearchResultV2]
+PreviousResearchService = Callable[
+    [str, Path, CurrentStockResearchResultV2], CurrentStockResearchResultV2
+]
+ConfirmResearchService = PreviousResearchService
 _ALLOWED = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.&_-"
 _FEATURES = ("CANDLE_GEOMETRY", "PREVIOUS_CLOSE_COMPARISON", "MARKET_STRUCTURE")
 _CONTEXT_FEATURES = ("EVENT_NOTICES", "MARKET_REGIME", "INDUSTRY_PARTICIPATION")
@@ -275,3 +280,297 @@ def run_agent_research_current(  # noqa: C901 - explicit admitted feature states
             "Context not acquired; facts are not trade eligibility, ranking, signal or recommendation.",
         ],
     }
+
+
+def _fallback_dates(
+    result: CurrentStockResearchResultV2,
+) -> tuple[date | None, date | None]:
+    """Admit only an explicitly missing latest daily bar, never a shared stop."""
+    result.canonical_json_bytes()
+    packet = result.packet
+    if type(packet) is not BharatStockResearchPacketV2:
+        return None, None
+    packet = validate_bharatstock_research_packet_v2(packet)
+    slots = {slot.feature: slot for slot in packet.feature_slots}
+    geometry = slots["CANDLE_GEOMETRY"]
+    comparison = slots["PREVIOUS_CLOSE_COMPARISON"]
+    structure = slots["MARKET_STRUCTURE"]
+    if len(geometry.requested_sessions) != 1:
+        return None, None
+    latest = geometry.requested_sessions[0]
+    member = packet.members[0]
+    feature = member.feature("CANDLE_GEOMETRY")
+    if (
+        feature is None
+        or feature.availability != "INSUFFICIENT_EVIDENCE"
+        or feature.reason != "EMPTY_HISTORY"
+        or packet.shared_stop_code is not None
+        or len(comparison.requested_sessions) != 2
+        or comparison.requested_sessions[-1] != latest
+        or len(structure.requested_sessions) != 21
+        or structure.requested_sessions[-1] != latest
+        or structure.requested_sessions[-2] != comparison.requested_sessions[0]
+        or any(
+            (outcome := member.feature(slot.feature)) is None
+            or outcome.availability != "INSUFFICIENT_EVIDENCE"
+            or outcome.reason not in {"EMPTY_HISTORY", "LATEST_SESSION_MISSING"}
+            for slot in (comparison, structure)
+        )
+    ):
+        return latest, None
+    return latest, comparison.requested_sessions[0]
+
+
+def _confirmed_latest_absence(
+    initial: CurrentStockResearchResultV2,
+    confirmation: CurrentStockResearchResultV2,
+    latest: date,
+) -> bool:
+    confirmation.canonical_json_bytes()
+    first, second = initial.packet, confirmation.packet
+    if (
+        type(first) is not BharatStockResearchPacketV2
+        or type(second) is not BharatStockResearchPacketV2
+        or confirmation.question != "LATEST_COMPLETED_CANDLE"
+        or confirmation.symbol != initial.symbol
+        or confirmation.data_selection_time != initial.data_selection_time
+        or confirmation.acquisition_deadline != initial.acquisition_deadline
+        or second.shared_stop_code is not None
+        or first.members[0].member != second.members[0].member
+        or first.mapping_projection.members[0].mapping_identity_sha256
+        != second.mapping_projection.members[0].mapping_identity_sha256
+        or first.mapping_projection.schedule_identity_sha256
+        != second.mapping_projection.schedule_identity_sha256
+    ):
+        return False
+    second = validate_bharatstock_research_packet_v2(second)
+    geometry = second.members[0].feature("CANDLE_GEOMETRY")
+    slot = second.feature_slots[0]
+    return (
+        geometry is not None
+        and geometry.availability == "INSUFFICIENT_EVIDENCE"
+        and geometry.reason == "EMPTY_HISTORY"
+        and slot.feature == "CANDLE_GEOMETRY"
+        and slot.requested_sessions == (latest,)
+    )
+
+
+def _previous_packet_shape(
+    initial: CurrentStockResearchResultV2,
+    candidate: CurrentStockResearchResultV2,
+    previous: date,
+) -> bool:
+    candidate.canonical_json_bytes()
+    first, second = initial.packet, candidate.packet
+    if (
+        type(first) is not BharatStockResearchPacketV2
+        or type(second) is not BharatStockResearchPacketV2
+        or candidate.question != "INTEGRATED_CURRENT_RESEARCH"
+        or candidate.symbol != initial.symbol
+        or first.members[0].member != second.members[0].member
+        or initial.data_selection_time != candidate.data_selection_time
+        or initial.acquisition_deadline != candidate.acquisition_deadline
+        or first.mapping_projection.members[0].mapping_identity_sha256
+        != second.mapping_projection.members[0].mapping_identity_sha256
+        or first.mapping_projection.schedule_identity_sha256
+        != second.mapping_projection.schedule_identity_sha256
+    ):
+        return False
+    second = validate_bharatstock_research_packet_v2(second)
+    first_structure = next(
+        slot for slot in first.feature_slots if slot.feature == "MARKET_STRUCTURE"
+    )
+    second_structure = next(
+        slot for slot in second.feature_slots if slot.feature == "MARKET_STRUCTURE"
+    )
+    if (
+        len(first_structure.requested_sessions) != 21
+        or len(second_structure.requested_sessions) != 21
+        or second_structure.requested_sessions[1:]
+        != first_structure.requested_sessions[:-1]
+    ):
+        return False
+    lengths = {
+        "CANDLE_GEOMETRY": 1,
+        "PREVIOUS_CLOSE_COMPARISON": 2,
+        "MARKET_STRUCTURE": 21,
+    }
+    return all(
+        len(slot.requested_sessions) == lengths[slot.feature]
+        and slot.requested_sessions[-1] == previous
+        for slot in second.feature_slots
+        if slot.feature in lengths
+    )
+
+
+def _admitted_previous_packet(
+    initial: CurrentStockResearchResultV2,
+    candidate: CurrentStockResearchResultV2,
+    previous: date,
+) -> bool:
+    if not _previous_packet_shape(initial, candidate, previous):
+        return False
+    second = candidate.packet
+    if (
+        type(second) is not BharatStockResearchPacketV2
+        or second.shared_stop_code is not None
+    ):
+        return False
+    lengths = {
+        "CANDLE_GEOMETRY": 1,
+        "PREVIOUS_CLOSE_COMPARISON": 2,
+        "MARKET_STRUCTURE": 21,
+    }
+    sources: set[tuple[str, str, str]] = set()
+    for slot in second.feature_slots:
+        expected = lengths.get(slot.feature)
+        if expected is None:
+            continue
+        if (
+            slot.state != "RETAINED_REVISION"
+            or len(slot.requested_sessions) != expected
+        ):
+            return False
+        feature = second.members[0].feature(slot.feature)
+        source = second.source(slot.feature)
+        if (
+            feature is None
+            or source is None
+            or feature.availability != "OBSERVED"
+            or feature.support != "SUPPORTED"
+            or feature.comparability != "SUPPORTED"
+            or source.price_basis != second.price_basis
+        ):
+            return False
+        sources.add(
+            (
+                source.price_basis,
+                source.schedule_identity_sha256,
+                source.source_profile,
+            )
+        )
+    return len(sources) == 1
+
+
+def run_agent_swing_research_current(  # noqa: C901 - selection and output checks stay explicit.
+    symbols: tuple[str, ...],
+    storage_root: Path,
+    *,
+    research: ResearchService,
+    confirm_research: ConfirmResearchService,
+    previous_research: PreviousResearchService,
+) -> dict[str, object]:
+    """Versioned agent result with at most one admitted prior-session anchor."""
+    decisions: dict[str, tuple[date | None, str]] = {}
+    previous_attempts: dict[str, dict[str, object]] = {}
+
+    def choose(
+        symbol: str, root: Path, *, question: str, refresh: bool = False
+    ) -> CurrentStockResearchResultV2:
+        initial = research(symbol, root, question=question, refresh=refresh)
+        if type(initial) is not CurrentStockResearchResultV2:
+            raise ValueError("unexpected current research result")
+        latest, previous = _fallback_dates(initial)
+        if previous is None:
+            packet = initial.packet
+            geometry = (
+                packet.members[0].feature("CANDLE_GEOMETRY")
+                if type(packet) is BharatStockResearchPacketV2
+                else None
+            )
+            decisions[symbol] = (
+                latest,
+                "NOT_NEEDED"
+                if geometry is not None and geometry.availability == "OBSERVED"
+                else "NOT_ELIGIBLE",
+            )
+            return initial
+        confirmation = confirm_research(symbol, root, initial)
+        if (
+            type(confirmation) is not CurrentStockResearchResultV2
+            or latest is None
+            or not _confirmed_latest_absence(initial, confirmation, latest)
+        ):
+            decisions[symbol] = (latest, "LATEST_NOT_CONFIRMED")
+            return initial
+        candidate = previous_research(symbol, root, initial)
+        if type(candidate) is not CurrentStockResearchResultV2:
+            raise ValueError("unexpected prior research result")
+        if _admitted_previous_packet(initial, candidate, previous):
+            decisions[symbol] = (latest, "APPLIED")
+            return candidate
+        if _previous_packet_shape(initial, candidate, previous):
+            attempted_report = run_agent_research_current(
+                (symbol,), root, research=lambda *_args, **_kwargs: candidate
+            )
+            attempted_members = attempted_report["members"]
+            if type(attempted_members) is not list:
+                raise ValueError("unexpected prior research projection")
+            attempted_members = cast(list[object], attempted_members)
+            if len(attempted_members) != 1:
+                raise ValueError("unexpected prior research projection")
+            attempted_row = attempted_members[0]
+            if type(attempted_row) is not dict:
+                raise ValueError("unexpected prior research member")
+            attempted_row = cast(dict[str, object], attempted_row)
+            previous_attempts[symbol] = {
+                "anchor_session": previous.isoformat(),
+                "research_status": attempted_row["research_status"],
+                "research_code": attempted_row["research_code"],
+                "research_evidence_known_at": attempted_row[
+                    "research_evidence_known_at"
+                ],
+                "research_result_identity_sha256": attempted_row[
+                    "research_result_identity_sha256"
+                ],
+                "price_basis": attempted_row["price_basis"],
+                "features": attempted_row["features"],
+            }
+        decisions[symbol] = (latest, "PREVIOUS_WINDOW_UNAVAILABLE")
+        return initial
+
+    report = run_agent_research_current(symbols, storage_root, research=choose)
+    report["contract_version"] = "agent-current-research-run@v2"
+    members = report["members"]
+    if type(members) is not list:
+        raise ValueError("unexpected agent research members")
+    members = cast(list[dict[str, object]], members)
+    for row in members:
+        requested_symbol = row.get("requested_symbol")
+        if type(requested_symbol) is not str:
+            raise ValueError("unexpected agent research symbol")
+        latest, outcome = decisions[requested_symbol]
+        facts = row["features"]
+        if type(facts) is not dict:
+            raise ValueError("unexpected agent research features")
+        facts = cast(dict[str, dict[str, object]], facts)
+        sessions: set[str] = set()
+        for feature in facts.values():
+            fact = feature.get("fact")
+            if type(fact) is dict:
+                fact = cast(dict[str, object], fact)
+                session = fact.get("session")
+                if type(session) is str:
+                    sessions.add(session)
+        chosen = next(iter(sessions)) if len(sessions) == 1 else None
+        row["latest_official_completed_session"] = (
+            None if latest is None else latest.isoformat()
+        )
+        row["selected_evidence_end_session"] = chosen
+        row["lag_official_sessions"] = (
+            1
+            if outcome == "APPLIED" and chosen is not None
+            else 0
+            if latest is not None and chosen == latest.isoformat()
+            else None
+        )
+        row["fallback_outcome"] = outcome
+        row["previous_window_attempt"] = previous_attempts.get(requested_symbol)
+    limitations = report["limitations"]
+    if type(limitations) is not list:
+        raise ValueError("unexpected agent research limitations")
+    limitations = cast(list[str], limitations)
+    limitations.append(
+        "A one-session-lagged result is historical completed-session context, not today's completed bar or trade eligibility."
+    )
+    return report

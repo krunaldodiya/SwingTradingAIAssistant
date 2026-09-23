@@ -1793,6 +1793,7 @@ def test_inner_price_request_stops_after_guard_loss(
         "c5f74daf212167b3d4dac510e83e5602b2dbafa0d02a9dc9036b7c9c9cd81c10",
         "c903f7c2e87a867c0aa8d76c1056c08d72bd91a005f670c9028d4970bb177cb3",
         "29698ddcb2499ebbbee3030c731147855ba0f99a57ceac65456a93648deb9f0c",
+        "c3698091197d6d63aa367c4151e92a3811b00c8298c6fa427c416e60dd8e2c9f",
     ],
 )
 def test_released_v3_capture_is_readable_without_authorizing_new_writes(

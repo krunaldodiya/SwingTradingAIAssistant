@@ -31,11 +31,11 @@ def run_demo(*args: str) -> subprocess.CompletedProcess[str]:
     [
         (
             "PRICE_BEHAVIOR",
-            "3265f50751b26a0bf5c8fab13d3f3d90f500a8c44b38440402daf7af6c0bcb97",
+            "1d327b0649fadeaf1adbb2bc2ab068efe68a47c54bd9c7e20a5a7029471d2b2f",
         ),
         (
             "CURRENT_STRUCTURE",
-            "6506b4043402c28bd416b49d1a0e9cde3c6a9a90c988553e1262e1d0ec003d31",
+            "38b7eec96d9478b5368cc5fb1a65c51cfb33d02c1aec25961b529e418d3bfe71",
         ),
     ],
 )
