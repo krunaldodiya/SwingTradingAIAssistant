@@ -8,7 +8,7 @@ import io
 import json
 import sys
 from dataclasses import fields, replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import cast
@@ -21,6 +21,7 @@ from swing_trading_ai_assistant.market_data.bharatstock import (
 )
 from swing_trading_ai_assistant.market_data.current_stock_research_v2 import (
     CurrentStockResearchResultV2,
+    QuestionV2,
     research_current_stock_v2,
 )
 from swing_trading_ai_assistant.market_data.http import HttpResponse
@@ -713,6 +714,65 @@ def test_cli_selects_exactly_two_observations_and_serializes_comparison(
     assert value["status"] == "COMPARABLE"
     assert len(calls) == 2
     assert calls == sorted(calls)
+
+
+@pytest.mark.parametrize("mismatch", ("symbol", "question", "selection_time"))
+def test_cli_rejects_observation_that_does_not_match_requested_selectors(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    mismatch: str,
+) -> None:
+    calls = 0
+
+    def service(
+        symbol: str,
+        storage_root: Path,
+        *,
+        question: QuestionV2,
+        selection_time: datetime,
+    ) -> CurrentStockResearchResultV2:
+        nonlocal calls
+        calls += 1
+        assert symbol == "PNB"
+        return _observation(
+            storage_root / "substituted",
+            selection_time - timedelta(days=1)
+            if mismatch == "selection_time"
+            else selection_time,
+            question="CURRENT_STRUCTURE" if mismatch == "question" else question,
+            symbol="SBIN" if mismatch == "symbol" else "PNB",
+        )
+
+    exit_code = comparison_cli(
+        [
+            "research-compare",
+            "--symbol",
+            "PNB",
+            "--storage-root",
+            str(tmp_path),
+            "--contract-version",
+            "v1",
+            "--question",
+            "PRICE_BEHAVIOR",
+            "--previous-selection-time",
+            "2026-08-26T04:15:00.000000Z",
+            "--current-selection-time",
+            "2026-08-27T04:15:00.000000Z",
+            "--output",
+            "json",
+        ],
+        observation_service=service,
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert (exit_code, calls, payload["status"], payload["code"]) == (
+        1,
+        1,
+        "NON_COMPARABLE",
+        "OBSERVATION_INVALID",
+    )
+    assert captured.err == "observation_interrupted\n"
 
 
 def test_cli_rejects_equal_or_oversized_times_before_observation(

@@ -99,12 +99,20 @@ def main(
         return 2
 
     def observe(selection_time: datetime) -> CurrentStockResearchResultV2:
-        return observation_service(
+        observation = observation_service(
             args.symbol,
             args.storage_root,
             question=args.question,
             selection_time=selection_time,
         )
+        if (
+            type(observation) is not CurrentStockResearchResultV2
+            or observation.symbol != args.symbol
+            or observation.question != args.question
+            or observation.data_selection_time != selection_time
+        ):
+            raise ValueError("observation does not match requested selectors")
+        return observation
 
     try:
         previous = observe(args.previous_selection_time)
