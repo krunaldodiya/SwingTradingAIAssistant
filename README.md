@@ -27,6 +27,9 @@ for a reproducible synthetic demonstration of price behaviour, structure and
 missing evidence through the existing CLI. It blocks network access and uses no
 private captures or provider credentials. See the
 [observed explanation and limitations](docs/workflows/single-stock-research-observation.md).
+Then use the
+[two-observation comparison workflow](docs/workflows/single-stock-research-comparison.md)
+to explain deterministic changes between compatible admitted observations.
 The separate live command still requires authorized acquisition and disclosure.
 
 ## What this project is—and is not

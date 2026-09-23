@@ -1,0 +1,1268 @@
+"""Contract tests for comparing two admitted current-stock observations."""
+
+from __future__ import annotations
+
+import gzip
+import importlib.util
+import io
+import json
+import sys
+from dataclasses import fields, replace
+from datetime import UTC, datetime, timedelta
+from decimal import ROUND_DOWN, Context, Decimal, localcontext
+from pathlib import Path
+from typing import cast
+
+import pytest
+
+from swing_trading_ai_assistant.market_data.bharatstock import (
+    BharatStockClient,
+    BharatStockHistory,
+)
+from swing_trading_ai_assistant.market_data.current_stock_research_v2 import (
+    CurrentStockResearchResultV2,
+    QuestionV2,
+    research_current_stock_v2,
+)
+from swing_trading_ai_assistant.market_data.http import HttpResponse
+from swing_trading_ai_assistant.research_comparison import (
+    current_stock_observation_comparison as comparison_module,
+)
+from swing_trading_ai_assistant.research_comparison.current_stock_observation_comparison import (
+    compare_current_stock_observations_v1,
+    current_stock_observation_comparison_runtime_code_identity_v1,
+)
+from swing_trading_ai_assistant.research_comparison.current_stock_observation_comparison_cli import (
+    main as comparison_cli,
+)
+from swing_trading_ai_assistant.research_comparison.current_stock_observation_comparison_runtime_identity_manifest import (
+    CURRENT_STOCK_OBSERVATION_COMPARISON_RUNTIME_SOURCE_SHA256_V1,
+)
+from swing_trading_ai_assistant.research_packet import bharatstock_v2 as packet_v2
+
+_DEMO_PATH = (
+    Path(__file__).resolve().parents[2] / "examples/single_stock_research_demo.py"
+)
+_DEMO_SPEC = importlib.util.spec_from_file_location(
+    "single_stock_research_demo", _DEMO_PATH
+)
+assert _DEMO_SPEC is not None and _DEMO_SPEC.loader is not None
+demo = importlib.util.module_from_spec(_DEMO_SPEC)
+sys.modules[_DEMO_SPEC.name] = demo
+_DEMO_SPEC.loader.exec_module(demo)
+
+
+class _Prices(demo.SyntheticPrices):
+    def __init__(self, close: Decimal, *, one_session: bool = False) -> None:
+        super().__init__("complete")
+        self.close = close
+        self.one_session = one_session
+
+    def history(self, *args: object, **kwargs: object) -> BharatStockHistory:
+        history = super().history(*args, **kwargs)  # type: ignore[arg-type]
+        rows = history.rows[-1:] if self.one_session else history.rows
+        rows = tuple(
+            replace(row, close=self.close) if index == len(rows) - 1 else row
+            for index, row in enumerate(rows)
+        )
+        return replace(history, rows=rows)
+
+
+class _StructurePrices(_Prices):
+    _UP_HIGHS = (
+        103,
+        104,
+        105,
+        106,
+        110,
+        106,
+        105,
+        106,
+        107,
+        108,
+        115,
+        108,
+        107,
+        108,
+        112,
+        118,
+        110,
+        108,
+        107,
+        130,
+        140,
+    )
+    _UP_LOWS = (
+        97,
+        96,
+        95,
+        94,
+        93,
+        92,
+        90,
+        92,
+        93,
+        94,
+        96,
+        96,
+        95,
+        96,
+        97,
+        98,
+        97,
+        93,
+        92,
+        91,
+        96,
+    )
+    _DOWN_HIGHS = (
+        110,
+        111,
+        112,
+        113,
+        120,
+        113,
+        112,
+        113,
+        112,
+        111,
+        115,
+        111,
+        110,
+        111,
+        112,
+        113,
+        112,
+        111,
+        110,
+        109,
+        108,
+    )
+    _DOWN_LOWS = (
+        105,
+        104,
+        103,
+        102,
+        101,
+        100,
+        98,
+        100,
+        101,
+        100,
+        99,
+        98,
+        95,
+        98,
+        99,
+        100,
+        101,
+        102,
+        103,
+        104,
+        105,
+    )
+
+    def __init__(self, pattern: str) -> None:
+        super().__init__(Decimal("105"))
+        self.pattern = pattern
+
+    def history(self, *args: object, **kwargs: object) -> BharatStockHistory:
+        history = super().history(*args, **kwargs)  # type: ignore[arg-type]
+        highs = self._UP_HIGHS if self.pattern == "up" else self._DOWN_HIGHS
+        lows = self._UP_LOWS if self.pattern == "up" else self._DOWN_LOWS
+        assert len(history.rows) == len(highs)
+        rows = tuple(
+            replace(
+                row,
+                open=min(max(Decimal("100"), Decimal(low)), Decimal(high)),
+                high=Decimal(high),
+                low=Decimal(low),
+                close=(Decimal(high) + Decimal(low)) / 2,
+            )
+            for row, high, low in zip(history.rows, highs, lows, strict=True)
+        )
+        return replace(history, rows=rows)
+
+
+class _AlternateStockSources(demo.SyntheticOfficialSources):
+    def get(self, url: str, headers: dict[str, str]) -> HttpResponse:
+        response = super().get(url, headers)
+        if not response.body.startswith(b"\x1f\x8b"):
+            return response
+        rows = json.loads(gzip.decompress(response.body))
+        rows[0].update(
+            {
+                "name": "Synthetic SBI example",
+                "isin": "INE062A01020",
+                "instrument_key": "NSE_EQ|INE062A01020",
+                "trading_symbol": "SBIN",
+            }
+        )
+        buffer = io.BytesIO()
+        with gzip.GzipFile(fileobj=buffer, mode="wb", mtime=0) as archive:
+            archive.write(json.dumps(rows).encode())
+        return replace(response, body=buffer.getvalue())
+
+
+def _observation(
+    root: Path,
+    instant: datetime,
+    *,
+    question: str = "PRICE_BEHAVIOR",
+    close: Decimal = Decimal("105"),
+    one_session: bool = False,
+    symbol: str = "PNB",
+    structure_pattern: str | None = None,
+) -> CurrentStockResearchResultV2:
+    root.mkdir(mode=0o700, exist_ok=True)
+    demo.NOW = instant
+    sources = (
+        demo.SyntheticOfficialSources("complete")
+        if symbol == "PNB"
+        else _AlternateStockSources("complete")
+    )
+    return research_current_stock_v2(
+        symbol,
+        root,
+        question=cast(object, question),  # type: ignore[arg-type]
+        refresh=False,
+        clock=demo.SyntheticClock(),
+        calendar_transport=sources,
+        snapshot_transport=sources,
+        price_client=cast(
+            BharatStockClient,
+            _StructurePrices(structure_pattern)
+            if structure_pattern is not None
+            else _Prices(close, one_session=one_session),
+        ),
+    )
+
+
+def _with_admitted_adjusted_basis(
+    result: CurrentStockResearchResultV2,
+) -> CurrentStockResearchResultV2:
+    packet = result.packet
+    assert type(packet) is packet_v2.BharatStockResearchPacketV2
+    adjusted = "BHARATSTOCK_SPLIT_BONUS_FACTOR_ADJUSTED_OHLC"
+    slots = []
+    for slot in packet.feature_slots:
+        if slot.source is None:
+            slots.append(slot)
+            continue
+        source_values = {
+            item.name: getattr(slot.source, item.name) for item in fields(slot.source)
+        }
+        source_values.update(
+            {
+                "capture_contract_version": "bharatstock-capture@v2",
+                "capture_schema_identity_sha256": (
+                    "16a032ed40ed922c9d5d9a16c6abc3dff2297e12554ffce9b75f770b55136990"
+                ),
+                "capture_configuration_identity_sha256": (
+                    "21cc3f28838938411836094184a77ad0d39b24fd0f110b30854978c4549f2ced"
+                ),
+                "capture_runtime_code_identity_sha256": (
+                    "fcd99dbbfbf8b969d34d11d72bbcfd089f4dbaaf2ba883d7cadc47ba34e99f43"
+                ),
+                "source_profile": "BHARATSTOCK_CAPTURE_FORWARD_DAILY_V2",
+                "price_basis": adjusted,
+                "volume_basis": "SOURCE_REPORTED_UNADJUSTED",
+            }
+        )
+        source_values["source_identity_sha256"] = packet_v2._digest(  # pyright: ignore[reportPrivateUsage]
+            {
+                "provider_source": source_values["provider_source"],
+                "source_profile": source_values["source_profile"],
+                "revision_identity_sha256": source_values[
+                    "capture_revision_identity_sha256"
+                ],
+                "schedule_evidence_sha256": source_values["schedule_evidence_sha256"],
+                "schedule_source": source_values["schedule_source"],
+                "schedule_source_release": source_values["schedule_source_release"],
+                "price_basis": source_values["price_basis"],
+                "volume_basis": source_values["volume_basis"],
+            }
+        )
+        source_values["source_projection_identity_sha256"] = packet_v2._digest(  # pyright: ignore[reportPrivateUsage]
+            {
+                name: value
+                for name, value in source_values.items()
+                if name != "source_projection_identity_sha256"
+            }
+        )
+        source = packet_v2.BharatStockFeatureSourceV2(**source_values)  # type: ignore[arg-type]
+        slot_values = {item.name: getattr(slot, item.name) for item in fields(slot)}
+        slot_values["source"] = source
+        slot_values["slot_identity_sha256"] = packet_v2._digest(  # pyright: ignore[reportPrivateUsage]
+            {
+                name: value
+                for name, value in slot_values.items()
+                if name != "slot_identity_sha256"
+            }
+        )
+        slots.append(packet_v2.BharatStockFeatureSlotV2(**slot_values))  # type: ignore[arg-type]
+    members = tuple(replace(member, price_basis=adjusted) for member in packet.members)
+    preimage = {
+        item.name: getattr(packet, item.name)
+        for item in fields(packet)
+        if item.name not in {"result_identity_sha256", "_admission_seal"}
+    }
+    preimage.update({"feature_slots": tuple(slots), "members": members})
+    adjusted_packet = object.__new__(packet_v2.BharatStockResearchPacketV2)
+    for name, value in {
+        **preimage,
+        "result_identity_sha256": packet_v2._digest(preimage),  # pyright: ignore[reportPrivateUsage]
+        "_admission_seal": object(),
+    }.items():
+        object.__setattr__(adjusted_packet, name, value)
+    assert packet_v2._validate_packet(adjusted_packet)  # pyright: ignore[reportPrivateUsage]
+    packet_v2._admit(adjusted_packet)  # pyright: ignore[reportPrivateUsage]
+    packet_v2.validate_bharatstock_research_packet_v2(adjusted_packet)
+    adjusted_result = replace(result, packet=adjusted_packet)
+    adjusted_result.canonical_json_bytes()
+    return adjusted_result
+
+
+def test_price_comparison_reports_changed_unchanged_and_numeric_delta(
+    tmp_path: Path,
+) -> None:
+    previous = _observation(
+        tmp_path / "previous", datetime(2026, 8, 26, 4, 15, tzinfo=UTC)
+    )
+    current = _observation(
+        tmp_path / "current",
+        datetime(2026, 8, 27, 4, 15, tzinfo=UTC),
+        close=Decimal("108"),
+    )
+
+    result = compare_current_stock_observations_v1(previous, current)
+
+    assert result.status == "COMPARABLE"
+    assert result.code == "COMPARISON_READY"
+    by_path = {item.path: item for item in result.facts}
+    body = by_path["CANDLE_GEOMETRY.body_size"]
+    assert (body.state, body.previous_value, body.current_value, body.delta) == (
+        "CHANGED",
+        "5",
+        "8",
+        "3",
+    )
+    assert by_path["CANDLE_GEOMETRY.range_size"].state == "UNCHANGED"
+    assert len(result.facts) == 9
+    assert result.canonical_json_bytes() == result.canonical_json_bytes()
+
+
+def test_numerically_equal_decimals_are_canonical_unchanged_values(
+    tmp_path: Path,
+) -> None:
+    previous = _observation(
+        tmp_path / "previous",
+        datetime(2026, 8, 26, 4, 15, tzinfo=UTC),
+        close=Decimal("105"),
+    )
+    current = _observation(
+        tmp_path / "current",
+        datetime(2026, 8, 27, 4, 15, tzinfo=UTC),
+        close=Decimal("105.0"),
+    )
+
+    result = compare_current_stock_observations_v1(previous, current)
+
+    body = next(
+        item for item in result.facts if item.path == "CANDLE_GEOMETRY.body_size"
+    )
+    assert (body.state, body.previous_value, body.current_value, body.delta) == (
+        "UNCHANGED",
+        "5",
+        "5",
+        "0",
+    )
+
+
+def test_exported_facts_reject_contradictory_states_and_deltas(tmp_path: Path) -> None:
+    previous = _observation(
+        tmp_path / "previous", datetime(2026, 8, 26, 4, 15, tzinfo=UTC)
+    )
+    current = _observation(
+        tmp_path / "current",
+        datetime(2026, 8, 27, 4, 15, tzinfo=UTC),
+        close=Decimal("108"),
+    )
+    facts = {
+        item.path: item
+        for item in compare_current_stock_observations_v1(previous, current).facts
+    }
+    changed = facts["CANDLE_GEOMETRY.body_size"]
+    unchanged = facts["CANDLE_GEOMETRY.range_size"]
+
+    with pytest.raises(ValueError, match="invalid observation comparison fact"):
+        replace(changed, state="NEWLY_UNAVAILABLE", delta=None)
+    with pytest.raises(ValueError, match="invalid observation comparison fact"):
+        replace(changed, state="UNCHANGED")
+    with pytest.raises(ValueError, match="invalid observation comparison fact"):
+        replace(unchanged, state="CHANGED")
+    with pytest.raises(ValueError, match="invalid observation comparison fact"):
+        replace(changed, delta="99")
+    with pytest.raises(ValueError, match="invalid observation comparison fact"):
+        replace(changed, delta=None)
+    with pytest.raises(ValueError, match="invalid observation comparison fact"):
+        replace(changed, path="UNKNOWN.body_size")
+    with pytest.raises(ValueError, match="invalid observation comparison fact"):
+        replace(
+            changed,
+            previous_availability="UNKNOWN",
+            previous_value=None,
+            previous_reason="UNKNOWN",
+            state="NEWLY_AVAILABLE",
+            delta=None,
+        )
+
+
+def test_comparison_serialization_revalidates_nested_facts(tmp_path: Path) -> None:
+    previous = _observation(
+        tmp_path / "previous", datetime(2026, 8, 26, 4, 15, tzinfo=UTC)
+    )
+    current = _observation(
+        tmp_path / "current",
+        datetime(2026, 8, 27, 4, 15, tzinfo=UTC),
+        close=Decimal("108"),
+    )
+    result = compare_current_stock_observations_v1(previous, current)
+    changed = next(
+        item for item in result.facts if item.path == "CANDLE_GEOMETRY.body_size"
+    )
+    object.__setattr__(changed, "state", "UNCHANGED")
+
+    with pytest.raises(ValueError, match="invalid observation comparison fact"):
+        result.canonical_json_bytes()
+    object.__setattr__(changed, "state", "CHANGED")
+    direction = next(
+        item for item in result.facts if item.path == "CANDLE_GEOMETRY.candle_direction"
+    )
+    object.__setattr__(direction, "current_value", "BUY_NOW")
+    with pytest.raises(ValueError, match="invalid observation comparison fact"):
+        result.canonical_json_bytes()
+
+
+def test_exported_fact_values_are_closed_canonical_and_bounded(tmp_path: Path) -> None:
+    previous = _observation(
+        tmp_path / "previous", datetime(2026, 8, 26, 4, 15, tzinfo=UTC)
+    )
+    current = _observation(
+        tmp_path / "current",
+        datetime(2026, 8, 27, 4, 15, tzinfo=UTC),
+        close=Decimal("108"),
+    )
+    facts = {
+        item.path: item
+        for item in compare_current_stock_observations_v1(previous, current).facts
+    }
+    direction = facts["CANDLE_GEOMETRY.candle_direction"]
+    body = facts["CANDLE_GEOMETRY.body_size"]
+    previous_close_direction = facts[
+        "PREVIOUS_CLOSE_COMPARISON.close_vs_previous_close"
+    ]
+
+    with pytest.raises(ValueError, match="invalid observation comparison fact"):
+        replace(direction, current_value="BUY_NOW", state="CHANGED")
+    with pytest.raises(ValueError, match="invalid observation comparison fact"):
+        replace(previous_close_direction, current_value="BUY_NOW", state="CHANGED")
+    with pytest.raises(ValueError, match="invalid observation comparison fact"):
+        replace(body, previous_value="-5", current_value="-8", delta="-3")
+    with pytest.raises(ValueError, match="invalid observation comparison fact"):
+        replace(
+            body,
+            previous_value="1.0",
+            current_value="1.00",
+            delta="0.000",
+            state="UNCHANGED",
+        )
+    with pytest.raises(ValueError, match="invalid observation comparison fact"):
+        replace(
+            body,
+            previous_value="1" * 259,
+            current_value="1" * 259,
+            delta="0",
+            state="UNCHANGED",
+        )
+    with pytest.raises(ValueError, match="invalid observation comparison fact"):
+        replace(body, previous_value="1" * 1_000_000)
+    assert (
+        replace(
+            body,
+            previous_value="1" * 258,
+            current_value="1" * 258,
+            delta="0",
+            state="UNCHANGED",
+        ).state
+        == "UNCHANGED"
+    )
+
+
+def test_extreme_admitted_values_require_exact_mixed_scale_delta() -> None:
+    large = "9" * 258
+    tiny = "0." + "0" * 255 + "1"
+    assert packet_v2._bounded_nonnegative_decimal(Decimal(large))  # pyright: ignore[reportPrivateUsage]
+    assert packet_v2._bounded_nonnegative_decimal(Decimal(tiny))  # pyright: ignore[reportPrivateUsage]
+
+    for previous, current in ((large, tiny), (tiny, large)):
+        with localcontext(Context(prec=600)):
+            exact = format(Decimal(current) - Decimal(previous), "f")
+        assert len(exact) == 516 - int(not exact.startswith("-"))
+        fact = comparison_module.CurrentStockObservationComparisonFactV1(
+            "CANDLE_GEOMETRY.body_size",
+            "CHANGED",
+            "OBSERVED",
+            "OBSERVED",
+            None,
+            None,
+            previous,
+            current,
+            exact,
+        )
+        assert fact.delta == exact
+        with pytest.raises(ValueError, match="invalid observation comparison fact"):
+            replace(fact, delta=("-" if exact.startswith("-") else "") + large)
+
+
+def test_exported_result_rejects_untrusted_top_level_fields(tmp_path: Path) -> None:
+    previous = _observation(
+        tmp_path / "previous", datetime(2026, 8, 26, 4, 15, tzinfo=UTC)
+    )
+    current = _observation(
+        tmp_path / "current", datetime(2026, 8, 27, 4, 15, tzinfo=UTC)
+    )
+    result = compare_current_stock_observations_v1(previous, current)
+    assert replace(result, symbol="X" * 32).symbol == "X" * 32
+    invalid_changes = (
+        {"code": "NOT_A_CODE"},
+        {"symbol": "X" * 33},
+        {"symbol": "X" * 1_000_000},
+        {"isin": "not-an-isin"},
+        {"isin": "000000000000"},
+        {"isin": "1NE160A01022"},
+        {"isin": "INE160A0102X"},
+        {"exchange": "OTHER"},
+        {"price_basis": "PRIVATE_PRICE_BASIS"},
+        {"previous_observation_identity_sha256": "x"},
+        {"current_observation_identity_sha256": "0" * 65},
+        {
+            "current_observation_identity_sha256": result.previous_observation_identity_sha256
+        },
+        {"previous_selection_time": "not-a-time"},
+        {"current_selection_time": result.previous_selection_time},
+        {"previous_completed_session": result.current_completed_session},
+        {"current_evidence_known_at": result.previous_evidence_known_at},
+        {"limitations": result.limitations + ("PRIVATE=" + "x" * 1_000_000,)},
+        {"limitations": result.limitations[:-1]},
+    )
+    for changes in invalid_changes:
+        with pytest.raises(
+            ValueError, match="invalid current-stock observation comparison"
+        ):
+            replace(result, **changes)
+
+    failure = comparison_module.invalid_current_stock_observation_comparison_v1()
+    for changes in (
+        {"code": "NOT_A_CODE"},
+        {"status": "COMPARABLE"},
+        {"symbol": "PNB"},
+        {"question": "PRICE_BEHAVIOR"},
+        {"previous_observation_identity_sha256": "0" * 64},
+        {"previous_selection_time": result.previous_selection_time},
+        {"limitations": failure.limitations + ("private",)},
+    ):
+        with pytest.raises(
+            ValueError, match="invalid current-stock observation comparison"
+        ):
+            replace(failure, **changes)
+    for code in comparison_module._FAILURE_CODES:  # pyright: ignore[reportPrivateUsage]
+        assert replace(failure, code=code).code == code
+
+    object.__setattr__(result, "symbol", "PRIVATE=" + "x" * 1_000_000)
+    with pytest.raises(
+        ValueError, match="invalid current-stock observation comparison"
+    ):
+        result.canonical_json_bytes()
+
+
+def test_exported_result_requires_complete_question_fact_paths(tmp_path: Path) -> None:
+    previous = _observation(
+        tmp_path / "previous", datetime(2026, 8, 26, 4, 15, tzinfo=UTC)
+    )
+    current = _observation(
+        tmp_path / "current", datetime(2026, 8, 27, 4, 15, tzinfo=UTC)
+    )
+    result = compare_current_stock_observations_v1(previous, current)
+
+    with pytest.raises(
+        ValueError, match="invalid current-stock observation comparison"
+    ):
+        replace(result, facts=result.facts[:1])
+
+    previous_structure = _observation(
+        tmp_path / "previous_structure",
+        datetime(2026, 8, 26, 4, 15, tzinfo=UTC),
+        question="CURRENT_STRUCTURE",
+    )
+    current_structure = _observation(
+        tmp_path / "current_structure",
+        datetime(2026, 8, 27, 4, 15, tzinfo=UTC),
+        question="CURRENT_STRUCTURE",
+    )
+    structure = compare_current_stock_observations_v1(
+        previous_structure, current_structure
+    )
+    with pytest.raises(
+        ValueError, match="invalid current-stock observation comparison"
+    ):
+        replace(structure, facts=structure.facts[:1])
+    with pytest.raises(ValueError, match="invalid observation comparison fact"):
+        replace(structure.facts[0], current_value="BUY_NOW", state="CHANGED")
+    with pytest.raises(ValueError, match="invalid observation comparison fact"):
+        replace(structure.facts[1], current_value="BUY_NOW", state="CHANGED")
+
+
+def test_exported_reason_is_bounded_before_serialization(tmp_path: Path) -> None:
+    previous = _observation(
+        tmp_path / "previous", datetime(2026, 8, 26, 4, 15, tzinfo=UTC)
+    )
+    current = _observation(
+        tmp_path / "current",
+        datetime(2026, 8, 27, 4, 15, tzinfo=UTC),
+        one_session=True,
+    )
+    comparison = compare_current_stock_observations_v1(previous, current)
+    unavailable = next(
+        item for item in comparison.facts if item.state == "NEWLY_UNAVAILABLE"
+    )
+    assert replace(unavailable, current_reason="R" * 256).current_reason == "R" * 256
+    with pytest.raises(ValueError, match="invalid observation comparison fact"):
+        replace(unavailable, current_reason="R" * 257)
+
+
+def test_invalid_internal_fact_projection_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    previous = _observation(
+        tmp_path / "previous", datetime(2026, 8, 26, 4, 15, tzinfo=UTC)
+    )
+    current = _observation(
+        tmp_path / "current", datetime(2026, 8, 27, 4, 15, tzinfo=UTC)
+    )
+    original = comparison_module._feature_values  # pyright: ignore[reportPrivateUsage]
+
+    def omit_required_fact(
+        question: str, feature: packet_v2.BharatStockMemberFeatureV2
+    ) -> tuple[tuple[str, object | None], ...]:
+        values = original(question, feature)
+        return values[:-1] if feature.feature == "CANDLE_GEOMETRY" else values
+
+    monkeypatch.setattr(comparison_module, "_feature_values", omit_required_fact)
+    result = compare_current_stock_observations_v1(previous, current)
+
+    assert (result.status, result.code, result.facts) == (
+        "NON_COMPARABLE",
+        "OBSERVATION_INVALID",
+        (),
+    )
+
+
+def test_comparison_is_independent_of_ambient_decimal_context(tmp_path: Path) -> None:
+    previous = _observation(
+        tmp_path / "previous",
+        datetime(2026, 8, 26, 4, 15, tzinfo=UTC),
+        close=Decimal("105.12345"),
+    )
+    current = _observation(
+        tmp_path / "current",
+        datetime(2026, 8, 27, 4, 15, tzinfo=UTC),
+        close=Decimal("108.98765"),
+    )
+    expected = compare_current_stock_observations_v1(previous, current)
+
+    with localcontext(Context(prec=5, rounding=ROUND_DOWN)) as ambient:
+        actual = compare_current_stock_observations_v1(previous, current)
+        assert ambient.prec == 5
+        assert ambient.rounding == ROUND_DOWN
+
+    assert actual.canonical_json_bytes() == expected.canonical_json_bytes()
+    assert actual.status == "COMPARABLE"
+
+
+def test_another_canonical_stock_uses_the_same_comparison_contract(
+    tmp_path: Path,
+) -> None:
+    previous = _observation(
+        tmp_path / "previous",
+        datetime(2026, 8, 26, 4, 15, tzinfo=UTC),
+        symbol="SBIN",
+    )
+    current = _observation(
+        tmp_path / "current",
+        datetime(2026, 8, 27, 4, 15, tzinfo=UTC),
+        close=Decimal("108"),
+        symbol="SBIN",
+    )
+
+    result = compare_current_stock_observations_v1(previous, current)
+
+    assert (result.status, result.symbol, result.isin, result.exchange) == (
+        "COMPARABLE",
+        "SBIN",
+        "INE062A01020",
+        "NSE",
+    )
+
+
+def test_two_individually_admitted_different_stocks_do_not_compare(
+    tmp_path: Path,
+) -> None:
+    previous = _observation(
+        tmp_path / "previous",
+        datetime(2026, 8, 26, 4, 15, tzinfo=UTC),
+    )
+    current = _observation(
+        tmp_path / "current",
+        datetime(2026, 8, 27, 4, 15, tzinfo=UTC),
+        symbol="SBIN",
+    )
+
+    result = compare_current_stock_observations_v1(previous, current)
+
+    assert (result.status, result.code, result.facts) == (
+        "NON_COMPARABLE",
+        "INCOMPATIBLE_STOCK",
+        (),
+    )
+
+
+@pytest.mark.parametrize(
+    "previous_one,current_one,expected",
+    [
+        (False, True, "NEWLY_UNAVAILABLE"),
+        (True, False, "NEWLY_AVAILABLE"),
+        (True, True, "UNAVAILABLE_IN_BOTH"),
+    ],
+)
+def test_feature_availability_transitions_are_explicit(
+    tmp_path: Path,
+    previous_one: bool,
+    current_one: bool,
+    expected: str,
+) -> None:
+    previous = _observation(
+        tmp_path / "previous",
+        datetime(2026, 8, 26, 4, 15, tzinfo=UTC),
+        one_session=previous_one,
+    )
+    current = _observation(
+        tmp_path / "current",
+        datetime(2026, 8, 27, 4, 15, tzinfo=UTC),
+        one_session=current_one,
+    )
+
+    result = compare_current_stock_observations_v1(previous, current)
+
+    comparison = [
+        item
+        for item in result.facts
+        if item.path == "PREVIOUS_CLOSE_COMPARISON.close_vs_previous_close"
+    ][0]
+    assert result.status == "COMPARABLE"
+    assert comparison.state == expected
+    assert comparison.previous_availability in {"OBSERVED", "INSUFFICIENT_EVIDENCE"}
+    assert comparison.current_availability in {"OBSERVED", "INSUFFICIENT_EVIDENCE"}
+
+
+def test_structure_comparison_is_bounded_to_state_and_trend(tmp_path: Path) -> None:
+    previous = _observation(
+        tmp_path / "previous",
+        datetime(2026, 8, 26, 4, 15, tzinfo=UTC),
+        question="CURRENT_STRUCTURE",
+    )
+    current = _observation(
+        tmp_path / "current",
+        datetime(2026, 8, 27, 4, 15, tzinfo=UTC),
+        question="CURRENT_STRUCTURE",
+    )
+
+    result = compare_current_stock_observations_v1(previous, current)
+
+    assert result.status == "COMPARABLE"
+    assert [item.path for item in result.facts] == [
+        "MARKET_STRUCTURE.structure_state",
+        "MARKET_STRUCTURE.trend",
+    ]
+
+
+def test_structure_comparison_reports_changed_state_and_trend(tmp_path: Path) -> None:
+    previous = _observation(
+        tmp_path / "previous",
+        datetime(2026, 8, 26, 4, 15, tzinfo=UTC),
+        question="CURRENT_STRUCTURE",
+    )
+    current = _observation(
+        tmp_path / "current",
+        datetime(2026, 8, 27, 4, 15, tzinfo=UTC),
+        question="CURRENT_STRUCTURE",
+        structure_pattern="down",
+    )
+
+    result = compare_current_stock_observations_v1(previous, current)
+
+    assert result.status == "COMPARABLE"
+    assert {
+        item.path: (item.state, item.previous_value, item.current_value)
+        for item in result.facts
+    } == {
+        "MARKET_STRUCTURE.structure_state": (
+            "CHANGED",
+            "INSUFFICIENT_STRUCTURE",
+            "CONFIRMED",
+        ),
+        "MARKET_STRUCTURE.trend": (
+            "CHANGED",
+            "INSUFFICIENT_STRUCTURE",
+            "DOWNTREND",
+        ),
+    }
+
+
+@pytest.mark.parametrize(
+    "mutation,code",
+    [
+        ("missing", "OBSERVATION_UNAVAILABLE"),
+        ("question", "INCOMPATIBLE_QUESTION_OR_CONTRACT"),
+        ("stock", "OBSERVATION_INVALID"),
+        ("runtime", "OBSERVATION_INVALID"),
+        ("time", "INVALID_TEMPORAL_ORDER"),
+        ("basis", "OBSERVATION_INVALID"),
+    ],
+)
+def test_non_comparable_precedence_is_typed(
+    tmp_path: Path, mutation: str, code: str
+) -> None:
+    previous = _observation(
+        tmp_path / "previous", datetime(2026, 8, 26, 4, 15, tzinfo=UTC)
+    )
+    current = _observation(
+        tmp_path / "current", datetime(2026, 8, 27, 4, 15, tzinfo=UTC)
+    )
+    if mutation == "missing":
+        current = replace(current, status="UNAVAILABLE", packet=None)
+    elif mutation == "question":
+        current = _observation(
+            tmp_path / "question",
+            datetime(2026, 8, 27, 4, 15, tzinfo=UTC),
+            question="CURRENT_STRUCTURE",
+        )
+    elif mutation == "stock":
+        object.__setattr__(current, "symbol", "OTHER")
+    elif mutation == "runtime":
+        current = replace(current, runtime_code_identity_sha256="0" * 64)
+    elif mutation == "time":
+        previous, current = current, previous
+    elif mutation == "basis":
+        assert current.packet is not None
+        object.__setattr__(current.packet.members[0], "price_basis", None)
+
+    result = compare_current_stock_observations_v1(previous, current)
+
+    assert result.status == "NON_COMPARABLE"
+    assert result.code == code
+    assert result.facts == ()
+
+
+def test_admitted_mixed_price_basis_is_typed_before_feature_comparison(
+    tmp_path: Path,
+) -> None:
+    previous = _observation(
+        tmp_path / "previous", datetime(2026, 8, 26, 4, 15, tzinfo=UTC)
+    )
+    current = _observation(
+        tmp_path / "current", datetime(2026, 8, 27, 4, 15, tzinfo=UTC)
+    )
+    current = _with_admitted_adjusted_basis(current)
+    assert previous.packet is not None and current.packet is not None
+    packet_v2.validate_bharatstock_research_packet_v2(previous.packet)
+    packet_v2.validate_bharatstock_research_packet_v2(current.packet)
+
+    result = compare_current_stock_observations_v1(previous, current)
+
+    assert (result.status, result.code, result.facts) == (
+        "NON_COMPARABLE",
+        "INCOMPATIBLE_PRICE_BASIS",
+        (),
+    )
+
+
+def test_comparison_command_source_drift_invalidates_runtime_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cli_path = (
+        "src/swing_trading_ai_assistant/research_comparison/"
+        "current_stock_observation_comparison_cli.py"
+    )
+    assert current_stock_observation_comparison_runtime_code_identity_v1()
+    monkeypatch.setitem(
+        CURRENT_STOCK_OBSERVATION_COMPARISON_RUNTIME_SOURCE_SHA256_V1,
+        cli_path,
+        "0" * 64,
+    )
+
+    with pytest.raises(ValueError, match="runtime identity invalid"):
+        current_stock_observation_comparison_runtime_code_identity_v1()
+
+
+def test_equal_completed_session_is_not_presented_as_change(tmp_path: Path) -> None:
+    previous = _observation(
+        tmp_path / "previous", datetime(2026, 8, 26, 4, 15, tzinfo=UTC)
+    )
+    current = _observation(
+        tmp_path / "current", datetime(2026, 8, 26, 5, 15, tzinfo=UTC)
+    )
+
+    result = compare_current_stock_observations_v1(previous, current)
+
+    assert (result.status, result.code) == (
+        "NON_COMPARABLE",
+        "INVALID_TEMPORAL_ORDER",
+    )
+
+
+@pytest.mark.parametrize("offset_minutes", (0, -1))
+def test_substituted_equal_or_reversed_evidence_known_time_is_invalid_observation(
+    tmp_path: Path, offset_minutes: int
+) -> None:
+    previous = _observation(
+        tmp_path / "previous", datetime(2026, 8, 26, 4, 15, tzinfo=UTC)
+    )
+    current = _observation(
+        tmp_path / "current", datetime(2026, 8, 27, 4, 15, tzinfo=UTC)
+    )
+    assert previous.evidence_known_at is not None
+    current = replace(
+        current,
+        evidence_known_at=previous.evidence_known_at.replace(
+            minute=previous.evidence_known_at.minute + offset_minutes
+        ),
+    )
+
+    result = compare_current_stock_observations_v1(previous, current)
+
+    assert (result.status, result.code) == ("NON_COMPARABLE", "OBSERVATION_INVALID")
+
+
+def test_evidence_known_after_deadline_fails_closed_as_invalid_observation(
+    tmp_path: Path,
+) -> None:
+    previous = _observation(
+        tmp_path / "previous", datetime(2026, 8, 26, 4, 15, tzinfo=UTC)
+    )
+    current = _observation(
+        tmp_path / "current", datetime(2026, 8, 27, 4, 15, tzinfo=UTC)
+    )
+    object.__setattr__(
+        current,
+        "evidence_known_at",
+        current.acquisition_deadline.replace(
+            minute=current.acquisition_deadline.minute + 1
+        ),
+    )
+
+    result = compare_current_stock_observations_v1(previous, current)
+
+    assert (result.status, result.code) == ("NON_COMPARABLE", "OBSERVATION_INVALID")
+
+
+@pytest.mark.parametrize("changed", ("previous", "current"))
+def test_evidence_known_time_must_match_admitted_packet_sources(
+    tmp_path: Path, changed: str
+) -> None:
+    previous = _observation(
+        tmp_path / "previous", datetime(2026, 8, 26, 4, 15, tzinfo=UTC)
+    )
+    current = _observation(
+        tmp_path / "current", datetime(2026, 8, 27, 4, 15, tzinfo=UTC)
+    )
+    assert previous.evidence_known_at is not None
+    assert current.evidence_known_at is not None
+    if changed == "previous":
+        previous = replace(
+            previous,
+            evidence_known_at=previous.evidence_known_at - timedelta(minutes=1),
+        )
+    else:
+        current = replace(
+            current, evidence_known_at=current.evidence_known_at - timedelta(minutes=1)
+        )
+
+    result = compare_current_stock_observations_v1(previous, current)
+
+    assert (result.status, result.code) == ("NON_COMPARABLE", "OBSERVATION_INVALID")
+
+
+def test_cli_selects_exactly_two_observations_and_serializes_comparison(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    calls: list[datetime] = []
+
+    def service(
+        symbol: str,
+        root: Path,
+        *,
+        question: str,
+        selection_time: datetime,
+    ) -> CurrentStockResearchResultV2:
+        assert symbol == "PNB"
+        calls.append(selection_time)
+        return _observation(
+            root / selection_time.date().isoformat(),
+            selection_time,
+            question=question,
+            close=Decimal("105") if len(calls) == 1 else Decimal("108"),
+        )
+
+    exit_code = comparison_cli(
+        [
+            "research-compare",
+            "--symbol",
+            "PNB",
+            "--storage-root",
+            str(tmp_path),
+            "--contract-version",
+            "v1",
+            "--question",
+            "PRICE_BEHAVIOR",
+            "--previous-selection-time",
+            "2026-08-26T04:15:00.000000Z",
+            "--current-selection-time",
+            "2026-08-27T04:15:00.000000Z",
+            "--output",
+            "json",
+        ],
+        observation_service=service,
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0, captured.err
+    value = json.loads(captured.out)
+    assert value["contract_version"] == "current-stock-observation-comparison@v1"
+    assert value["status"] == "COMPARABLE"
+    assert len(calls) == 2
+    assert calls == sorted(calls)
+
+
+@pytest.mark.parametrize("mismatch", ("symbol", "question", "selection_time"))
+def test_cli_rejects_observation_that_does_not_match_requested_selectors(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    mismatch: str,
+) -> None:
+    calls = 0
+
+    def service(
+        symbol: str,
+        storage_root: Path,
+        *,
+        question: QuestionV2,
+        selection_time: datetime,
+    ) -> CurrentStockResearchResultV2:
+        nonlocal calls
+        calls += 1
+        assert symbol == "PNB"
+        return _observation(
+            storage_root / "substituted",
+            selection_time - timedelta(days=1)
+            if mismatch == "selection_time"
+            else selection_time,
+            question="CURRENT_STRUCTURE" if mismatch == "question" else question,
+            symbol="SBIN" if mismatch == "symbol" else "PNB",
+        )
+
+    exit_code = comparison_cli(
+        [
+            "research-compare",
+            "--symbol",
+            "PNB",
+            "--storage-root",
+            str(tmp_path),
+            "--contract-version",
+            "v1",
+            "--question",
+            "PRICE_BEHAVIOR",
+            "--previous-selection-time",
+            "2026-08-26T04:15:00.000000Z",
+            "--current-selection-time",
+            "2026-08-27T04:15:00.000000Z",
+            "--output",
+            "json",
+        ],
+        observation_service=service,
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert (exit_code, calls, payload["status"], payload["code"]) == (
+        1,
+        1,
+        "NON_COMPARABLE",
+        "OBSERVATION_INVALID",
+    )
+    assert captured.err == "observation_interrupted\n"
+
+
+def test_cli_rejects_equal_or_oversized_times_before_observation(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def unexpected(*_args: object, **_kwargs: object) -> CurrentStockResearchResultV2:
+        raise AssertionError("malformed request reached observation service")
+
+    exit_code = comparison_cli(
+        [
+            "research-compare",
+            "--symbol",
+            "PNB",
+            "--storage-root",
+            str(tmp_path),
+            "--contract-version",
+            "v1",
+            "--question",
+            "PRICE_BEHAVIOR",
+            "--previous-selection-time",
+            "2026-08-26T04:15:00.000000Z",
+            "--current-selection-time",
+            "2026-08-26T04:15:00.000000Z",
+            "--output",
+            "json",
+        ],
+        observation_service=unexpected,
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert captured.out == ""
+    assert "request_invalid" in captured.err
+
+
+def test_cli_rejects_oversized_time_before_observation(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    calls = 0
+
+    def unexpected(*_args: object, **_kwargs: object) -> CurrentStockResearchResultV2:
+        nonlocal calls
+        calls += 1
+        raise AssertionError("malformed request reached observation service")
+
+    exit_code = comparison_cli(
+        [
+            "research-compare",
+            "--symbol",
+            "PNB",
+            "--storage-root",
+            str(tmp_path),
+            "--contract-version",
+            "v1",
+            "--question",
+            "PRICE_BEHAVIOR",
+            "--previous-selection-time",
+            "2026-08-26T04:15:00.0000000Z",
+            "--current-selection-time",
+            "2026-08-27T04:15:00.000000Z",
+            "--output",
+            "json",
+        ],
+        observation_service=unexpected,
+    )
+
+    captured = capsys.readouterr()
+    assert (exit_code, calls, captured.out) == (2, 0, "")
+    assert captured.err == "request_invalid\n"
+
+
+@pytest.mark.parametrize("symbol", ("A" * 33, "pnb", "../PNB"))
+def test_cli_rejects_malformed_symbol_before_observation(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    symbol: str,
+) -> None:
+    calls = 0
+
+    def unexpected(*_args: object, **_kwargs: object) -> CurrentStockResearchResultV2:
+        nonlocal calls
+        calls += 1
+        raise AssertionError("malformed request reached observation service")
+
+    exit_code = comparison_cli(
+        [
+            "research-compare",
+            "--symbol",
+            symbol,
+            "--storage-root",
+            str(tmp_path),
+            "--contract-version",
+            "v1",
+            "--question",
+            "PRICE_BEHAVIOR",
+            "--previous-selection-time",
+            "2026-08-26T04:15:00.000000Z",
+            "--current-selection-time",
+            "2026-08-27T04:15:00.000000Z",
+            "--output",
+            "json",
+        ],
+        observation_service=unexpected,
+    )
+
+    captured = capsys.readouterr()
+    assert (exit_code, calls, captured.out, captured.err) == (
+        2,
+        0,
+        "",
+        "request_invalid\n",
+    )
+
+
+def test_interrupted_first_observation_prevents_second_and_returns_typed_result(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    calls = 0
+
+    def interrupted(*_args: object, **_kwargs: object) -> CurrentStockResearchResultV2:
+        nonlocal calls
+        calls += 1
+        raise RuntimeError("private provider detail must not escape")
+
+    exit_code = comparison_cli(
+        [
+            "research-compare",
+            "--symbol",
+            "PNB",
+            "--storage-root",
+            str(tmp_path),
+            "--contract-version",
+            "v1",
+            "--question",
+            "PRICE_BEHAVIOR",
+            "--previous-selection-time",
+            "2026-08-26T04:15:00.000000Z",
+            "--current-selection-time",
+            "2026-08-27T04:15:00.000000Z",
+            "--output",
+            "json",
+        ],
+        observation_service=interrupted,
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert (exit_code, calls, payload["status"], payload["code"]) == (
+        1,
+        1,
+        "NON_COMPARABLE",
+        "OBSERVATION_INVALID",
+    )
+    assert captured.err == "observation_interrupted\n"
+    assert tuple(tmp_path.iterdir()) == ()

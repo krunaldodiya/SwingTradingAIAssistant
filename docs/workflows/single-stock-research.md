@@ -120,5 +120,7 @@ Do not supply raw provider bodies, keys, private files or raw OHLC to the model.
 Use existing admitted public results only within the authorized destination and
 facts scope. The demo does not verify this live path or grant its authority.
 
-Comparison with a prior research observation is deferred to #204. The previous
-close fact in PRICE_BEHAVIOR is not a comparison between research observations.
+To compare exactly two compatible admitted observations, continue with the
+[two-observation comparison workflow](single-stock-research-comparison.md). The
+previous-close fact in PRICE_BEHAVIOR remains a market fact inside one
+observation; it is not the comparison between research observations.
