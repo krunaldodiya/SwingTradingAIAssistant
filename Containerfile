@@ -22,9 +22,14 @@ FROM python:3.11.16-slim-bookworm@sha256:4b4c524dc3dce996864e030c7bd9c6b0e517597
 
 ARG APP_VERSION
 ARG SOURCE_REVISION
+ARG WHEEL_SHA256
+ARG REQUIREMENTS_SHA256
 LABEL org.opencontainers.image.title="SwingTradingAIAssistant" \
       org.opencontainers.image.version="${APP_VERSION}" \
-      org.opencontainers.image.revision="${SOURCE_REVISION}"
+      org.opencontainers.image.revision="${SOURCE_REVISION}" \
+      org.opencontainers.image.source="https://github.com/krunaldodiya/SwingTradingAIAssistant" \
+      org.swingtradingaiassistant.wheel.sha256="${WHEEL_SHA256}" \
+      org.swingtradingaiassistant.requirements.sha256="${REQUIREMENTS_SHA256}"
 
 RUN groupadd --gid 10001 app && \
     useradd --uid 10001 --gid app --create-home --home-dir /home/app app
