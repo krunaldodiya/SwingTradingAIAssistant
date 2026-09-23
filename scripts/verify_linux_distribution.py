@@ -320,9 +320,7 @@ def _verify_interruption(build: list[str], image: str) -> None:
         raise RuntimeError("interruption changed the current image")
 
 
-def _verify_rollback(
-    prior_commit: str, uv: str, requirements: Path, scratch: Path
-) -> str:
+def _verify_rollback(prior_commit: str, uv: str, scratch: Path) -> tuple[str, str]:
     if len(prior_commit) != 40 or any(
         character not in "0123456789abcdef" for character in prior_commit
     ):
@@ -331,10 +329,6 @@ def _verify_rollback(
         _run(["git", "merge-base", "--is-ancestor", prior_commit, "HEAD"]),
         "prior commit ancestry",
     )
-    prior_lock = _run(["git", "show", f"{prior_commit}:uv.lock"])
-    _require_success(prior_lock, "prior lock")
-    if prior_lock.stdout != (ROOT / "uv.lock").read_bytes():
-        raise RuntimeError("rollback dependency lock changed; prior export required")
     prior_source = scratch / "prior-source"
     prior_source.mkdir()
     archive = scratch / "prior.tar"
@@ -346,6 +340,23 @@ def _verify_rollback(
         _run(["tar", "-xf", str(archive), "-C", str(prior_source)]),
         "prior source extraction",
     )
+    prior_export = _run(
+        [
+            uv,
+            "export",
+            "--locked",
+            "--no-dev",
+            "--format",
+            "requirements-txt",
+            "--no-emit-project",
+            "--no-header",
+            "--no-annotate",
+        ],
+        cwd=prior_source,
+    )
+    _require_success(prior_export, "prior lock export")
+    prior_requirements = scratch / "prior-requirements.txt"
+    prior_requirements.write_bytes(prior_export.stdout)
     prior_dist = scratch / "prior-dist"
     _require_success(
         _run(
@@ -382,7 +393,7 @@ def _verify_rollback(
                 "copy",
                 "--require-hashes",
                 "-r",
-                str(requirements),
+                str(prior_requirements),
             ]
         ),
         "prior locked dependencies",
@@ -407,7 +418,7 @@ def _verify_rollback(
         _run([str(prior_venv / "bin/market-data"), "--help"], cwd=scratch),
         "prior CLI rollback run",
     )
-    return _sha256(prior_wheels[0])
+    return _sha256(prior_wheels[0]), _sha256(prior_requirements)
 
 
 def verify(wheel: Path, receipt: Path | None, prior_commit: str) -> dict[str, object]:
@@ -531,7 +542,9 @@ def verify(wheel: Path, receipt: Path | None, prior_commit: str) -> dict[str, ob
             raise RuntimeError("image user or environment is unsafe")
         _verify_mounts(image, scratch)
         _verify_image_source(image, scratch)
-        prior_wheel_digest = _verify_rollback(prior_commit, uv, requirements, scratch)
+        prior_wheel_digest, prior_requirements_digest = _verify_rollback(
+            prior_commit, uv, scratch
+        )
         inspection = _run(["docker", "image", "inspect", image, "--format", "{{.Id}}"])
         _require_success(inspection, "image identity")
         result: dict[str, object] = {
@@ -549,6 +562,7 @@ def verify(wheel: Path, receipt: Path | None, prior_commit: str) -> dict[str, ob
             "interrupted_build_and_run": "rejected; current image remained available",
             "rollback_prior_commit": prior_commit,
             "rollback_prior_wheel_sha256": prior_wheel_digest,
+            "rollback_prior_requirements_sha256": prior_requirements_digest,
             "rollback_prior_cli": "installed and ran",
         }
         if receipt is not None:
