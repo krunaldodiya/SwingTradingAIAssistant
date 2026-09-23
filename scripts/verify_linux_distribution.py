@@ -515,6 +515,8 @@ def verify(wheel: Path, receipt: Path | None, prior_commit: str) -> dict[str, ob
             f"SOURCE_REVISION={revision}",
             "--build-arg",
             f"WHEEL_SHA256={wheel_digest}",
+            "--build-arg",
+            f"REQUIREMENTS_SHA256={_sha256(requirements)}",
             "--tag",
             image,
             str(context),
@@ -542,6 +544,17 @@ def verify(wheel: Path, receipt: Path | None, prior_commit: str) -> dict[str, ob
             "BHARATSTOCK_API_KEY" in item for item in image_config["Env"]
         ):
             raise RuntimeError("image user or environment is unsafe")
+        labels = image_config["Labels"]
+        if (
+            labels.get("org.opencontainers.image.revision") != revision
+            or labels.get("org.opencontainers.image.version") != version
+            or labels.get("org.opencontainers.image.source")
+            != "https://github.com/krunaldodiya/SwingTradingAIAssistant"
+            or labels.get("org.swingtradingaiassistant.wheel.sha256") != wheel_digest
+            or labels.get("org.swingtradingaiassistant.requirements.sha256")
+            != _sha256(requirements)
+        ):
+            raise RuntimeError("image source/version labels disagree with build")
         _verify_mounts(image, scratch)
         _verify_image_source(image, scratch)
         prior_wheel_digest, prior_requirements_digest = _verify_rollback(

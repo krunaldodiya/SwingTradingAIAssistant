@@ -1,0 +1,144 @@
+name: Publish verified OCI image
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+
+permissions: {}
+
+concurrency:
+  group: publish-oci-main
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Build, verify and publish Linux x86_64 image
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Check out admitted main commit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Verify exact current main and clean source
+        env:
+          ADMITTED_SHA: ${{ github.event.workflow_run.head_sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$ADMITTED_SHA"
+          test -z "$(git status --porcelain=v1)"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)" = "$ADMITTED_SHA"
+
+      - name: Set up locked build toolchain
+        uses: astral-sh/setup-uv@61cb8a9741eeb8a550a1b8544337180c0fc8476b # v7.2.0
+        with:
+          version: "0.9.24"
+          python-version: "3.11"
+          checksum: "fb13ad85106da6b21dd16613afca910994446fe94a78ee0b5bed9c75cd066078"
+
+      - name: Build exact wheel and verify native/OCI behavior
+        env:
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+          ADMITTED_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          uv sync --extra dev --frozen
+          uv build --no-build-isolation --python .venv/bin/python
+          uv run --no-sync --extra dev python scripts/verify_linux_distribution.py \
+            --wheel dist/swing_trading_ai_assistant-*.whl \
+            --prior-commit "$(git rev-parse HEAD^1)" \
+            --receipt "$RUNNER_TEMP/linux-distribution-receipt.json"
+          test "$(jq -r .source_commit "$RUNNER_TEMP/linux-distribution-receipt.json")" = "$ADMITTED_SHA"
+          test "$(jq -r .source_dirty "$RUNNER_TEMP/linux-distribution-receipt.json")" = false
+
+      - name: Publish commit-qualified image and verify registry pull
+        id: publish
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ github.token }}
+          ADMITTED_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          receipt="$RUNNER_TEMP/linux-distribution-receipt.json"
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          version="$(jq -r .version "$receipt")"
+          local_tag="$(jq -r .image_tag "$receipt")"
+          local_id="$(jq -r .local_image_id "$receipt")"
+          tag="${version}-${ADMITTED_SHA}"
+          remote_tag="${image}:${tag}"
+          test "$(docker image inspect "$local_tag" --format '{{.Id}}')" = "$local_id"
+          test "$(docker image inspect "$local_tag" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$ADMITTED_SHA"
+          test "$(docker image inspect "$local_tag" --format '{{index .Config.Labels "org.opencontainers.image.source"}}')" = "https://github.com/${GITHUB_REPOSITORY}"
+          wheel_sha="$(jq -r .wheel_sha256 "$receipt")"
+          requirements_sha="$(jq -r .requirements_sha256 "$receipt")"
+          test "$(docker image inspect "$local_tag" --format '{{index .Config.Labels "org.swingtradingaiassistant.wheel.sha256"}}')" = "$wheel_sha"
+          test "$(docker image inspect "$local_tag" --format '{{index .Config.Labels "org.swingtradingaiassistant.requirements.sha256"}}')" = "$requirements_sha"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)" = "$ADMITTED_SHA"
+          package_path="users/${GITHUB_REPOSITORY_OWNER}/packages/container/${GITHUB_REPOSITORY#*/}"
+          package_path="${package_path,,}"
+          if gh api "$package_path" --jq .visibility > "$RUNNER_TEMP/package-visibility.txt" 2> "$RUNNER_TEMP/package-error.txt"; then
+            test "$(cat "$RUNNER_TEMP/package-visibility.txt")" = private
+          elif ! grep -q 'HTTP 404' "$RUNNER_TEMP/package-error.txt"; then
+            echo 'GHCR package visibility could not be established.' >&2
+            exit 1
+          fi
+          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          if docker manifest inspect "$remote_tag" > "$RUNNER_TEMP/existing-manifest.json" 2> "$RUNNER_TEMP/manifest-error.txt"; then
+            docker pull --platform linux/amd64 "$remote_tag"
+            published_id="$(docker image inspect "$remote_tag" --format '{{.Id}}')"
+            if test "$published_id" != "$local_id"; then
+              echo 'Existing commit-qualified tag differs from the verified image; refusing overwrite.' >&2
+              exit 1
+            fi
+          else
+            if ! grep -Eiq 'manifest unknown|name unknown|no such manifest|not found' "$RUNNER_TEMP/manifest-error.txt"; then
+              echo 'Registry lookup failed for a reason other than a missing tag.' >&2
+              exit 1
+            fi
+            docker tag "$local_tag" "$remote_tag"
+            docker push "$remote_tag"
+            published_id="$local_id"
+          fi
+          digest="$(docker image inspect "$remote_tag" --format '{{index .RepoDigests 0}}')"
+          case "$digest" in
+            "$image"@sha256:*) ;;
+            *) echo 'No registry digest was returned.' >&2; exit 1 ;;
+          esac
+          docker image rm "$remote_tag"
+          docker pull --platform linux/amd64 "$digest"
+          test "$(docker image inspect "$digest" --format '{{.Id}}')" = "$published_id"
+          test "$(docker image inspect "$digest" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$ADMITTED_SHA"
+          docker run --rm --platform linux/amd64 --network none --read-only \
+            --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m --cap-drop ALL \
+            --security-opt no-new-privileges "$digest" --help > "$RUNNER_TEMP/pulled-help.txt"
+          test -s "$RUNNER_TEMP/pulled-help.txt"
+          test "$(gh api "$package_path" --jq .visibility)" = private
+          jq -n --arg source "$ADMITTED_SHA" --arg image "$image" \
+            --arg tag "$tag" --arg digest "$digest" --arg local_id "$local_id" \
+            --arg published_id "$published_id" \
+            --slurpfile verified "$receipt" \
+            '{source_commit:$source,image:$image,tag:$tag,digest:$digest,local_image_id:$local_id,published_image_id:$published_id,distribution:$verified[0]}' \
+            > "$RUNNER_TEMP/oci-publication-receipt.json"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          docker logout ghcr.io
+
+      - name: Retain publication receipt
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: oci-publication-${{ github.event.workflow_run.head_sha }}
+          path: ${{ runner.temp }}/oci-publication-receipt.json
+          if-no-files-found: error
+          retention-days: 30
