@@ -32,6 +32,7 @@ from .runtime_source_verifier import runtime_source_sha256
 ResearchService = Callable[..., CurrentStockResearchResultV2]
 _ALLOWED = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.&_-"
 _FEATURES = ("CANDLE_GEOMETRY", "PREVIOUS_CLOSE_COMPARISON", "MARKET_STRUCTURE")
+_CONTEXT_FEATURES = ("EVENT_NOTICES", "MARKET_REGIME", "INDUSTRY_PARTICIPATION")
 
 
 def _instant(value: datetime | None) -> str | None:
@@ -105,7 +106,25 @@ def run_agent_research_current(  # noqa: C901 - explicit admitted feature states
             "canonical_stock": None,
             "research_result_identity_sha256": None,
             "price_basis": None,
-            "features": {},
+            "features": (
+                {
+                    name: {
+                        "availability": result.status,
+                        "support": "NOT_ESTABLISHED",
+                        "comparability": "NOT_ESTABLISHED",
+                        "reason": result.code,
+                        "fact": None,
+                        "source_identity_sha256": None,
+                        "capture_revision_identity_sha256": None,
+                        "schedule_identity_sha256": None,
+                        "source_profile": None,
+                        "known_at": None,
+                    }
+                    for name in _FEATURES
+                }
+                if result.packet is None
+                else {}
+            ),
             "context": [
                 {
                     "feature": item.feature,
@@ -113,6 +132,14 @@ def run_agent_research_current(  # noqa: C901 - explicit admitted feature states
                     "reason": item.reason,
                 }
                 for item in result.context_outcomes
+            ]
+            or [
+                {
+                    "feature": name,
+                    "availability": "NOT_ATTEMPTED",
+                    "reason": "RETAINED_CONTEXT_NOT_PROVIDED",
+                }
+                for name in _CONTEXT_FEATURES
             ],
         }
         if result.packet is not None:

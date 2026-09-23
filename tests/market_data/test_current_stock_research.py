@@ -3165,3 +3165,59 @@ def test_agent_research_run_unexpected_failure_emits_no_partial_json(
     )
     output = capsys.readouterr()
     assert output.out == "" and output.err == "internal_error\n"
+
+
+def test_agent_research_run_terminal_mapping_failure_has_typed_missing_facts(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    clock, sources = _Clock(), _watchlist_sources()
+    sources.failure_url = UPSTOX_NSE_INSTRUMENTS_URL
+    prices = _Prices(clock)
+
+    def research(
+        symbol: str, storage_root: Path, *, question: str, refresh: bool = False
+    ) -> CurrentStockResearchResultV2:
+        return research_current_stock_v2(
+            symbol,
+            storage_root,
+            question=cast(workflow_v2.QuestionV2, question),
+            refresh=refresh,
+            clock=clock,
+            calendar_transport=sources,
+            snapshot_transport=sources,
+            price_client=cast(BharatStockClient, prices),
+        )
+
+    assert (
+        main(
+            [
+                "research-run-current",
+                "--symbol",
+                "PNB",
+                "--storage-root",
+                str(tmp_path),
+                "--output",
+                "json",
+            ],
+            current_stock_research_v2=research,
+        )
+        == 1
+    )
+    report = json.loads(capsys.readouterr().out)
+    row = report["members"][0]
+    assert row["research_status"] == "UNAVAILABLE"
+    assert row["canonical_stock"] is None
+    assert set(row["features"]) == {
+        "CANDLE_GEOMETRY",
+        "PREVIOUS_CLOSE_COMPARISON",
+        "MARKET_STRUCTURE",
+    }
+    for feature in row["features"].values():
+        assert feature["availability"] == "UNAVAILABLE"
+        assert feature["support"] == "NOT_ESTABLISHED"
+        assert feature["reason"] == row["research_code"]
+        assert feature["fact"] is None
+        assert feature["source_identity_sha256"] is None
+    assert [item["availability"] for item in row["context"]] == ["NOT_ATTEMPTED"] * 3
+    assert report["jointly_comparable"] is False
+    assert prices.calls == []
