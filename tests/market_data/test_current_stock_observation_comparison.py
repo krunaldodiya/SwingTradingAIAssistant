@@ -9,7 +9,7 @@ import json
 import sys
 from dataclasses import fields, replace
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
+from decimal import ROUND_DOWN, Context, Decimal, localcontext
 from pathlib import Path
 from typing import cast
 
@@ -374,6 +374,28 @@ def test_numerically_equal_decimals_are_canonical_unchanged_values(
         "5",
         "0",
     )
+
+
+def test_comparison_is_independent_of_ambient_decimal_context(tmp_path: Path) -> None:
+    previous = _observation(
+        tmp_path / "previous",
+        datetime(2026, 8, 26, 4, 15, tzinfo=UTC),
+        close=Decimal("105.12345"),
+    )
+    current = _observation(
+        tmp_path / "current",
+        datetime(2026, 8, 27, 4, 15, tzinfo=UTC),
+        close=Decimal("108.98765"),
+    )
+    expected = compare_current_stock_observations_v1(previous, current)
+
+    with localcontext(Context(prec=5, rounding=ROUND_DOWN)) as ambient:
+        actual = compare_current_stock_observations_v1(previous, current)
+        assert ambient.prec == 5
+        assert ambient.rounding == ROUND_DOWN
+
+    assert actual.canonical_json_bytes() == expected.canonical_json_bytes()
+    assert actual.status == "COMPARABLE"
 
 
 def test_another_canonical_stock_uses_the_same_comparison_contract(

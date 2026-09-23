@@ -6,7 +6,15 @@ import hashlib
 import json
 from dataclasses import dataclass, field, fields, is_dataclass
 from datetime import UTC, date, datetime
-from decimal import Decimal
+from decimal import (
+    ROUND_HALF_EVEN,
+    Context,
+    Decimal,
+    DivisionByZero,
+    InvalidOperation,
+    Overflow,
+    localcontext,
+)
 from pathlib import Path
 from typing import Final, Literal, TypeAlias, cast
 
@@ -50,6 +58,19 @@ ComparisonStateV1: TypeAlias = Literal[
     "NEWLY_UNAVAILABLE",
     "UNAVAILABLE_IN_BOTH",
 ]
+
+
+def _comparison_decimal_context() -> Context:
+    return Context(
+        prec=512,
+        rounding=ROUND_HALF_EVEN,
+        Emin=-999999,
+        Emax=999999,
+        capitals=1,
+        clamp=0,
+        flags=[],
+        traps=[InvalidOperation, DivisionByZero, Overflow],
+    )
 
 
 def _wire(value: object) -> object:
@@ -402,6 +423,14 @@ def compare_current_stock_observations_v1(
     current: CurrentStockResearchResultV2,
 ) -> CurrentStockObservationComparisonV1:
     """Compare exactly two admitted V2 observations in deterministic order."""
+    with localcontext(_comparison_decimal_context()):
+        return _compare_current_stock_observations_v1(previous, current)
+
+
+def _compare_current_stock_observations_v1(
+    previous: CurrentStockResearchResultV2,
+    current: CurrentStockResearchResultV2,
+) -> CurrentStockObservationComparisonV1:
     try:
         previous_admitted = _observation(previous)
         current_admitted = _observation(current)
