@@ -22,7 +22,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 DEMO = "swing_trading_ai_assistant._examples.single_stock_research_demo"
 EXPECTED_SYNTHETIC_IDENTITY = (
-    "3265f50751b26a0bf5c8fab13d3f3d90f500a8c44b38440402daf7af6c0bcb97"
+    "1d327b0649fadeaf1adbb2bc2ab068efe68a47c54bd9c7e20a5a7029471d2b2f"
 )
 MUTABLE_SOURCE = (
     ROOT / "src/swing_trading_ai_assistant/market_structure/current_live.py"
