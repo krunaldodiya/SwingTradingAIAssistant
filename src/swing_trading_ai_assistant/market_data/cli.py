@@ -33,6 +33,7 @@ from swing_trading_ai_assistant.research_packet.current_price_context_v2 import 
 )
 
 from .account_rate_limit import ThreadSafeAccountRateLimiterV1
+from .agent_research_run import run_agent_research_current
 from .bounded_nifty50_workflow import (
     BoundedNifty50DownloadReportV1,
     BoundedNifty50DownloadRequestV1,
@@ -562,6 +563,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--close-direction", choices=("UP", "DOWN", "UNCHANGED"), required=True
     )
     watchlist.add_argument("--output", choices=("json",), required=True)
+    agent_run = commands.add_parser(
+        "research-run-current",
+        help="return compact admitted current research facts for an explicit stock list",
+    )
+    agent_run.add_argument("--symbol", action="append", required=True)
+    agent_run.add_argument(
+        "--storage-root",
+        type=Path,
+        required=True,
+        metavar="ABSOLUTE_OWNER_PRIVATE_ROOT",
+    )
+    agent_run.add_argument("--output", choices=("json",), required=True)
     probe = commands.add_parser(
         "probe-upstox",
         help="validate a master-catalog instrument without writing candle data",
@@ -623,6 +636,8 @@ def main(  # noqa: C901 - command dispatch remains explicit.
             )
         if args.command == "watchlist-screen-current":
             return _run_watchlist_screen_command(args, current_stock_research_v2)
+        if args.command == "research-run-current":
+            return _run_agent_research_command(args, current_stock_research_v2)
         if args.command in {"regime-current", "price-context-current"}:
             return _run_current_packet_command(args, trusted_clock or _SystemClock())
         if args.command == "historical-ohlcv-upstox-raw":
@@ -659,6 +674,39 @@ def _run_watchlist_screen_command(
     sys.stdout.buffer.write(payload)
     members = cast(list[dict[str, object]], report["members"])
     return 0 if all(row["status"] != "UNKNOWN" for row in members) else 1
+
+
+def _run_agent_research_command(
+    args: argparse.Namespace, service: CurrentStockResearchPortV2 | None
+) -> int:
+    try:
+        report = run_agent_research_current(
+            tuple(args.symbol),
+            args.storage_root,
+            research=research_current_stock_v2 if service is None else service,
+        )
+    except CurrentStockResearchInputError:
+        sys.stderr.write("request_invalid\n")
+        return 2
+    payload = (
+        json.dumps(report, sort_keys=True, separators=(",", ":")) + "\n"
+    ).encode()
+    sys.stdout.buffer.write(payload)
+    members = cast(list[dict[str, object]], report["members"])
+    return (
+        0
+        if all(
+            row["features"]
+            and all(
+                feature["fact"] is not None
+                for feature in cast(
+                    dict[str, dict[str, object]], row["features"]
+                ).values()
+            )
+            for row in members
+        )
+        else 1
+    )
 
 
 def _run_research_current_command(
