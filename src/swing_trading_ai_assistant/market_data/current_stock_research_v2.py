@@ -83,6 +83,9 @@ _IST: Final = ZoneInfo("Asia/Kolkata")
 # fewer than 21 completed sessions: report Structure insufficiency while
 # preserving independently supported geometry and comparison facts.
 _LOOKBACK_DAYS: Final = 32
+# The opt-in agent fallback needs S plus 21 predecessors. Preserve the default
+# question's 32-day selection while allowing a bounded holiday margin for P.
+_PREVIOUS_LOOKBACK_DAYS: Final = 40
 _LIMITATIONS: Final = (
     "current_research_question_readiness_only",
     "source_reported_bharatstock_ohlc",
@@ -586,6 +589,38 @@ def research_previous_completed_stock_v2(
         raise error.error from None
 
 
+def confirm_latest_completed_stock_v2(
+    symbol: str,
+    storage_root: Path,
+    initial: CurrentStockResearchResultV2,
+    *,
+    clock: legacy.CurrentStockResearchClockV1 | None = None,
+    calendar_transport: HttpTransport | None = None,
+    snapshot_transport: HttpTransport | None = None,
+    price_client: BharatStockClient | None = None,
+) -> CurrentStockResearchResultV2:
+    """Recheck S after wider captures, under the original selection and deadline."""
+    initial.canonical_json_bytes()
+    if initial.symbol != symbol or initial.question != "INTEGRATED_CURRENT_RESEARCH":
+        raise legacy.CurrentStockResearchInputError("latest confirmation mismatch")
+    try:
+        return _research_current_stock_v2(
+            symbol,
+            storage_root,
+            question="LATEST_COMPLETED_CANDLE",
+            refresh=True,
+            clock=clock,
+            calendar_transport=calendar_transport,
+            snapshot_transport=snapshot_transport,
+            price_client=price_client,
+            previous_session=False,
+            selection_override=initial.data_selection_time,
+            deadline_override=initial.acquisition_deadline,
+        )
+    except legacy._ClockCallbackFailure as error:  # pyright: ignore[reportPrivateUsage]
+        raise error.error from None
+
+
 def _research_current_stock_v2(  # noqa: C901 - explicit stage boundaries are intentional.
     symbol: str,
     storage_root: Path,
@@ -637,7 +672,12 @@ def _research_current_stock_v2(  # noqa: C901 - explicit stage boundaries are in
                 ),
                 clock=window.now,
                 coverage_from=selection.astimezone(_IST).date()
-                - timedelta(days=_LOOKBACK_DAYS - 1),
+                - timedelta(
+                    days=(
+                        _PREVIOUS_LOOKBACK_DAYS if previous_session else _LOOKBACK_DAYS
+                    )
+                    - 1
+                ),
                 as_of=window.deadline,
             )
             window.ensure_live()

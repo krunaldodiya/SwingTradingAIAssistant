@@ -76,6 +76,7 @@ from .current_stock_research import (
 from .current_stock_research_v2 import (
     CurrentStockResearchResultV2,
     QuestionV2,
+    confirm_latest_completed_stock_v2,
     research_current_stock_v2,
     research_previous_completed_stock_v2,
 )
@@ -623,6 +624,10 @@ def main(  # noqa: C901 - command dispatch remains explicit.
     current_cohort_service: CurrentCohortServicePortV1 | None = None,
     current_stock_research: CurrentStockResearchPortV1 | None = None,
     current_stock_research_v2: CurrentStockResearchPortV2 | None = None,
+    current_stock_research_confirm_v2: Callable[
+        [str, Path, CurrentStockResearchResultV2], CurrentStockResearchResultV2
+    ]
+    | None = None,
     current_stock_research_previous_v2: Callable[
         [str, Path, CurrentStockResearchResultV2], CurrentStockResearchResultV2
     ]
@@ -650,6 +655,7 @@ def main(  # noqa: C901 - command dispatch remains explicit.
             return _run_agent_research_command(
                 args,
                 current_stock_research_v2,
+                current_stock_research_confirm_v2,
                 current_stock_research_previous_v2,
             )
         if args.command in {"regime-current", "price-context-current"}:
@@ -693,6 +699,10 @@ def _run_watchlist_screen_command(
 def _run_agent_research_command(
     args: argparse.Namespace,
     service: CurrentStockResearchPortV2 | None,
+    confirm_service: Callable[
+        [str, Path, CurrentStockResearchResultV2], CurrentStockResearchResultV2
+    ]
+    | None,
     previous_service: Callable[
         [str, Path, CurrentStockResearchResultV2], CurrentStockResearchResultV2
     ]
@@ -704,6 +714,11 @@ def _run_agent_research_command(
                 tuple(args.symbol),
                 args.storage_root,
                 research=research_current_stock_v2 if service is None else service,
+                confirm_research=(
+                    confirm_latest_completed_stock_v2
+                    if confirm_service is None
+                    else confirm_service
+                ),
                 previous_research=(
                     research_previous_completed_stock_v2
                     if previous_service is None

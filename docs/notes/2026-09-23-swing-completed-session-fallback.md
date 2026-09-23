@@ -35,6 +35,11 @@ official close, S is already the prior completed trading session.
    existing source, identity, cutoff, schedule and storage rules.
 2. If the provider has not supplied S's **completed** daily bar, try exactly
    one earlier anchor, the immediately preceding official trading session P.
+   Confirm S is still absent after the wider S-anchored captures, within the
+   original decision deadline; an observed S fact or an invalid/conflicting
+   wider outcome blocks fallback. The versioned mode may acquire up to 40
+   calendar days of official schedule solely to establish S plus 21 prior
+   sessions after holidays; the default V2 question retains its 32-day request.
    Require a complete, admitted 21-session window ending at P (P and its
    previous 20). Shift the one-session candle, two-session previous-close and
    21-session structure windows **together** for that stock. Do not mix a

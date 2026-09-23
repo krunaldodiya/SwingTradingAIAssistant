@@ -34,6 +34,7 @@ ResearchService = Callable[..., CurrentStockResearchResultV2]
 PreviousResearchService = Callable[
     [str, Path, CurrentStockResearchResultV2], CurrentStockResearchResultV2
 ]
+ConfirmResearchService = PreviousResearchService
 _ALLOWED = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.&_-"
 _FEATURES = ("CANDLE_GEOMETRY", "PREVIOUS_CLOSE_COMPARISON", "MARKET_STRUCTURE")
 _CONTEXT_FEATURES = ("EVENT_NOTICES", "MARKET_REGIME", "INDUSTRY_PARTICIPATION")
@@ -297,7 +298,8 @@ def _fallback_dates(
     if len(geometry.requested_sessions) != 1:
         return None, None
     latest = geometry.requested_sessions[0]
-    feature = packet.members[0].feature("CANDLE_GEOMETRY")
+    member = packet.members[0]
+    feature = member.feature("CANDLE_GEOMETRY")
     if (
         feature is None
         or feature.availability != "INSUFFICIENT_EVIDENCE"
@@ -308,9 +310,47 @@ def _fallback_dates(
         or len(structure.requested_sessions) != 21
         or structure.requested_sessions[-1] != latest
         or structure.requested_sessions[-2] != comparison.requested_sessions[0]
+        or any(
+            (outcome := member.feature(slot.feature)) is None
+            or outcome.availability != "INSUFFICIENT_EVIDENCE"
+            or outcome.reason not in {"EMPTY_HISTORY", "HISTORY_INCOMPLETE"}
+            for slot in (comparison, structure)
+        )
     ):
         return latest, None
     return latest, comparison.requested_sessions[0]
+
+
+def _confirmed_latest_absence(
+    initial: CurrentStockResearchResultV2,
+    confirmation: CurrentStockResearchResultV2,
+    latest: date,
+) -> bool:
+    confirmation.canonical_json_bytes()
+    first, second = initial.packet, confirmation.packet
+    if (
+        type(first) is not BharatStockResearchPacketV2
+        or type(second) is not BharatStockResearchPacketV2
+        or confirmation.question != "LATEST_COMPLETED_CANDLE"
+        or confirmation.symbol != initial.symbol
+        or confirmation.data_selection_time != initial.data_selection_time
+        or confirmation.acquisition_deadline != initial.acquisition_deadline
+        or second.shared_stop_code is not None
+        or first.members[0].member != second.members[0].member
+        or first.mapping_projection.members[0].mapping_identity_sha256
+        != second.mapping_projection.members[0].mapping_identity_sha256
+    ):
+        return False
+    second = validate_bharatstock_research_packet_v2(second)
+    geometry = second.members[0].feature("CANDLE_GEOMETRY")
+    slot = second.feature_slots[0]
+    return (
+        geometry is not None
+        and geometry.availability == "INSUFFICIENT_EVIDENCE"
+        and geometry.reason == "EMPTY_HISTORY"
+        and slot.feature == "CANDLE_GEOMETRY"
+        and slot.requested_sessions == (latest,)
+    )
 
 
 def _admitted_previous_packet(
@@ -329,11 +369,22 @@ def _admitted_previous_packet(
         or initial.acquisition_deadline != candidate.acquisition_deadline
         or first.mapping_projection.members[0].mapping_identity_sha256
         != second.mapping_projection.members[0].mapping_identity_sha256
-        or first.mapping_projection.schedule_identity_sha256
-        != second.mapping_projection.schedule_identity_sha256
     ):
         return False
     second = validate_bharatstock_research_packet_v2(second)
+    first_structure = next(
+        slot for slot in first.feature_slots if slot.feature == "MARKET_STRUCTURE"
+    )
+    second_structure = next(
+        slot for slot in second.feature_slots if slot.feature == "MARKET_STRUCTURE"
+    )
+    if (
+        len(first_structure.requested_sessions) != 21
+        or len(second_structure.requested_sessions) != 21
+        or second_structure.requested_sessions[1:]
+        != first_structure.requested_sessions[:-1]
+    ):
+        return False
     lengths = {
         "CANDLE_GEOMETRY": 1,
         "PREVIOUS_CLOSE_COMPARISON": 2,
@@ -376,6 +427,7 @@ def run_agent_swing_research_current(  # noqa: C901 - selection and output check
     storage_root: Path,
     *,
     research: ResearchService,
+    confirm_research: ConfirmResearchService,
     previous_research: PreviousResearchService,
 ) -> dict[str, object]:
     """Versioned agent result with at most one admitted prior-session anchor."""
@@ -401,6 +453,14 @@ def run_agent_swing_research_current(  # noqa: C901 - selection and output check
                 if geometry is not None and geometry.availability == "OBSERVED"
                 else "NOT_ELIGIBLE",
             )
+            return initial
+        confirmation = confirm_research(symbol, root, initial)
+        if (
+            type(confirmation) is not CurrentStockResearchResultV2
+            or latest is None
+            or not _confirmed_latest_absence(initial, confirmation, latest)
+        ):
+            decisions[symbol] = (latest, "LATEST_NOT_CONFIRMED")
             return initial
         candidate = previous_research(symbol, root, initial)
         if type(candidate) is not CurrentStockResearchResultV2:

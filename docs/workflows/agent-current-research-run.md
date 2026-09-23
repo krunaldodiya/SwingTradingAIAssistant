@@ -16,7 +16,9 @@ The command may contact the existing official calendar and mapping sources and B
 `--contract-version v2` first asks BharatStock for the latest officially
 completed session S and its preceding 20 sessions. If S's completed bar is
 explicitly missing, it tries one 21-session window ending at the immediately
-previous official session P. All three price/structure features shift together
+previous official session P. It first rechecks the missing bar after the wider
+requests under the original deadline; conflicting or invalid latest-session
+evidence blocks the fallback. All three price/structure features shift together
 only when P's complete window is admitted. Each stock reports S, its selected
 evidence end date, a zero- or one-session lag, and the fallback outcome. Mixed
 S/P dates make the batch `jointly_comparable=false`. Missing P, invalid or
