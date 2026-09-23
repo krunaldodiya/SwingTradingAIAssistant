@@ -8,7 +8,7 @@ CURRENT_STOCK_RESEARCH_RUNTIME_SOURCE_SHA256_V1: Final[dict[str, str]] = {
     "src/swing_trading_ai_assistant/market_data/bharatstock_capture_runtime_identity_manifest.py": "97e8ed6de391762ad081373996c73de49681cfd09eb1ddb589d86507b779d11c",
     "src/swing_trading_ai_assistant/market_data/capture_forward_adjusted_ohlcv.py": "392431179a4ec08d18f117fc584c6c8b413e5646102f20618b8745bfa292b8b7",
     "src/swing_trading_ai_assistant/market_data/catalog.py": "ae17eac5475a39d5ff08173e9b2154c0cf33778f573e7d894656a2ba685294ac",
-    "src/swing_trading_ai_assistant/market_data/cli.py": "9d79dd22b308defb68bb66549fa56669d254c81c9c968a156210beb91f2f0db5",
+    "src/swing_trading_ai_assistant/market_data/cli.py": "bcd4a9dcbdfbb7f4180ffef7bf56eadd62d19c95bc59ce1d7fe185a18e1dee6f",
     "src/swing_trading_ai_assistant/market_data/corporate_actions.py": "1d74c5cc7e94470452377491d5fa6ead801833bb4f17b4bae3305e73058cd9cc",
     "src/swing_trading_ai_assistant/market_data/current_event_notice.py": "0bf3a93e1b777a5d0062b99814681f02b0d9e206448e46f7edcb8fbebff12fef",
     "src/swing_trading_ai_assistant/market_data/current_evidence_acquisition.py": "b5d1c5173ffaa1ec58c76d49645627feb7c56ea514966d083f0c98cf77408897",

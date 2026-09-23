@@ -21,6 +21,7 @@ from urllib.response import addinfourl
 
 import pytest
 
+from swing_trading_ai_assistant.market_data import agent_research_run as agent_api
 from swing_trading_ai_assistant.market_data import bharatstock_capture as capture_api
 from swing_trading_ai_assistant.market_data import (
     capture_forward_adjusted_ohlcv as private_store,
@@ -2817,3 +2818,350 @@ def test_default_mapping_response_failures_are_scoped_outcomes(
     assert result.stage == "mapping" and result.code == "MAPPING_UNAVAILABLE"
     assert requests == [UPSTOX_NSE_INSTRUMENTS_URL]
     assert prices.calls == []
+
+
+def test_agent_research_run_projects_three_stocks_without_raw_data(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    clock, sources = _Clock(), _watchlist_sources()
+    prices = _Prices(clock)
+    prices.full_history = True
+
+    def research(
+        symbol: str, storage_root: Path, *, question: str, refresh: bool = False
+    ) -> CurrentStockResearchResultV2:
+        prices.close = Decimal(
+            105 if symbol == "PNB" else 95 if symbol == "RELIANCE" else 100
+        )
+        return research_current_stock_v2(
+            symbol,
+            storage_root,
+            question=cast(workflow_v2.QuestionV2, question),
+            refresh=refresh,
+            clock=clock,
+            calendar_transport=sources,
+            snapshot_transport=sources,
+            price_client=cast(BharatStockClient, prices),
+        )
+
+    code = main(
+        [
+            "research-run-current",
+            "--symbol",
+            "PNB",
+            "--symbol",
+            "RELIANCE",
+            "--symbol",
+            "TCS",
+            "--storage-root",
+            str(tmp_path),
+            "--output",
+            "json",
+        ],
+        current_stock_research_v2=research,
+    )
+    output = capsys.readouterr()
+    assert code == 0, output.err
+    document = json.loads(output.out)
+    assert document["contract_version"] == "agent-current-research-run@v1"
+    assert [row["requested_symbol"] for row in document["members"]] == [
+        "PNB",
+        "RELIANCE",
+        "TCS",
+    ]
+    assert document["jointly_comparable"] is True
+    assert [
+        row["features"]["PREVIOUS_CLOSE_COMPARISON"]["fact"]["close_vs_previous_close"]
+        for row in document["members"]
+    ] == ["UP", "DOWN", "UNCHANGED"]
+    assert all(
+        row["features"]["MARKET_STRUCTURE"]["fact"] is not None
+        for row in document["members"]
+    )
+    assert all(len(row["context"]) == 3 for row in document["members"])
+    assert all(row["research_result_identity_sha256"] for row in document["members"])
+    assert "source_bars" not in output.out
+    assert "adjusted_bars" not in output.out
+    assert "private provider detail" not in output.out
+    assert str(tmp_path) not in output.out
+
+
+def test_agent_research_run_rejects_invalid_list_before_research(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def forbidden(*_args: object, **_kwargs: object) -> CurrentStockResearchResultV2:
+        raise AssertionError("research called")
+
+    for symbols in (("PNB", "PNB"), tuple(f"S{i}" for i in range(11)), ("pnb",)):
+        args = [
+            "research-run-current",
+            *[part for symbol in symbols for part in ("--symbol", symbol)],
+            "--storage-root",
+            str(tmp_path),
+            "--output",
+            "json",
+        ]
+        assert main(args, current_stock_research_v2=forbidden) == 2
+        output = capsys.readouterr()
+        assert output.out == ""
+
+
+def test_agent_research_run_preserves_missing_feature_reason(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    clock, sources = _Clock(), _watchlist_sources()
+    prices = _Prices(clock)
+
+    def research(
+        symbol: str, storage_root: Path, *, question: str, refresh: bool = False
+    ) -> CurrentStockResearchResultV2:
+        return research_current_stock_v2(
+            symbol,
+            storage_root,
+            question=cast(workflow_v2.QuestionV2, question),
+            refresh=refresh,
+            clock=clock,
+            calendar_transport=sources,
+            snapshot_transport=sources,
+            price_client=cast(BharatStockClient, prices),
+        )
+
+    assert (
+        main(
+            [
+                "research-run-current",
+                "--symbol",
+                "PNB",
+                "--storage-root",
+                str(tmp_path),
+                "--output",
+                "json",
+            ],
+            current_stock_research_v2=research,
+        )
+        == 1
+    )
+    row = json.loads(capsys.readouterr().out)["members"][0]
+    assert row["features"]["MARKET_STRUCTURE"]["fact"] is None
+    assert row["features"]["MARKET_STRUCTURE"]["reason"]
+    assert row["features"]["CANDLE_GEOMETRY"]["fact"] is not None
+
+
+def test_agent_research_run_mixed_provider_failure_preserves_other_stock(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    clock, sources = _Clock(), _watchlist_sources()
+    prices = _Prices(clock)
+    prices.full_history = True
+
+    def research(
+        symbol: str, storage_root: Path, *, question: str, refresh: bool = False
+    ) -> CurrentStockResearchResultV2:
+        prices.failure = (
+            BharatStockError("EMPTY_HISTORY", member_local=True)
+            if symbol == "RELIANCE"
+            else None
+        )
+        return research_current_stock_v2(
+            symbol,
+            storage_root,
+            question=cast(workflow_v2.QuestionV2, question),
+            refresh=refresh,
+            clock=clock,
+            calendar_transport=sources,
+            snapshot_transport=sources,
+            price_client=cast(BharatStockClient, prices),
+        )
+
+    assert (
+        main(
+            [
+                "research-run-current",
+                "--symbol",
+                "PNB",
+                "--symbol",
+                "RELIANCE",
+                "--storage-root",
+                str(tmp_path),
+                "--output",
+                "json",
+            ],
+            current_stock_research_v2=research,
+        )
+        == 1
+    )
+    output = capsys.readouterr().out
+    report = json.loads(output)
+    assert report["members"][0]["features"]["CANDLE_GEOMETRY"]["fact"] is not None
+    assert report["members"][1]["features"]["CANDLE_GEOMETRY"]["fact"] is None
+    assert report["jointly_comparable"] is False
+    assert "private provider detail" not in output
+
+
+def test_agent_research_run_rejects_duplicate_canonical_mapping(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    clock, sources = _Clock(), _watchlist_sources()
+    sources.rows[1]["isin"] = sources.rows[0]["isin"]
+    sources.rows[1]["instrument_key"] = sources.rows[0]["instrument_key"]
+    prices = _Prices(clock)
+
+    def research(
+        symbol: str, storage_root: Path, *, question: str, refresh: bool = False
+    ) -> CurrentStockResearchResultV2:
+        return research_current_stock_v2(
+            symbol,
+            storage_root,
+            question=cast(workflow_v2.QuestionV2, question),
+            refresh=refresh,
+            clock=clock,
+            calendar_transport=sources,
+            snapshot_transport=sources,
+            price_client=cast(BharatStockClient, prices),
+        )
+
+    assert (
+        main(
+            [
+                "research-run-current",
+                "--symbol",
+                "PNB",
+                "--symbol",
+                "RELIANCE",
+                "--storage-root",
+                str(tmp_path),
+                "--output",
+                "json",
+            ],
+            current_stock_research_v2=research,
+        )
+        == 2
+    )
+    output = capsys.readouterr()
+    assert output.out == "" and output.err == "request_invalid\n"
+
+
+def test_agent_research_run_source_drift_fails_before_provider_call(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def forbidden(*_args: object, **_kwargs: object) -> CurrentStockResearchResultV2:
+        raise AssertionError("provider called")
+
+    monkeypatch.setitem(
+        agent_api.AGENT_RESEARCH_RUN_RUNTIME_SOURCE_SHA256_V1,
+        "src/swing_trading_ai_assistant/market_data/agent_research_run.py",
+        "0" * 64,
+    )
+    assert (
+        main(
+            [
+                "research-run-current",
+                "--symbol",
+                "PNB",
+                "--storage-root",
+                str(tmp_path),
+                "--output",
+                "json",
+            ],
+            current_stock_research_v2=forbidden,
+        )
+        == 2
+    )
+    output = capsys.readouterr()
+    assert output.out == "" and output.err == "internal_error\n"
+
+
+def test_agent_research_run_does_not_compare_different_sessions(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    clock, sources = _Clock(), _watchlist_sources()
+    prices = _Prices(clock)
+    prices.full_history = True
+
+    def research(
+        symbol: str, storage_root: Path, *, question: str, refresh: bool = False
+    ) -> CurrentStockResearchResultV2:
+        if symbol == "RELIANCE":
+            clock.value = _NOW + timedelta(days=1)
+        return research_current_stock_v2(
+            symbol,
+            storage_root,
+            question=cast(workflow_v2.QuestionV2, question),
+            refresh=refresh,
+            clock=clock,
+            calendar_transport=sources,
+            snapshot_transport=sources,
+            price_client=cast(BharatStockClient, prices),
+        )
+
+    assert (
+        main(
+            [
+                "research-run-current",
+                "--symbol",
+                "PNB",
+                "--symbol",
+                "RELIANCE",
+                "--storage-root",
+                str(tmp_path),
+                "--output",
+                "json",
+            ],
+            current_stock_research_v2=research,
+        )
+        == 0
+    )
+    report = json.loads(capsys.readouterr().out)
+    first, second = report["members"]
+    assert (
+        first["features"]["CANDLE_GEOMETRY"]["fact"]["session"]
+        != second["features"]["CANDLE_GEOMETRY"]["fact"]["session"]
+    )
+    assert report["jointly_comparable"] is False
+    assert (
+        report["comparison_reason"]
+        == "MISSING_FEATURE_OR_SESSION_BASIS_OR_PROVENANCE_MISMATCH"
+    )
+
+
+def test_agent_research_run_unexpected_failure_emits_no_partial_json(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    clock, sources = _Clock(), _watchlist_sources()
+    prices = _Prices(clock)
+
+    def research(
+        symbol: str, storage_root: Path, *, question: str, refresh: bool = False
+    ) -> CurrentStockResearchResultV2:
+        if symbol == "RELIANCE":
+            raise RuntimeError("private provider detail")
+        return research_current_stock_v2(
+            symbol,
+            storage_root,
+            question=cast(workflow_v2.QuestionV2, question),
+            refresh=refresh,
+            clock=clock,
+            calendar_transport=sources,
+            snapshot_transport=sources,
+            price_client=cast(BharatStockClient, prices),
+        )
+
+    assert (
+        main(
+            [
+                "research-run-current",
+                "--symbol",
+                "PNB",
+                "--symbol",
+                "RELIANCE",
+                "--storage-root",
+                str(tmp_path),
+                "--output",
+                "json",
+            ],
+            current_stock_research_v2=research,
+        )
+        == 2
+    )
+    output = capsys.readouterr()
+    assert output.out == "" and output.err == "internal_error\n"
