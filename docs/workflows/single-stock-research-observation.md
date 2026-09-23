@@ -18,7 +18,9 @@ The complete PRICE_BEHAVIOR packet result identity is
 complete CURRENT_STRUCTURE is
 `745b23ece9459697f45ad4e4aaee5dfe3a34d61755fe3345df8de516ca5d59e5`.
 For each, the JSON field is `packet.result_identity_sha256`. They remain separate
-question results; this example creates no combined packet.
+question results; this example creates no combined packet. These are the identities
+of the 2026-09-22 observation. A later source-at-rest revision changes the
+runtime-bound identity while preserving the supplied synthetic facts.
 
 ## Assistant explanation from the supplied complete results
 

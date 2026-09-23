@@ -22,7 +22,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 DEMO = "swing_trading_ai_assistant._examples.single_stock_research_demo"
 EXPECTED_SYNTHETIC_IDENTITY = (
-    "03b7175c3a06c95c778b88ee4be6e7f2edb668eaf8cf7e7618ec327c96228c6a"
+    "3265f50751b26a0bf5c8fab13d3f3d90f500a8c44b38440402daf7af6c0bcb97"
 )
 MUTABLE_SOURCE = (
     ROOT / "src/swing_trading_ai_assistant/market_structure/current_live.py"
@@ -437,7 +437,9 @@ def verify(wheel: Path, receipt: Path | None, prior_commit: str) -> dict[str, ob
     revision = f"{head}-dirty" if dirty else head
     tag_revision = f"{head[:12]}-dirty" if dirty else head[:12]
     image = f"swing-trading-ai-assistant:{version}-{tag_revision}"
-    with tempfile.TemporaryDirectory(prefix="issue167-distribution-") as temp:
+    with tempfile.TemporaryDirectory(
+        prefix="issue167-distribution-", dir=Path.home()
+    ) as temp:
         scratch = Path(temp)
         context = scratch / "build-context"
         context.mkdir()

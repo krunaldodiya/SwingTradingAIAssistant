@@ -719,9 +719,10 @@ def _assert_private_locked_root(
     root: Path, descriptor: int, descriptor_stat: os.stat_result
 ) -> None:
     path_stat = os.stat(root, follow_symlinks=False)
-    if not _same_inode(path_stat, descriptor_stat) or os.listdir(descriptor) != [
-        _LOCK_NAME
-    ]:
+    if not _same_inode(path_stat, descriptor_stat):
+        raise StorageRootLeaseError
+    os.lseek(descriptor, 0, os.SEEK_SET)
+    if os.listdir(descriptor) != [_LOCK_NAME]:
         raise StorageRootLeaseError
 
 

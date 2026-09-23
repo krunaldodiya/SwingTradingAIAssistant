@@ -11,7 +11,7 @@ This is the first bounded distribution slice of [issue #167](https://github.com/
 
 ## Build and verify
 
-Use a clean checkout of the intended commit. Docker, `uv`, and Python 3.11 must be available. The verifier creates a temporary Docker build context containing only the wheel and hash-checked requirements exported from `uv.lock`; it passes no owner data or credentials to the build. It builds a versioned local image and writes a receipt with the exact source commit/tree, wheel and requirements SHA-256 values, local image ID, and exercised results.
+Use a clean checkout of the intended commit. Docker, `uv`, and Python 3.11 must be available. The verifier creates an owner-private temporary directory under the user's home directory so storage admission is checked on the host's persistent filesystem. Its Docker build context contains only the wheel and hash-checked requirements exported from `uv.lock`; it passes no owner data or credentials to the build. It builds a versioned local image and writes a receipt with the exact source commit/tree, wheel and requirements SHA-256 values, local image ID, and exercised results.
 
 ```sh
 uv sync --python 3.11 --extra dev --frozen
