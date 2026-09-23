@@ -4,12 +4,12 @@ from typing import Final
 
 CURRENT_RESEARCH_PACKET_RUNTIME_SOURCE_SHA256_V5: Final[dict[str, str]] = {
     "src/swing_trading_ai_assistant/research_packet/current_supplied_cohort_v5.py": "4dc0acce7c6f75a25b09d206b7245000e3545c42ab1d0eef0bc4a96c4bedced2",
-    "src/swing_trading_ai_assistant/research_packet/bharatstock_v2.py": "e0c39a2e160350cbc0bb430cceeb95bc0772b533397ae811162d9a5bbd62017d",
-    "src/swing_trading_ai_assistant/research_packet/bharatstock_v2_runtime_identity_manifest.py": "f158bbe7e2affc24d3e56c309db1bfa0057533ffb0acc7696ef6e80d5023f6ca",
+    "src/swing_trading_ai_assistant/research_packet/bharatstock_v2.py": "973275d0f00c79efe16b292a9d4c2b147ce452e572b59d88af3580dfa0d7bbd3",
+    "src/swing_trading_ai_assistant/research_packet/bharatstock_v2_runtime_identity_manifest.py": "dc615d74bb69458aa2bde5c1a8d18ccffeb7ee9d2bdb4fc35e83df88f3c7ee66",
     "src/swing_trading_ai_assistant/market_data/current_event_notice_v2.py": "1a9e211d3e852d8e6275b226a1fc853ac4e21269ba3fd768fe241916439ad794",
-    "src/swing_trading_ai_assistant/market_data/current_event_notice_v2_runtime_identity_manifest.py": "6ee2d397c7d4cb94a80a92c2a4d23fca5f1a95e749de72a5d6ab00cf184b9a01",
+    "src/swing_trading_ai_assistant/market_data/current_event_notice_v2_runtime_identity_manifest.py": "c32763b0abe74d63d047290039d78b32e055fab0aad1e56d0d6964a821546bb7",
     "src/swing_trading_ai_assistant/market_data/current_research_binding_v2.py": "977e48cc06e5cfccb27fc6576d4f27a93fac7e6e6f815aceb9d07e028625a442",
-    "src/swing_trading_ai_assistant/market_data/current_research_binding_v2_runtime_identity_manifest.py": "b01b247418b58e87c7b642cb767094dc167bedf5d3c8e46d59914e04d02b0c55",
+    "src/swing_trading_ai_assistant/market_data/current_research_binding_v2_runtime_identity_manifest.py": "c58367e89ed431e2fb38f83252a675edd576d4867728152bed42e354d976d0f4",
     "src/swing_trading_ai_assistant/market_data/current_same_pass_daily_v4.py": "1a423896676eb4b983c58ca5035bf29f29156fefd3b982462168c5e6232ec402",
     "src/swing_trading_ai_assistant/market_data/current_same_pass_daily_v4_runtime_identity_manifest.py": "15661e2d022afc5314fa690bafe130178a3d8f584e107a32b61d90bb5202edfb",
     "src/swing_trading_ai_assistant/market_data/current_corporate_action_screen.py": "32f6d2b8b954ca64006308f6af7370fd6489614db172297d818cf2422b946724",

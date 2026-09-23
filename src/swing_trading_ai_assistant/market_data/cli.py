@@ -12,6 +12,7 @@ import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
+from functools import partial
 from pathlib import Path
 from typing import Any, Literal, Never, Protocol, cast
 
@@ -713,7 +714,11 @@ def _run_agent_research_command(
             report = run_agent_swing_research_current(
                 tuple(args.symbol),
                 args.storage_root,
-                research=research_current_stock_v2 if service is None else service,
+                research=(
+                    partial(research_current_stock_v2, terminal_missing_diagnostic=True)
+                    if service is None
+                    else service
+                ),
                 confirm_research=(
                     confirm_latest_completed_stock_v2
                     if confirm_service is None

@@ -467,16 +467,16 @@ def test_retained_calendar_requires_current_reader_and_preserves_registry_bindin
         api.parse_current_calendar_evidence_v1(raw)
 
 
-def test_calendar_admits_exact_32_day_maximum_and_rejects_one_more_before_transport() -> (
+def test_calendar_admits_exact_40_day_maximum_and_rejects_one_more_before_transport() -> (
     None
 ):
     as_of = datetime(2026, 1, 1, 4, 30, tzinfo=UTC)
-    first = date(2025, 12, 1)
+    first = date(2025, 11, 23)
     transport = _CalendarTransport(_bodies(first, as_of))
     result = _acquire(transport, coverage_from=first, as_of=as_of)
     assert result.schedule.covered_from == first
     assert result.schedule.covered_to == date(2026, 1, 1)
-    assert len(result.observations.upstox_prior_year_timings) == 31
+    assert len(result.observations.upstox_prior_year_timings) == 39
     assert (
         api.parse_current_calendar_evidence_v1(result.canonical_json_bytes()).schedule
         == result.schedule

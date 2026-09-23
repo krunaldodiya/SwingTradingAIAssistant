@@ -40,6 +40,11 @@ official close, S is already the prior completed trading session.
    wider outcome blocks fallback. The versioned mode may acquire up to 40
    calendar days of official schedule solely to establish S plus 21 prior
    sessions after holidays; the default V2 question retains its 32-day request.
+   The agent run uses a distinct capture request identity to mark a missing
+   terminal S only when the provider returns exactly the preceding requested
+   rows for the correct stock within the original cutoff. Ambiguous legacy
+   `HISTORY_INCOMPLETE` never qualifies. The public V2 research question keeps
+   its existing request identity and failure reasons.
    Require a complete, admitted 21-session window ending at P (P and its
    previous 20). Shift the one-session candle, two-session previous-close and
    21-session structure windows **together** for that stock. Do not mix a

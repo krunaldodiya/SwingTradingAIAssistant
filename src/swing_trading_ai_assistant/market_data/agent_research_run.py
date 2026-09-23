@@ -313,7 +313,7 @@ def _fallback_dates(
         or any(
             (outcome := member.feature(slot.feature)) is None
             or outcome.availability != "INSUFFICIENT_EVIDENCE"
-            or outcome.reason not in {"EMPTY_HISTORY", "HISTORY_INCOMPLETE"}
+            or outcome.reason not in {"EMPTY_HISTORY", "LATEST_SESSION_MISSING"}
             for slot in (comparison, structure)
         )
     ):
@@ -339,6 +339,8 @@ def _confirmed_latest_absence(
         or first.members[0].member != second.members[0].member
         or first.mapping_projection.members[0].mapping_identity_sha256
         != second.mapping_projection.members[0].mapping_identity_sha256
+        or first.mapping_projection.schedule_identity_sha256
+        != second.mapping_projection.schedule_identity_sha256
     ):
         return False
     second = validate_bharatstock_research_packet_v2(second)

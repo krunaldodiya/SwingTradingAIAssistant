@@ -311,12 +311,14 @@ class CaptureRequestV2:
     runtime_code_identity_sha256: str = field(default_factory=_runtime_identity)
     configuration_identity_sha256: str = field(default_factory=_configuration_identity)
     contract_version: str = CONTRACT_VERSION_V3
+    terminal_missing_policy: Literal["LEGACY", "EXACT_LAST_SESSION"] = "LEGACY"
     request_identity_sha256: str = field(init=False)
 
     def __post_init__(self) -> None:
         cutoff = _instant(self.decision_cutoff)
         if (
             self.contract_version != CONTRACT_VERSION_V3
+            or self.terminal_missing_policy not in {"LEGACY", "EXACT_LAST_SESSION"}
             or type(self.members) is not tuple
             or not 1 <= len(self.members) <= _MAX_MEMBERS
             or any(type(member) is not BharatStockInstrument for member in self.members)
@@ -381,6 +383,8 @@ class CaptureRequestV2:
         }
         if include_request_identity:
             value["request_identity_sha256"] = self.request_identity_sha256
+        if self.terminal_missing_policy != "LEGACY":
+            value["terminal_missing_policy"] = self.terminal_missing_policy
         return value
 
 
@@ -894,6 +898,10 @@ def _request_from_value(value: object) -> CaptureRequestV2:
         runtime_code_identity_sha256=cast(str, row["runtime_code_identity_sha256"]),
         configuration_identity_sha256=cast(str, row["configuration_identity_sha256"]),
         contract_version=cast(str, row["contract_version"]),
+        terminal_missing_policy=cast(
+            Literal["LEGACY", "EXACT_LAST_SESSION"],
+            row.get("terminal_missing_policy", "LEGACY"),
+        ),
     )
     if row.get("request_identity_sha256") != request.request_identity_sha256:
         raise ValueError
@@ -1392,7 +1400,20 @@ def _capture_effect_guard(
     return guard
 
 
-def _member_result(
+def _exact_terminal_session_missing(
+    request: CaptureRequestV2,
+    member: BharatStockInstrument,
+    history: BharatStockHistory,
+) -> bool:
+    return (
+        request.terminal_missing_policy == "EXACT_LAST_SESSION"
+        and history.instrument == member
+        and history.retrieved_at <= request.decision_cutoff
+        and tuple(row.session for row in history.rows) == request.sessions[:-1]
+    )
+
+
+def _member_result(  # noqa: C901 - explicit provider and evidence boundaries
     request: CaptureRequestV2,
     member: BharatStockInstrument,
     client: BharatStockClient,
@@ -1428,6 +1449,10 @@ def _member_result(
     except ValueError:
         return CaptureMemberResultV2(
             member, "INSUFFICIENT_EVIDENCE", "HISTORY_INVALID", None
+        )
+    if _exact_terminal_session_missing(request, member, history):
+        return CaptureMemberResultV2(
+            member, "INSUFFICIENT_EVIDENCE", "LATEST_SESSION_MISSING", None
         )
     if (
         history.instrument != member

@@ -2915,6 +2915,7 @@ def test_agent_swing_run_uses_previous_complete_21_sessions_when_latest_bar_lags
             root,
             question=question,
             refresh=refresh,
+            terminal_missing_diagnostic=True,
             clock=clock,
             calendar_transport=sources,
             snapshot_transport=sources,
@@ -2975,9 +2976,12 @@ def test_agent_swing_run_uses_previous_complete_21_sessions_when_latest_bar_lags
     assert "source_bars" not in captured.out and str(tmp_path) not in captured.out
 
 
-@pytest.mark.parametrize("wider_failure", (False, True))
+@pytest.mark.parametrize(
+    "wider_outcome",
+    ("observed", "invalid", "wrong_instrument", "late", "other_missing"),
+)
 def test_agent_swing_run_does_not_hide_latest_bar_found_by_wider_capture(
-    wider_failure: bool, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    wider_outcome: str, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     clock, sources = _Clock(), _watchlist_sources()
     latest = clock.value.date() - timedelta(days=1)
@@ -2986,9 +2990,23 @@ def test_agent_swing_run_does_not_hide_latest_bar_found_by_wider_capture(
         def history(self, instrument, start, end, *, effect_guard=None):
             if start == end == latest:
                 raise BharatStockError("EMPTY_HISTORY", member_local=True)
-            if wider_failure and end == latest:
+            if wider_outcome == "invalid" and end == latest:
                 raise BharatStockError("PRICE_EVIDENCE_INVALID", member_local=True)
-            return super().history(instrument, start, end, effect_guard=effect_guard)
+            result = super().history(instrument, start, end, effect_guard=effect_guard)
+            if end != latest:
+                return result
+            if wider_outcome == "wrong_instrument":
+                return replace(
+                    result, instrument=replace(instrument, isin="INE000000000")
+                )
+            if wider_outcome == "late":
+                return replace(result, retrieved_at=clock.value + timedelta(days=1))
+            if wider_outcome == "other_missing":
+                return replace(
+                    result,
+                    rows=tuple(row for row in result.rows if row.session != start),
+                )
+            return result
 
     prices = InconsistentPrices(clock)
     prices.full_history = True
@@ -2999,6 +3017,7 @@ def test_agent_swing_run_does_not_hide_latest_bar_found_by_wider_capture(
             root,
             question=question,
             refresh=refresh,
+            terminal_missing_diagnostic=True,
             clock=clock,
             calendar_transport=sources,
             snapshot_transport=sources,
@@ -3036,9 +3055,9 @@ def test_agent_swing_run_does_not_hide_latest_bar_found_by_wider_capture(
     row = json.loads(capsys.readouterr().out)["members"][0]
     assert row["fallback_outcome"] == "NOT_ELIGIBLE"
     assert row["features"]["CANDLE_GEOMETRY"]["fact"] is None
-    assert (
-        row["features"]["PREVIOUS_CLOSE_COMPARISON"]["fact"] is None
-    ) is wider_failure
+    assert (row["features"]["PREVIOUS_CLOSE_COMPARISON"]["fact"] is None) is not (
+        wider_outcome == "observed"
+    )
 
 
 def test_agent_swing_run_prior_window_survives_holiday_at_calendar_edge(
@@ -3073,6 +3092,7 @@ def test_agent_swing_run_prior_window_survives_holiday_at_calendar_edge(
             root,
             question=question,
             refresh=refresh,
+            terminal_missing_diagnostic=True,
             clock=clock,
             calendar_transport=sources,
             snapshot_transport=sources,
@@ -3121,6 +3141,178 @@ def test_agent_swing_run_prior_window_survives_holiday_at_calendar_edge(
     assert row["lag_official_sessions"] == 1
 
 
+def test_agent_swing_run_rejects_changed_calendar_during_confirmation(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    clock, sources = _Clock(), _watchlist_sources()
+    latest = clock.value.date() - timedelta(days=1)
+
+    class LaggedPrices(_Prices):
+        def history(self, instrument, start, end, *, effect_guard=None):
+            if start == end == latest:
+                raise BharatStockError("EMPTY_HISTORY", member_local=True)
+            result = super().history(instrument, start, end, effect_guard=effect_guard)
+            return (
+                replace(
+                    result,
+                    rows=tuple(row for row in result.rows if row.session != latest),
+                )
+                if end == latest
+                else result
+            )
+
+    prices = LaggedPrices(clock)
+    prices.full_history = True
+
+    def current(symbol, root, *, question, refresh=False):
+        return research_current_stock_v2(
+            symbol,
+            root,
+            question=question,
+            refresh=refresh,
+            terminal_missing_diagnostic=True,
+            clock=clock,
+            calendar_transport=sources,
+            snapshot_transport=sources,
+            price_client=cast(BharatStockClient, prices),
+        )
+
+    def confirm(symbol, root, initial):
+        _declare_closures(sources, [date(2026, 8, 3)])
+        return workflow_v2.confirm_latest_completed_stock_v2(
+            symbol,
+            root,
+            initial,
+            clock=clock,
+            calendar_transport=sources,
+            snapshot_transport=sources,
+            price_client=cast(BharatStockClient, prices),
+        )
+
+    def forbidden(_symbol, _root, _initial):
+        raise AssertionError("changed official schedule forbids fallback")
+
+    assert (
+        main(
+            [
+                "research-run-current",
+                "--contract-version",
+                "v2",
+                "--symbol",
+                "PNB",
+                "--storage-root",
+                str(tmp_path),
+                "--output",
+                "json",
+            ],
+            current_stock_research_v2=current,
+            current_stock_research_confirm_v2=confirm,
+            current_stock_research_previous_v2=forbidden,
+        )
+        == 1
+    )
+    row = json.loads(capsys.readouterr().out)["members"][0]
+    assert row["fallback_outcome"] == "LATEST_NOT_CONFIRMED"
+    assert row["selected_evidence_end_session"] is None
+
+
+def test_agent_swing_run_recovers_after_confirmation_interruption(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    clock, sources = _Clock(), _watchlist_sources()
+    latest = clock.value.date() - timedelta(days=1)
+
+    class LaggedPrices(_Prices):
+        def history(self, instrument, start, end, *, effect_guard=None):
+            if start == end == latest:
+                raise BharatStockError("EMPTY_HISTORY", member_local=True)
+            result = super().history(instrument, start, end, effect_guard=effect_guard)
+            return (
+                replace(
+                    result,
+                    rows=tuple(row for row in result.rows if row.session != latest),
+                )
+                if end == latest
+                else result
+            )
+
+    prices = LaggedPrices(clock)
+    prices.full_history = True
+
+    def current(symbol, root, *, question, refresh=False):
+        return research_current_stock_v2(
+            symbol,
+            root,
+            question=question,
+            refresh=refresh,
+            terminal_missing_diagnostic=True,
+            clock=clock,
+            calendar_transport=sources,
+            snapshot_transport=sources,
+            price_client=cast(BharatStockClient, prices),
+        )
+
+    interrupted = False
+
+    def confirm(symbol, root, initial):
+        nonlocal interrupted
+        if not interrupted:
+            interrupted = True
+            raise KeyboardInterrupt
+        return workflow_v2.confirm_latest_completed_stock_v2(
+            symbol,
+            root,
+            initial,
+            clock=clock,
+            calendar_transport=sources,
+            snapshot_transport=sources,
+            price_client=cast(BharatStockClient, prices),
+        )
+
+    def previous(symbol, root, initial):
+        return workflow_v2.research_previous_completed_stock_v2(
+            symbol,
+            root,
+            initial,
+            clock=clock,
+            calendar_transport=sources,
+            snapshot_transport=sources,
+            price_client=cast(BharatStockClient, prices),
+        )
+
+    args = [
+        "research-run-current",
+        "--contract-version",
+        "v2",
+        "--symbol",
+        "PNB",
+        "--storage-root",
+        str(tmp_path),
+        "--output",
+        "json",
+    ]
+    with pytest.raises(KeyboardInterrupt):
+        main(
+            args,
+            current_stock_research_v2=current,
+            current_stock_research_confirm_v2=confirm,
+            current_stock_research_previous_v2=previous,
+        )
+    assert capsys.readouterr().out == ""
+    assert (
+        main(
+            args,
+            current_stock_research_v2=current,
+            current_stock_research_confirm_v2=confirm,
+            current_stock_research_previous_v2=previous,
+        )
+        == 0
+    )
+    row = json.loads(capsys.readouterr().out)["members"][0]
+    assert row["fallback_outcome"] == "APPLIED"
+    assert row["lag_official_sessions"] == 1
+
+
 @pytest.mark.parametrize(
     ("category", "member_local"),
     (("PRICE_EVIDENCE_INVALID", True), ("AUTHENTICATION", False)),
@@ -3141,6 +3333,7 @@ def test_agent_swing_run_does_not_fallback_after_nonmissing_price_failure(
             root,
             question=question,
             refresh=refresh,
+            terminal_missing_diagnostic=True,
             clock=clock,
             calendar_transport=sources,
             snapshot_transport=sources,
@@ -3192,9 +3385,8 @@ def test_agent_swing_run_keeps_missing_fact_when_previous_window_is_incomplete(
             if start == end and end in {latest, previous_day}:
                 raise BharatStockError("EMPTY_HISTORY", member_local=True)
             result = super().history(instrument, start, end, effect_guard=effect_guard)
-            rows = tuple(
-                row for row in result.rows if row.session not in {latest, previous_day}
-            )
+            omitted = latest if end == latest else previous_day
+            rows = tuple(row for row in result.rows if row.session != omitted)
             if not rows:
                 raise BharatStockError("EMPTY_HISTORY", member_local=True)
             return replace(
@@ -3211,6 +3403,7 @@ def test_agent_swing_run_keeps_missing_fact_when_previous_window_is_incomplete(
             root,
             question=question,
             refresh=refresh,
+            terminal_missing_diagnostic=True,
             clock=clock,
             calendar_transport=sources,
             snapshot_transport=sources,
@@ -3284,6 +3477,7 @@ def test_agent_swing_run_does_not_call_fallback_when_latest_bar_is_available(
             root,
             question=question,
             refresh=refresh,
+            terminal_missing_diagnostic=True,
             clock=clock,
             calendar_transport=sources,
             snapshot_transport=sources,
@@ -3355,6 +3549,7 @@ def test_agent_swing_run_prior_attempt_shares_the_original_deadline(
             root,
             question=question,
             refresh=refresh,
+            terminal_missing_diagnostic=True,
             clock=clock,
             calendar_transport=sources,
             snapshot_transport=sources,
@@ -3425,6 +3620,7 @@ def test_agent_swing_run_labels_mixed_latest_and_previous_stock_dates(
             root,
             question=question,
             refresh=refresh,
+            terminal_missing_diagnostic=True,
             clock=clock,
             calendar_transport=sources,
             snapshot_transport=sources,
@@ -3515,6 +3711,7 @@ def test_agent_research_run_preserves_missing_feature_reason(
             storage_root,
             question=cast(workflow_v2.QuestionV2, question),
             refresh=refresh,
+            terminal_missing_diagnostic=True,
             clock=clock,
             calendar_transport=sources,
             snapshot_transport=sources,
@@ -3562,6 +3759,7 @@ def test_agent_research_run_mixed_provider_failure_preserves_other_stock(
             storage_root,
             question=cast(workflow_v2.QuestionV2, question),
             refresh=refresh,
+            terminal_missing_diagnostic=True,
             clock=clock,
             calendar_transport=sources,
             snapshot_transport=sources,
@@ -3609,6 +3807,7 @@ def test_agent_research_run_rejects_duplicate_canonical_mapping(
             storage_root,
             question=cast(workflow_v2.QuestionV2, question),
             refresh=refresh,
+            terminal_missing_diagnostic=True,
             clock=clock,
             calendar_transport=sources,
             snapshot_transport=sources,
@@ -3683,6 +3882,7 @@ def test_agent_research_run_does_not_compare_different_sessions(
             storage_root,
             question=cast(workflow_v2.QuestionV2, question),
             refresh=refresh,
+            terminal_missing_diagnostic=True,
             clock=clock,
             calendar_transport=sources,
             snapshot_transport=sources,
@@ -3735,6 +3935,7 @@ def test_agent_research_run_unexpected_failure_emits_no_partial_json(
             storage_root,
             question=cast(workflow_v2.QuestionV2, question),
             refresh=refresh,
+            terminal_missing_diagnostic=True,
             clock=clock,
             calendar_transport=sources,
             snapshot_transport=sources,
@@ -3777,6 +3978,7 @@ def test_agent_research_run_terminal_mapping_failure_has_typed_missing_facts(
             storage_root,
             question=cast(workflow_v2.QuestionV2, question),
             refresh=refresh,
+            terminal_missing_diagnostic=True,
             clock=clock,
             calendar_transport=sources,
             snapshot_transport=sources,
