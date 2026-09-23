@@ -10,6 +10,15 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Final, Literal, TypeAlias, cast
 
+from swing_trading_ai_assistant.market_data import (
+    current_stock_research_v2 as current_research,
+)
+from swing_trading_ai_assistant.market_data.current_stock_research_v2 import (
+    CurrentStockResearchResultV2,
+)
+from swing_trading_ai_assistant.market_data.runtime_source_verifier import (
+    runtime_source_sha256,
+)
 from swing_trading_ai_assistant.research_packet.bharatstock_v2 import (
     BharatStockAdjustedMarketStructureFactV1,
     BharatStockCandleGeometryFactV2,
@@ -19,12 +28,9 @@ from swing_trading_ai_assistant.research_packet.bharatstock_v2 import (
     validate_bharatstock_research_packet_v2,
 )
 
-from . import current_stock_research_v2 as current_research
 from .current_stock_observation_comparison_runtime_identity_manifest import (
     CURRENT_STOCK_OBSERVATION_COMPARISON_RUNTIME_SOURCE_SHA256_V1,
 )
-from .current_stock_research_v2 import CurrentStockResearchResultV2
-from .runtime_source_verifier import runtime_source_sha256
 
 CONTRACT_VERSION_V1: Final = "current-stock-observation-comparison@v1"
 SCHEMA_IDENTITY_SHA256_V1: Final = hashlib.sha256(
@@ -89,7 +95,10 @@ def current_stock_observation_comparison_runtime_code_identity_v1() -> str:
         relative,
         expected,
     ) in CURRENT_STOCK_OBSERVATION_COMPARISON_RUNTIME_SOURCE_SHA256_V1.items():
-        module = ".".join(Path(relative).with_suffix("").parts[1:])
+        module_parts = Path(relative).with_suffix("").parts[1:]
+        if module_parts[-1] == "__init__":
+            module_parts = module_parts[:-1]
+        module = ".".join(module_parts)
         actual = runtime_source_sha256(module, root, relative)
         if actual != expected:
             raise ValueError("observation comparison runtime identity invalid")

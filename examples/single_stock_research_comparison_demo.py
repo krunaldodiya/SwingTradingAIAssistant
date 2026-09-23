@@ -24,13 +24,13 @@ from swing_trading_ai_assistant.market_data.bharatstock import (
     BharatStockClient,
     BharatStockHistory,
 )
-from swing_trading_ai_assistant.market_data.current_stock_observation_comparison_cli import (
-    main as research_cli,
-)
 from swing_trading_ai_assistant.market_data.current_stock_research_v2 import (
     CurrentStockResearchResultV2,
     QuestionV2,
     research_current_stock_v2,
+)
+from swing_trading_ai_assistant.research_comparison.current_stock_observation_comparison_cli import (
+    main as research_cli,
 )
 
 PREVIOUS = datetime(2026, 8, 26, 4, 15, tzinfo=UTC)

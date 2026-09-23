@@ -8,13 +8,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import NoReturn, Protocol
 
+from swing_trading_ai_assistant.market_data.current_stock_research_v2 import (
+    CurrentStockResearchResultV2,
+    QuestionV2,
+)
+
 from .current_stock_observation_comparison import (
     compare_current_stock_observations_v1,
     invalid_current_stock_observation_comparison_v1,
-)
-from .current_stock_research_v2 import (
-    CurrentStockResearchResultV2,
-    QuestionV2,
 )
 
 

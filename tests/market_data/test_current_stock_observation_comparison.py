@@ -19,21 +19,21 @@ from swing_trading_ai_assistant.market_data.bharatstock import (
     BharatStockClient,
     BharatStockHistory,
 )
-from swing_trading_ai_assistant.market_data.current_stock_observation_comparison import (
-    compare_current_stock_observations_v1,
-    current_stock_observation_comparison_runtime_code_identity_v1,
-)
-from swing_trading_ai_assistant.market_data.current_stock_observation_comparison_cli import (
-    main as comparison_cli,
-)
-from swing_trading_ai_assistant.market_data.current_stock_observation_comparison_runtime_identity_manifest import (
-    CURRENT_STOCK_OBSERVATION_COMPARISON_RUNTIME_SOURCE_SHA256_V1,
-)
 from swing_trading_ai_assistant.market_data.current_stock_research_v2 import (
     CurrentStockResearchResultV2,
     research_current_stock_v2,
 )
 from swing_trading_ai_assistant.market_data.http import HttpResponse
+from swing_trading_ai_assistant.research_comparison.current_stock_observation_comparison import (
+    compare_current_stock_observations_v1,
+    current_stock_observation_comparison_runtime_code_identity_v1,
+)
+from swing_trading_ai_assistant.research_comparison.current_stock_observation_comparison_cli import (
+    main as comparison_cli,
+)
+from swing_trading_ai_assistant.research_comparison.current_stock_observation_comparison_runtime_identity_manifest import (
+    CURRENT_STOCK_OBSERVATION_COMPARISON_RUNTIME_SOURCE_SHA256_V1,
+)
 from swing_trading_ai_assistant.research_packet import bharatstock_v2 as packet_v2
 
 _DEMO_PATH = (
@@ -586,7 +586,7 @@ def test_comparison_command_source_drift_invalidates_runtime_identity(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     cli_path = (
-        "src/swing_trading_ai_assistant/market_data/"
+        "src/swing_trading_ai_assistant/research_comparison/"
         "current_stock_observation_comparison_cli.py"
     )
     assert current_stock_observation_comparison_runtime_code_identity_v1()
