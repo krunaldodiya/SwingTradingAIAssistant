@@ -126,9 +126,12 @@ jobs:
 
       - name: Verify Linux wheel and OCI distribution
         if: steps.changes.outputs.full_gate == 'true'
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: >-
           uv run --no-sync --extra dev python scripts/verify_linux_distribution.py
           --wheel dist/swing_trading_ai_assistant-*.whl
+          --prior-commit "$PR_BASE_SHA"
           --receipt "$RUNNER_TEMP/linux-distribution-receipt.json"
 
       - name: Retain Linux distribution receipt

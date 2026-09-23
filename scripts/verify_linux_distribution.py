@@ -11,9 +11,12 @@ import hashlib
 import json
 import os
 import shutil
+import signal
 import subprocess
 import tempfile
+import time
 import tomllib
+import uuid
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -188,9 +191,17 @@ def _verify_mounts(image: str, scratch: Path) -> None:
     private.mkdir(mode=0o700)
     mapped_user = f"{os.getuid()}:{os.getgid()}"
     admitted = _mounted_request(image, private, user=mapped_user)
-    if admitted.returncode != 1 or json.loads(admitted.stdout)["stage"] == "storage":
+    admitted_value = json.loads(admitted.stdout)
+    if (
+        admitted.returncode != 1
+        or admitted_value["stage"] != "calendar"
+        or admitted_value["code"] != "HTTP_FAILURE"
+    ):
         raise RuntimeError("owner-mapped private volume was not admitted")
-    _assert_storage_stop(_mounted_request(image, private, user="10002:10002"))
+    sentinel = private / "preexisting-owner-data"
+    sentinel.write_text("unchanged synthetic marker\n")
+    wrong_user = f"{os.getuid() + 1}:{os.getgid() + 1}"
+    _assert_storage_stop(_mounted_request(image, private, user=wrong_user))
     broad = scratch / "broad"
     broad.mkdir(mode=0o755)
     _assert_storage_stop(_mounted_request(image, broad, user=mapped_user))
@@ -205,6 +216,8 @@ def _verify_mounts(image: str, scratch: Path) -> None:
     _assert_storage_stop(
         _mounted_request(image, private, user=mapped_user, selected="/data/link")
     )
+    if sentinel.read_text() != "unchanged synthetic marker\n":
+        raise RuntimeError("mounted owner data was changed by the image")
 
 
 def _verify_image_source(image: str, scratch: Path) -> None:
@@ -224,7 +237,180 @@ def _verify_image_source(image: str, scratch: Path) -> None:
         raise RuntimeError("altered image source produced a public CLI result")
 
 
-def verify(wheel: Path, receipt: Path | None) -> dict[str, object]:
+def _verify_interrupted_build(build: list[str], image: str) -> None:
+    interrupted_image = f"{image}-interrupted-{uuid.uuid4().hex[:8]}"
+    interrupted_build = build.copy()
+    interrupted_build[interrupted_build.index("--tag") + 1] = interrupted_image
+    interrupted_build.insert(-1, "--no-cache")
+    process = subprocess.Popen(  # noqa: S603 - fixed Docker command under review
+        interrupted_build,
+        cwd=ROOT,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    try:
+        try:
+            process.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            os.killpg(process.pid, signal.SIGTERM)
+            process.wait(timeout=10)
+        else:
+            raise RuntimeError("build ended before interruption was exercised")
+    finally:
+        if process.poll() is None:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.wait(timeout=10)
+    if _run(["docker", "image", "inspect", interrupted_image]).returncode == 0:
+        raise RuntimeError("interrupted build published an image")
+
+
+def _verify_interrupted_run(image: str) -> None:
+    run_name = f"issue167-interrupted-{uuid.uuid4().hex[:8]}"
+    run_command = [
+        *_container(image, entrypoint="python")[:-1],
+        "--name",
+        run_name,
+        image,
+        "-c",
+        "import time; time.sleep(30)",
+    ]
+    process = subprocess.Popen(  # noqa: S603 - fixed Docker command under review
+        run_command,
+        cwd=ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            running = _run(
+                ["docker", "inspect", run_name, "--format", "{{.State.Running}}"]
+            )
+            if running.returncode == 0 and running.stdout.strip() == b"true":
+                break
+            if process.poll() is not None:
+                raise RuntimeError("container exited before interruption")
+            time.sleep(0.1)
+        else:
+            raise RuntimeError("container never became ready for interruption")
+        _require_success(
+            _run(["docker", "kill", "--signal=KILL", run_name]),
+            "container interruption",
+        )
+        interrupted_stdout, _ = process.communicate(timeout=10)
+    finally:
+        if process.poll() is None:
+            _run(["docker", "kill", "--signal=KILL", run_name])
+            process.communicate(timeout=10)
+    if process.returncode != 137 or interrupted_stdout:
+        raise RuntimeError("interrupted container run did not fail closed")
+    if _run(["docker", "inspect", run_name]).returncode == 0:
+        raise RuntimeError("interrupted container was not removed")
+
+
+def _verify_interruption(build: list[str], image: str) -> None:
+    current_before = _run(["docker", "image", "inspect", image, "--format", "{{.Id}}"])
+    _require_success(current_before, "current image before interruption")
+    _verify_interrupted_build(build, image)
+    _verify_interrupted_run(image)
+    current_after = _run(["docker", "image", "inspect", image, "--format", "{{.Id}}"])
+    _require_success(current_after, "current image after interruption")
+    if current_before.stdout != current_after.stdout:
+        raise RuntimeError("interruption changed the current image")
+
+
+def _verify_rollback(
+    prior_commit: str, uv: str, requirements: Path, scratch: Path
+) -> str:
+    if len(prior_commit) != 40 or any(
+        character not in "0123456789abcdef" for character in prior_commit
+    ):
+        raise ValueError("prior commit must be a full lowercase Git SHA")
+    _require_success(
+        _run(["git", "merge-base", "--is-ancestor", prior_commit, "HEAD"]),
+        "prior commit ancestry",
+    )
+    prior_lock = _run(["git", "show", f"{prior_commit}:uv.lock"])
+    _require_success(prior_lock, "prior lock")
+    if prior_lock.stdout != (ROOT / "uv.lock").read_bytes():
+        raise RuntimeError("rollback dependency lock changed; prior export required")
+    prior_source = scratch / "prior-source"
+    prior_source.mkdir()
+    archive = scratch / "prior.tar"
+    _require_success(
+        _run(["git", "archive", "--format=tar", f"--output={archive}", prior_commit]),
+        "prior source archive",
+    )
+    _require_success(
+        _run(["tar", "-xf", str(archive), "-C", str(prior_source)]),
+        "prior source extraction",
+    )
+    prior_dist = scratch / "prior-dist"
+    _require_success(
+        _run(
+            [
+                uv,
+                "build",
+                "--no-build-isolation",
+                "--python",
+                str(ROOT / ".venv/bin/python"),
+                "--out-dir",
+                str(prior_dist),
+            ],
+            cwd=prior_source,
+        ),
+        "prior source distribution and wheel",
+    )
+    prior_wheels = list(prior_dist.glob("*.whl"))
+    if len(prior_wheels) != 1:
+        raise RuntimeError("rollback requires one prior wheel")
+    prior_venv = scratch / "prior-venv"
+    _require_success(
+        _run([uv, "venv", "--python", "3.11", str(prior_venv)]), "prior venv"
+    )
+    prior_python = str(prior_venv / "bin/python")
+    _require_success(
+        _run(
+            [
+                uv,
+                "pip",
+                "install",
+                "--python",
+                prior_python,
+                "--link-mode",
+                "copy",
+                "--require-hashes",
+                "-r",
+                str(requirements),
+            ]
+        ),
+        "prior locked dependencies",
+    )
+    _require_success(
+        _run(
+            [
+                uv,
+                "pip",
+                "install",
+                "--python",
+                prior_python,
+                "--link-mode",
+                "copy",
+                "--no-deps",
+                str(prior_wheels[0]),
+            ]
+        ),
+        "prior wheel install",
+    )
+    _require_success(
+        _run([str(prior_venv / "bin/market-data"), "--help"], cwd=scratch),
+        "prior CLI rollback run",
+    )
+    return _sha256(prior_wheels[0])
+
+
+def verify(wheel: Path, receipt: Path | None, prior_commit: str) -> dict[str, object]:
     if not wheel.is_file() or wheel.suffix != ".whl":
         raise ValueError("one built application wheel is required")
     project = tomllib.loads((ROOT / "pyproject.toml").read_text())
@@ -322,7 +508,9 @@ def verify(wheel: Path, receipt: Path | None) -> dict[str, object]:
         ]
         _require_success(_run(build, timeout=600), "OCI build")
         altered_digest = [
-            "0" * 64 if item == f"WHEEL_SHA256={wheel_digest}" else item
+            f"WHEEL_SHA256={'0' * 64}"
+            if item == f"WHEEL_SHA256={wheel_digest}"
+            else item
             for item in build
         ]
         rejected = _run(altered_digest, timeout=120)
@@ -330,6 +518,7 @@ def verify(wheel: Path, receipt: Path | None) -> dict[str, object]:
             rejected.stdout + rejected.stderr
         ):
             raise RuntimeError("altered wheel digest was admitted")
+        _verify_interruption(build, image)
         outcomes = _verify_cli(image, python, scratch)
         config = _run(
             ["docker", "image", "inspect", image, "--format", "{{json .Config}}"]
@@ -342,6 +531,7 @@ def verify(wheel: Path, receipt: Path | None) -> dict[str, object]:
             raise RuntimeError("image user or environment is unsafe")
         _verify_mounts(image, scratch)
         _verify_image_source(image, scratch)
+        prior_wheel_digest = _verify_rollback(prior_commit, uv, requirements, scratch)
         inspection = _run(["docker", "image", "inspect", image, "--format", "{{.Id}}"])
         _require_success(inspection, "image identity")
         result: dict[str, object] = {
@@ -356,6 +546,10 @@ def verify(wheel: Path, receipt: Path | None) -> dict[str, object]:
             "outcomes": outcomes,
             "mount_checks": "owner mapped, wrong UID, broad mode, read-only, symlink",
             "source_substitution": "rejected",
+            "interrupted_build_and_run": "rejected; current image remained available",
+            "rollback_prior_commit": prior_commit,
+            "rollback_prior_wheel_sha256": prior_wheel_digest,
+            "rollback_prior_cli": "installed and ran",
         }
         if receipt is not None:
             receipt.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
@@ -366,9 +560,14 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--wheel", type=Path, required=True)
     parser.add_argument("--receipt", type=Path)
+    parser.add_argument("--prior-commit", required=True)
     args = parser.parse_args()
     print(
-        json.dumps(verify(args.wheel.resolve(), args.receipt), indent=2, sort_keys=True)
+        json.dumps(
+            verify(args.wheel.resolve(), args.receipt, args.prior_commit),
+            indent=2,
+            sort_keys=True,
+        )
     )
 
 
