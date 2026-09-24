@@ -8,7 +8,7 @@ Issue [#167](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/167)
 | Linux x86_64 Docker/OCI | Verified local conformance and post-publication digest pull/smoke. |
 | macOS native Python | Existing POSIX path preserved, not revalidated here. |
 | macOS Docker Desktop | Intel macOS 26.7 / Desktop 4.92.0 verified with initialized gRPC FUSE ownership; see [host receipt and limitations](macos-docker-desktop.md). Default VirtioFS did not pass. |
-| Windows 10/11 Docker Desktop with WSL2 | Same Linux image is the intended path; host integration unverified and tracked in [#208](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/208). Native Windows Python is not supported by current POSIX storage code. |
+| Windows 11 x64, WSL2 Ubuntu and Docker Desktop | Exact tested configuration, pinned artifacts and governed CI are described in the [Windows host guide](windows-wsl2-docker-desktop.md) under [#208](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/208). Windows 10, NTFS private roots and native Windows Python remain unverified/unsupported. |
 | Linux ARM64 or other architectures | No published image or support claim. |
 
 ## Keep captures on the host
