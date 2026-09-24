@@ -40,8 +40,8 @@ $hostFile = Join-Path $evidence 'windows-host.json'
     verifier_commit = $commit
     captured_at_utc = (Get-Date).ToUniversalTime().ToString('o')
 } | ConvertTo-Json | Set-Content -Encoding utf8 $hostFile
-$wslRepo = & wsl -d $Distribution -- wslpath -a $repo
-$wslEvidence = & wsl -d $Distribution -- wslpath -a $evidence
+$wslRepo = & wsl -d $Distribution -- wslpath -a $repo.Replace('\', '/')
+$wslEvidence = & wsl -d $Distribution -- wslpath -a $evidence.Replace('\', '/')
 $wslHome = & wsl -d $Distribution -- printenv HOME
 if ($LASTEXITCODE -ne 0 -or $wslHome -notmatch '^/home/[^/]+$') { throw 'Expected a non-root WSL home.' }
 $runRoot = "$wslHome/.local/share/issue208/runs/$([guid]::NewGuid().ToString('N'))"
