@@ -92,10 +92,8 @@ def verify(repo: Path, host: dict, uv: str, evidence: Path) -> dict:
         ) as tmp:
             scratch = Path(tmp)
             source = scratch / "source"
-            source.mkdir()
-            archive = scratch / "source.tar"
-            run(["git", "archive", f"--output={archive}", RELEASE], cwd=repo)
-            run(["tar", "-xf", str(archive), "-C", str(source)], cwd=scratch)
+            run(["git", "clone", "--no-hardlinks", str(repo), str(source)], cwd=scratch)
+            run(["git", "checkout", "--detach", RELEASE], cwd=source)
             run(
                 [uv, "sync", "--python", "3.11", "--extra", "dev", "--frozen"],
                 cwd=source,
