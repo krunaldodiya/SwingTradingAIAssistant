@@ -299,6 +299,8 @@ def conformance_tests(
         "-o",
         "addopts=",
         "--durations=10",
+        "-p",
+        "no:cacheprovider",
     ]
     env = {
         "HOME": str(scratch),
@@ -306,11 +308,20 @@ def conformance_tests(
         "LANG": "C.UTF-8",
         "PYTHONPATH": str(tools),
         "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
+        "PYTHONDONTWRITEBYTECODE": "1",
     }
     native_log = evidence / "wsl-installed-tests.txt"
     native = run([str(python), *args, str(tests)], cwd=scratch, env=env, log=native_log)
     container = verifier._container(IMAGE, entrypoint="python")
+    # 185 tests retain separate roots until session teardown. Keep their data
+    # on the actual private WSL filesystem, not the application's 64 MiB /tmp.
+    data = scratch / "container-test-data"
+    data.mkdir(mode=0o700)
     container[2:2] = [
+        "--user",
+        f"{os.getuid()}:{os.getgid()}",
+        "--mount",
+        f"type=bind,src={data},dst=/test-data",
         "--mount",
         f"type=bind,src={tools},dst=/test-tools,readonly",
         "--mount",
@@ -319,6 +330,10 @@ def conformance_tests(
         "PYTHONPATH=/test-tools",
         "--env",
         "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1",
+        "--env",
+        "TMPDIR=/test-data",
+        "--env",
+        "HOME=/test-data",
     ]
     image_log = evidence / "oci-installed-tests.txt"
     output = run([*container, *args, "/tests"], cwd=scratch, log=image_log)
