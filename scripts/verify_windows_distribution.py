@@ -27,10 +27,14 @@ POSITIVE_SHA = "105e5b437f1daca41539b955088842b704b1ee49518036668a53a6bdebbfeef0
 DEMO = "swing_trading_ai_assistant._examples.single_stock_research_demo"
 
 
-def run(args: list[str], *, cwd: Path, env=None, expected=0, timeout=600) -> bytes:
+def run(
+    args: list[str], *, cwd: Path, env=None, expected=0, timeout=600, log=None
+) -> bytes:
     result = subprocess.run(  # noqa: S603 - fixed tools, reviewed pinned artifacts
         args, cwd=cwd, env=env, capture_output=True, timeout=timeout, check=False
     )
+    if log is not None:
+        log.write_bytes(result.stdout + result.stderr)
     if result.returncode != expected:
         raise RuntimeError(
             f"{args[0]}: exit {result.returncode}: {result.stderr[-2000:]!r}"
@@ -76,6 +80,10 @@ def verify(repo: Path, host: dict, uv: str, evidence: Path) -> dict:
         "image": IMAGE,
         "prior_image": PRIOR_IMAGE,
         "engine_version": engine["ServerVersion"],
+        "distribution_release": Path("/etc/os-release").read_text(),
+        "home_filesystem": run(["stat", "-f", "-c", "%T", str(Path.home())], cwd=repo)
+        .decode()
+        .strip(),
         "status": "RUNNING",
         "checks": [],
     }
@@ -241,7 +249,9 @@ def verify(repo: Path, host: dict, uv: str, evidence: Path) -> dict:
                 prior_wheel_sha256=prior_wheel, prior_requirements_sha256=prior_lock
             )
             record("prior installed-wheel rollback CLI")
-            conformance_tests(verifier, source, scratch, python, evidence)
+            receipt["installed_tests"] = conformance_tests(
+                verifier, source, scratch, python, evidence
+            )
             record(
                 "installed WSL and published OCI research authorization, retention, retry and sanitization tests"
             )
@@ -261,7 +271,7 @@ def verify(repo: Path, host: dict, uv: str, evidence: Path) -> dict:
 
 def conformance_tests(
     verifier, source: Path, scratch: Path, python: Path, evidence: Path
-) -> None:
+) -> dict:
     """Use existing deterministic tests against installed artifacts, without src/.
 
     Only pytest's own locked tooling is exposed via PYTHONPATH. Application and
@@ -288,6 +298,7 @@ def conformance_tests(
         "--import-mode=importlib",
         "-o",
         "addopts=",
+        "--durations=10",
     ]
     env = {
         "HOME": str(scratch),
@@ -296,8 +307,8 @@ def conformance_tests(
         "PYTHONPATH": str(tools),
         "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
     }
-    native = run([str(python), *args, str(tests)], cwd=scratch, env=env)
-    (evidence / "wsl-installed-tests.txt").write_bytes(native)
+    native_log = evidence / "wsl-installed-tests.txt"
+    native = run([str(python), *args, str(tests)], cwd=scratch, env=env, log=native_log)
     container = verifier._container(IMAGE, entrypoint="python")
     container[2:2] = [
         "--mount",
@@ -309,8 +320,14 @@ def conformance_tests(
         "--env",
         "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1",
     ]
-    output = run([*container, *args, "/tests"], cwd=scratch)
-    (evidence / "oci-installed-tests.txt").write_bytes(output)
+    image_log = evidence / "oci-installed-tests.txt"
+    output = run([*container, *args, "/tests"], cwd=scratch, log=image_log)
+    return {
+        "wsl_log_sha256": digest(native_log),
+        "oci_log_sha256": digest(image_log),
+        "wsl_summary": native.decode().splitlines()[-1],
+        "oci_summary": output.decode().splitlines()[-1],
+    }
 
 
 def persistence(verifier, scratch: Path) -> None:

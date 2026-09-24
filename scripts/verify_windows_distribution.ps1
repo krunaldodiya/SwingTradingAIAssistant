@@ -24,6 +24,8 @@ $desktop = & docker version --format '{{json .}}' | ConvertFrom-Json
 if ($LASTEXITCODE -ne 0 -or $desktop.Server.Platform.Name -notlike 'Docker Desktop*') {
     throw 'Start the real Docker Desktop Linux engine.'
 }
+$runId = [guid]::NewGuid().ToString('N')
+$EvidenceDirectory = Join-Path $EvidenceDirectory $runId
 New-Item -ItemType Directory -Force $EvidenceDirectory | Out-Null
 $evidence = (Resolve-Path $EvidenceDirectory).Path
 $hostFile = Join-Path $evidence 'windows-host.json'
@@ -44,7 +46,7 @@ $wslRepo = & wsl -d $Distribution -- wslpath -a $repo.Replace('\', '/')
 $wslEvidence = & wsl -d $Distribution -- wslpath -a $evidence.Replace('\', '/')
 $wslHome = & wsl -d $Distribution -- printenv HOME
 if ($LASTEXITCODE -ne 0 -or $wslHome -notmatch '^/home/[^/]+$') { throw 'Expected a non-root WSL home.' }
-$runRoot = "$wslHome/.local/share/issue208/runs/$([guid]::NewGuid().ToString('N'))"
+$runRoot = "$wslHome/.local/share/issue208/runs/$runId"
 Invoke-Checked wsl @('-d', $Distribution, '--', 'mkdir', '-p', $runRoot)
 Invoke-Checked wsl @('-d', $Distribution, '--', 'git', '-c', 'core.autocrlf=false', 'clone', '--no-hardlinks', $wslRepo, "$runRoot/source")
 Invoke-Checked wsl @('-d', $Distribution, '--', 'git', '-C', "$runRoot/source", 'checkout', '--detach', $commit)
