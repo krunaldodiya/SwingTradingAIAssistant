@@ -212,9 +212,12 @@ def verify(repo: Path, host: dict, uv: str, evidence: Path) -> dict:
                         "image lock mismatch",
                     )
                     receipt["image_id"] = details["Id"]
+                inspection = verifier._container(image, entrypoint="python")
+                # Read-only inspection, no host mounts: root can inspect /root.
+                inspection[2:2] = ["--user", "0:0"]
                 run(
                     [
-                        *verifier._container(image, entrypoint="python"),
+                        *inspection,
                         "-c",
                         "from pathlib import Path; assert not any(Path(p).exists() for p in ('/data','/Users','/root/.docker/config.json','/home/app/.docker/config.json','/home/app/SwingTradingAIAssistantData'))",
                     ],
