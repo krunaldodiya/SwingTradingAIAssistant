@@ -279,6 +279,13 @@ def conformance_tests(
     """
     tools = scratch / "test-tools"
     tools.mkdir()
+    (tools / "sitecustomize.py").write_text(
+        "import sys\n"
+        "def deny_network(event, args):\n"
+        "    if event.startswith('socket.'):\n"
+        "        raise RuntimeError('offline conformance denies network')\n"
+        "sys.addaudithook(deny_network)\n"
+    )
     site = source / ".venv/lib/python3.11/site-packages"
     for name in ("pytest", "_pytest", "pluggy", "iniconfig", "packaging", "pygments"):
         shutil.copytree(site / name, tools / name)

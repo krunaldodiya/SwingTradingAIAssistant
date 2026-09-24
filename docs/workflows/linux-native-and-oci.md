@@ -7,7 +7,7 @@ This is the first bounded distribution slice of [issue #167](https://github.com/
 | Linux x86_64, clean installed wheel | Verified by the distribution receipt. |
 | Linux x86_64, local OCI image | Verified from the same wheel and hash-checked runtime lock export. No registry image is published in this slice. |
 | Native macOS | Existing application path is preserved; this slice does not revalidate or expand its support claim. |
-| macOS Docker Desktop, Windows WSL2/Docker Desktop, other architectures | Not validated by this Linux receipt. The owner narrowed #167 to Linux-native/OCI proof; Windows host validation is tracked in [#208](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/208). |
+| macOS Docker Desktop, Windows WSL2/Docker Desktop, other architectures | Not validated by this Linux receipt. Separate [macOS](macos-docker-desktop.md) and [Windows](windows-wsl2-docker-desktop.md) host guides retain their own evidence and limits; other architectures remain unverified. |
 
 ## Build and verify
 
