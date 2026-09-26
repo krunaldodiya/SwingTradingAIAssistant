@@ -505,8 +505,8 @@ def test_mutated_admitted_event_projection_is_fatal(
 ):
     retain = api.retain_current_event_notices_v2
 
-    def substitute(*args):
-        result = retain(*args)
+    def substitute(*args, **kwargs):
+        result = retain(*args, **kwargs)
         object.__setattr__(result, field, value)
         return result
 
@@ -517,7 +517,7 @@ def test_mutated_admitted_event_projection_is_fatal(
 
 def test_forged_projection_is_rejected(tmp_path, monkeypatch):
     monkeypatch.setattr(
-        api, "retain_current_event_notices_v2", lambda *a: {"notice_count": 1}
+        api, "retain_current_event_notices_v2", lambda *a, **kw: {"notice_count": 1}
     )
     with pytest.raises(ValueError, match="not admitted"):
         _run(tmp_path, monkeypatch, symbols=("PNB",))
@@ -693,7 +693,7 @@ def test_genuinely_admitted_foreign_projection_cannot_be_relabelled(
 ):
     retain = api.retain_current_event_notices_v2
 
-    def substitute(root, lease, event_input, artifact, binding):
+    def substitute(root, lease, event_input, artifact, binding, **kwargs):
         mapping = binding.projection
         symbol = "TCS" if substitution == "canonical" else "PNB"
         with api.DuckDBCatalog(root, lease=lease) as catalog:
@@ -716,7 +716,7 @@ def test_genuinely_admitted_foreign_projection_cannot_be_relabelled(
             if substitution == "schedule"
             else mapping.schedule_identity_sha256,
         )
-        return retain(root, lease, event_input, artifact, other)
+        return retain(root, lease, event_input, artifact, other, **kwargs)
 
     monkeypatch.setattr(api, "retain_current_event_notices_v2", substitute)
     with pytest.raises(ValueError, match="binding mismatch"):
@@ -839,12 +839,12 @@ def test_interruption_after_first_member_retention_has_safe_retry(
     original = api.retain_current_event_notices_v2
     calls = 0
 
-    def interrupted(*args):
+    def interrupted(*args, **kwargs):
         nonlocal calls
         calls += 1
         if calls == 2:
             raise KeyboardInterrupt
-        return original(*args)
+        return original(*args, **kwargs)
 
     monkeypatch.setattr(api, "retain_current_event_notices_v2", interrupted)
     with pytest.raises(KeyboardInterrupt):
@@ -910,7 +910,7 @@ def test_retention_integrity_exception_is_fatal_even_after_deadline(
 ):
     clock = _Clock()
 
-    def reject(*_):
+    def reject(*_, **kwargs):
         clock.value += timedelta(seconds=121)
         raise ValueError("current event V2 source-time integrity invalid")
 
@@ -970,9 +970,9 @@ def test_real_retention_clock_crossing_preserves_prices(
     clock = _Clock()
     retain = api.retain_current_event_notices_v2
 
-    def cross_inside(*args):
+    def cross_inside(*args, **kwargs):
         clock.value += advance
-        return retain(*args)
+        return retain(*args, **kwargs)
 
     monkeypatch.setattr(api, "retain_current_event_notices_v2", cross_inside)
     result, source = _run(tmp_path, monkeypatch, symbols=("PNB",), clock=clock)
@@ -981,3 +981,20 @@ def test_real_retention_clock_crossing_preserves_prices(
     assert result["members"][0]["event_context"]["reason"] == reason
     assert result["jointly_comparable"] is True
     assert not (tmp_path / ".current-event-notice-v1").exists()
+
+
+def test_retention_clock_before_observation_never_publishes(tmp_path, monkeypatch):
+    clock = _Clock()
+    retain = api.retain_current_event_notices_v2
+
+    def backward_inside(*args, **kwargs):
+        monkeypatch.setattr(
+            events, "_trusted_utc_now", lambda: clock.value - timedelta(seconds=1)
+        )
+        return retain(*args, **kwargs)
+
+    monkeypatch.setattr(api, "retain_current_event_notices_v2", backward_inside)
+    with pytest.raises(ValueError):
+        _run(tmp_path, monkeypatch, symbols=("PNB",), clock=clock)
+    archive = tmp_path / ".current-event-notice-v1"
+    assert not archive.exists() or not list(archive.iterdir())

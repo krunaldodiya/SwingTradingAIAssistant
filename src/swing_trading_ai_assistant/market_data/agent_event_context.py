@@ -346,7 +346,12 @@ def run_agent_event_research_current(  # noqa: C901 - explicit failure and autho
                 for index, binding in bindings.items():
                     window.check()
                     retained = retain_current_event_notices_v2(
-                        storage_root, lease, event_input, observation.body, binding
+                        storage_root,
+                        lease,
+                        event_input,
+                        observation.body,
+                        binding,
+                        observed_at=observed_at,
                     )
                     contexts[index] = _project(
                         retained, binding, event_input, observed_at, window

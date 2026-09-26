@@ -1013,3 +1013,89 @@ def test_expiry_does_not_mask_source_or_canonical_invalidity(
             )
         assert not isinstance(error.value, event_v2.CurrentEventRetentionTimeErrorV2)
         assert not (root / ".current-event-notice-v1").exists()
+
+
+@pytest.mark.parametrize("stored_objects", (0, 1, 2, 3, 4))
+def test_observation_bound_blocks_publication_and_preserves_retry(
+    tmp_path, monkeypatch, stored_objects
+):
+    root = tmp_path / "observation-bound"
+    root.mkdir(mode=0o700)
+    acquired = StorageRootLease.try_acquire(root)
+    assert acquired.lease is not None
+    raw = _artifact()
+    monkeypatch.setattr(event_v2, "_trusted_utc_now", lambda: _KNOWN)
+    with acquired.lease as lease:
+        mapping = _mapping(root, lease)
+        original = event_v2.retain_current_event_notices_v2(
+            root, lease, _input(raw), raw, mapping, observed_at=_KNOWN
+        )
+        archive = root / ".current-event-notice-v1"
+        names = [f"v2-{original.artifact_identity_sha256}.raw.csv"] + [
+            f"v2-{original.archive_identity_sha256}.{suffix}"
+            for suffix in ("projection.json", "receipt.json", "complete.json")
+        ]
+        for name in names[stored_objects:]:
+            (archive / name).unlink()
+        before = {p.name: p.read_bytes() for p in archive.iterdir()}
+        # A new, later observation cannot finish an older durable prefix.
+        with pytest.raises(ValueError, match="observation-time integrity"):
+            event_v2.retain_current_event_notices_v2(
+                root,
+                lease,
+                _input(raw),
+                raw,
+                mapping,
+                observed_at=datetime(2026, 8, 26, 9, 0, 1, tzinfo=UTC),
+            )
+        assert {p.name: p.read_bytes() for p in archive.iterdir()} == before
+        # Retrying the original observation preserves the original knowledge time.
+        # A durable projection owns its time even if the fresh clock stepped back.
+        if stored_objects >= 2:
+            monkeypatch.setattr(
+                event_v2,
+                "_trusted_utc_now",
+                lambda: datetime(2026, 8, 26, 8, 59, tzinfo=UTC),
+            )
+        recovered = event_v2.retain_current_event_notices_v2(
+            root, lease, _input(raw), raw, mapping, observed_at=_KNOWN
+        )
+        assert recovered.canonical_json_bytes() == original.canonical_json_bytes()
+        assert len(list(archive.iterdir())) == 4
+
+
+@pytest.mark.parametrize("unsafe", (False, True))
+def test_observation_bound_does_not_mask_archive_integrity(
+    tmp_path, monkeypatch, unsafe
+):
+    root = tmp_path / "observation-corruption"
+    root.mkdir(mode=0o700)
+    acquired = StorageRootLease.try_acquire(root)
+    assert acquired.lease is not None
+    raw = _artifact()
+    monkeypatch.setattr(event_v2, "_trusted_utc_now", lambda: _KNOWN)
+    with acquired.lease as lease:
+        mapping = _mapping(root, lease)
+        retained = event_v2.retain_current_event_notices_v2(
+            root, lease, _input(raw), raw, mapping
+        )
+        archive = root / ".current-event-notice-v1"
+        if unsafe:
+            archive.chmod(0o755)
+        else:
+            (archive / f"v2-{retained.artifact_identity_sha256}.raw.csv").write_bytes(
+                b"bad"
+            )
+        before = {p.name: p.read_bytes() for p in archive.iterdir()}
+        with pytest.raises(ValueError) as error:
+            event_v2.retain_current_event_notices_v2(
+                root,
+                lease,
+                _input(raw),
+                raw,
+                mapping,
+                observed_at=datetime(2026, 8, 26, 9, 0, 1, tzinfo=UTC),
+            )
+        assert "observation-time" not in str(error.value)
+        assert not isinstance(error.value, event_v2.CurrentEventRetentionTimeErrorV2)
+        assert {p.name: p.read_bytes() for p in archive.iterdir()} == before

@@ -120,3 +120,12 @@ No clamped/backdated clocks, new persistence protocol, changed identity equation
 source retry, weakened cutoff, or generic-error reinterpretation is permitted.
 Source and stored-prefix integrity errors remain fatal even when the fresh clock
 is expired; publication never relies on time alone to classify an integrity error.
+
+V3 supplies the validated CSV observation time as a retention lower bound. The
+producer checks its chosen knowledge time against that bound before publishing
+any archive object; a backward time is a fatal integrity error, never optional
+expiry. Existing prefix integrity is checked first. Durable retries use their
+original stored knowledge time and must also satisfy the supplied observation
+bound before completing a missing suffix. Legacy callers without an observation
+bound retain their existing behavior. This guard adds no stored field or identity
+equation and does not clamp either clock.

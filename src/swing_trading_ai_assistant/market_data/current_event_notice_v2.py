@@ -1118,6 +1118,8 @@ def retain_current_event_notices_v2(  # noqa: C901 - explicit logical commit
     event_input: CurrentEventNoticeInputV1,
     artifact: bytes,
     mapping_binding: AdmittedCurrentResearchBindingV2,
+    *,
+    observed_at: datetime | None = None,
 ) -> RetainedCurrentEventNoticeProjectionV2:
     """Retain bounded member-local outcomes in the Event V2 namespace."""
     if (
@@ -1128,6 +1130,7 @@ def retain_current_event_notices_v2(  # noqa: C901 - explicit logical commit
         or len(artifact) > 1024 * 1024
     ):
         raise ValueError("current event V2 retention input invalid")
+    observation_bound = None if observed_at is None else _instant(observed_at)
     mapping = validate_current_research_binding_v2(mapping_binding)
     parsed = parse_current_event_notice_artifact_v1(event_input, artifact)
     if isinstance(parsed, CurrentEventNoticeFailureV1):
@@ -1283,6 +1286,10 @@ def retain_current_event_notices_v2(  # noqa: C901 - explicit logical commit
         except FileNotFoundError:
             prefix_exists = False
         if not prefix_exists:
+            if observation_bound is not None and known_at < observation_bound:
+                _validate_archive_root(operation.descriptor)
+                operation.ensure_live()
+                raise ValueError("current event V2 observation-time integrity invalid")
             temporal_failure = _fresh_retention_time_failure(known_at, mapping)
             if temporal_failure is not None:
                 # Preserve the no-archive effect on rejected fresh acquisitions.
@@ -1420,6 +1427,8 @@ def retain_current_event_notices_v2(  # noqa: C901 - explicit logical commit
             ):
                 if existing is not None and existing[0] != expected:
                     raise ValueError("current event V2 immutable archive conflict")
+            if observation_bound is not None and known_at < observation_bound:
+                raise ValueError("current event V2 observation-time integrity invalid")
             if stored is None:
                 temporal_failure = _fresh_retention_time_failure(known_at, mapping)
                 if temporal_failure is not None:
