@@ -35,6 +35,7 @@ from swing_trading_ai_assistant.research_packet.current_price_context_v2 import 
 )
 
 from .account_rate_limit import ThreadSafeAccountRateLimiterV1
+from .agent_event_context import run_agent_event_research_current
 from .agent_research_run import (
     run_agent_research_current,
     run_agent_swing_research_current,
@@ -582,7 +583,9 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="ABSOLUTE_OWNER_PRIVATE_ROOT",
     )
     agent_run.add_argument("--output", choices=("json",), required=True)
-    agent_run.add_argument("--contract-version", choices=("v1", "v2"), default="v1")
+    agent_run.add_argument(
+        "--contract-version", choices=("v1", "v2", "v3"), default="v1"
+    )
     probe = commands.add_parser(
         "probe-upstox",
         help="validate a master-catalog instrument without writing candle data",
@@ -710,8 +713,11 @@ def _run_agent_research_command(
     | None,
 ) -> int:
     try:
-        if args.contract_version == "v2":
-            report = run_agent_swing_research_current(
+        if args.contract_version in {"v2", "v3"}:
+            runner = run_agent_swing_research_current
+            if args.contract_version == "v3":
+                runner = run_agent_event_research_current
+            report = runner(
                 tuple(args.symbol),
                 args.storage_root,
                 research=(

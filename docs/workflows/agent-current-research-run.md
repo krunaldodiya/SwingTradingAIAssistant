@@ -31,10 +31,45 @@ deadline failure do not trigger an older search or a substitute provider. See th
 note](../notes/2026-09-23-swing-completed-session-fallback.md). Omitting the
 option (or requesting `v1`) preserves the original S-only agent contract.
 
-Each member has the canonical ISIN/exchange/effective symbol, its own selection and evidence-known times, price basis, research status, and admitted feature-level outcomes. A feature fact is present only when it is observed, supported and comparable. Candle direction, close versus previous close, and structure state/trend are deterministic facts, with source/result identities and completed session for citation. `null` plus a typed availability/support/comparability/reason means that feature cannot be used to support a claim. Three context features are explicitly `NOT_ATTEMPTED`; the command does not acquire event, market-regime or Industry context. An overall V2 `NOT_READY` status does not erase independently admitted feature facts.
+Each member has the canonical ISIN/exchange/effective symbol, its own selection and evidence-known times, price basis, research status, and admitted feature-level outcomes. A feature fact is present only when it is observed, supported and comparable. Candle direction, close versus previous close, and structure state/trend are deterministic facts, with source/result identities and completed session for citation. `null` plus a typed availability/support/comparability/reason means that feature cannot be used to support a claim. In V1 and V2, three context features are explicitly `NOT_ATTEMPTED`; those versions do not acquire event, market-regime or Industry context. An overall V2 `NOT_READY` status does not erase independently admitted feature facts.
 
 If acquisition ends before any packet is available, all three price/structure features carry the terminal research status and code, with `null` facts and source identities. The three context entries still say `NOT_ATTEMPTED`. This keeps a failed member explicit without claiming that any market fact was observed.
 
 `jointly_comparable` is true only if all three features for every member are observed on the same completed session with the same price basis, schedule identity and source profile. It does not claim a common acquisition cutoff, index membership or simultaneous market snapshot. Exit 0 means every requested price/structure fact is projected, exit 1 means at least one is unavailable, and exit 2 means input rejection or internal failure. No partial JSON is emitted for an internal failure. Explain missing facts and different selection times rather than manufacturing a conclusion.
 
 This is an explicit-list current research path, not the default point-in-time Nifty 100 selector or a 100-stock capacity claim. It does not establish trade eligibility, rank stocks, issue BUY/HOLD/EXIT/NO_TRADE signals or validate a strategy. Those steps require separately governed point-in-time cohort, capacity, risk and historical/prospective validation evidence.
+
+
+## Optional current event context (V3)
+
+Use `--contract-version v3` on the same command to add official NSE notice
+context. V3 keeps V2's price selection, one-session fallback, comparability and
+price-based exit codes. It validates the same one-to-ten unique explicit symbols
+before effects. For a batch with current retained mappings it initializes the
+fixed NSE announcements page and downloads one unfiltered Equity `1D` CSV for
+the previous/current IST dates. It does not fetch attachments, Industry or
+Market Regime context, retry the source, or substitute another provider.
+
+Each member adds `event_context`: admitted notice count, availability/support,
+reason, source-observation and retention times, and source/mapping/result/retention
+identities. A conflict remains local to that member. `NO_MATCHING_NOTICE_IN_SNAPSHOT`
+with count zero means only no matching notice in that admitted snapshot; it does
+not establish no event risk or source completeness. Unavailable or unsupported
+context has a null count. Notice text, publisher timestamp strings, attachment
+URLs, raw CSV, credentials, cookies and storage paths are excluded.
+
+`event_observation` has its own selection time and 120-second cutoff after price
+work. These times do not rewrite the original price window or turn lagged price
+facts into current-session facts. Publisher timezone is unknown and reported as
+null. Current mapping validity and exact retained canonical identity are checked
+before notices are attached. Event evidence is retained privately before return.
+Closed source failures preserve independent price facts; unsafe or held storage,
+lost authority, corruption, unexpected internal errors and interruption prevent
+partial JSON publication. A new command after interruption can reuse completed
+immutable retention when its exact request and observation identities match.
+
+**Keep all V3 output owner-private. Even redacted NSE-derived counts, status and
+provenance may not be sent to hosted AI services, published or redistributed.**
+This opt-in is bounded personal/noncommercial local research under the existing
+source-use contract, not a new disclosure permission. See
+[Plan 37](../plans/37-agent-current-event-notice-context-contract.md).
