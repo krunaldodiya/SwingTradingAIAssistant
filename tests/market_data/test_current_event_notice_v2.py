@@ -832,3 +832,184 @@ def test_event_v2_stored_prefix_admission_rejects_malformed_evidence_before_repa
             f"v2-{retained.artifact_identity_sha256}.raw.csv",
             f"v2-{retained.archive_identity_sha256}.projection.json",
         }
+
+
+@pytest.mark.parametrize(
+    "advance",
+    (datetime(2026, 8, 26, 9, 6, tzinfo=UTC), datetime(2026, 8, 27, 9, tzinfo=UTC)),
+)
+@pytest.mark.parametrize(
+    "corruption", ("raw-prefix", "projection", "receipt", "marker", "unsafe-archive")
+)
+def test_temporal_failure_never_masks_existing_archive_corruption(
+    tmp_path, monkeypatch, advance, corruption
+):
+    root = tmp_path / "combined-expiry"
+    root.mkdir(mode=0o700)
+    acquired = StorageRootLease.try_acquire(root)
+    assert acquired.lease is not None
+    raw = _artifact()
+    monkeypatch.setattr(event_v2, "_trusted_utc_now", lambda: _KNOWN)
+    with acquired.lease as lease:
+        mapping = _mapping(root, lease)
+        retained = event_v2.retain_current_event_notices_v2(
+            root, lease, _input(raw), raw, mapping
+        )
+        archive = root / ".current-event-notice-v1"
+        if corruption == "unsafe-archive":
+            archive.chmod(0o755)
+        elif corruption == "raw-prefix":
+            for name in ("projection.json", "receipt.json", "complete.json"):
+                (archive / f"v2-{retained.archive_identity_sha256}.{name}").unlink()
+            (archive / f"v2-{retained.artifact_identity_sha256}.raw.csv").write_bytes(
+                b"corrupt"
+            )
+        else:
+            suffix = {
+                "projection": "projection.json",
+                "receipt": "receipt.json",
+                "marker": "complete.json",
+            }[corruption]
+            (archive / f"v2-{retained.archive_identity_sha256}.{suffix}").write_bytes(
+                b"{}"
+            )
+        before = {p.name: p.read_bytes() for p in archive.iterdir()}
+        monkeypatch.setattr(event_v2, "_trusted_utc_now", lambda: advance)
+        with pytest.raises(ValueError) as error:
+            event_v2.retain_current_event_notices_v2(
+                root, lease, _input(raw), raw, mapping
+            )
+        assert not isinstance(error.value, event_v2.CurrentEventRetentionTimeErrorV2)
+        assert {p.name: p.read_bytes() for p in archive.iterdir()} == before
+
+
+@pytest.mark.parametrize("stored_objects", (1, 2, 3, 4))
+def test_expired_valid_prefix_retains_original_recovery_semantics(
+    tmp_path, monkeypatch, stored_objects
+):
+    root = tmp_path / "expired-valid-prefix"
+    root.mkdir(mode=0o700)
+    raw = _artifact()
+    acquired = StorageRootLease.try_acquire(root)
+    assert acquired.lease is not None
+    monkeypatch.setattr(event_v2, "_trusted_utc_now", lambda: _KNOWN)
+    with acquired.lease as lease:
+        mapping = _mapping(root, lease)
+        original = event_v2.retain_current_event_notices_v2(
+            root, lease, _input(raw), raw, mapping
+        )
+        archive = root / ".current-event-notice-v1"
+        names = [f"v2-{original.artifact_identity_sha256}.raw.csv"] + [
+            f"v2-{original.archive_identity_sha256}.{suffix}"
+            for suffix in ("projection.json", "receipt.json", "complete.json")
+        ]
+        for name in names[stored_objects:]:
+            (archive / name).unlink()
+        before = {p.name: p.read_bytes() for p in archive.iterdir()}
+        monkeypatch.setattr(
+            event_v2, "_trusted_utc_now", lambda: datetime(2026, 8, 27, 9, tzinfo=UTC)
+        )
+        if stored_objects == 1:
+            with pytest.raises(event_v2.CurrentEventRetentionTimeErrorV2) as error:
+                event_v2.retain_current_event_notices_v2(
+                    root, lease, _input(raw), raw, mapping
+                )
+            assert error.value.code == "ACQUISITION_DATE_ROLLOVER"
+            assert {p.name: p.read_bytes() for p in archive.iterdir()} == before
+        else:
+            recovered = event_v2.retain_current_event_notices_v2(
+                root, lease, _input(raw), raw, mapping
+            )
+            assert recovered.canonical_json_bytes() == original.canonical_json_bytes()
+            assert all(
+                (archive / name).read_bytes() == value for name, value in before.items()
+            )
+
+
+@pytest.mark.parametrize("target", ("root", "archive", "raw", "suffix"))
+def test_temporal_failure_rechecks_final_authority(tmp_path, monkeypatch, target):
+    root = tmp_path / "late-expiry-authority"
+    root.mkdir(mode=0o700)
+    raw = _artifact()
+    acquired = StorageRootLease.try_acquire(root)
+    assert acquired.lease is not None
+    monkeypatch.setattr(event_v2, "_trusted_utc_now", lambda: _KNOWN)
+    with acquired.lease as lease:
+        mapping = _mapping(root, lease)
+        retained = event_v2.retain_current_event_notices_v2(
+            root, lease, _input(raw), raw, mapping
+        )
+        archive = root / ".current-event-notice-v1"
+        for suffix in ("projection.json", "receipt.json", "complete.json"):
+            (archive / f"v2-{retained.archive_identity_sha256}.{suffix}").unlink()
+        monkeypatch.setattr(
+            event_v2, "_trusted_utc_now", lambda: datetime(2026, 8, 27, 9, tzinfo=UTC)
+        )
+        verify = event_v2._verify_final_archive_binding
+
+        def replaced(operation, directory, objects=(), *, absent_objects=()):
+            if target == "root":
+                root.rename(tmp_path / "root-moved")
+                root.mkdir(mode=0o700)
+            elif target == "archive":
+                archive.rename(root / "archive-moved")
+                archive.mkdir(mode=0o700)
+            elif target == "suffix":
+                suffix = (
+                    archive / f"v2-{retained.archive_identity_sha256}.projection.json"
+                )
+                suffix.write_bytes(b"{}")
+                suffix.chmod(0o600)
+            else:
+                (
+                    archive / f"v2-{retained.artifact_identity_sha256}.raw.csv"
+                ).write_bytes(b"corrupt")
+            return verify(operation, directory, objects, absent_objects=absent_objects)
+
+        monkeypatch.setattr(event_v2, "_verify_final_archive_binding", replaced)
+        with pytest.raises(ValueError) as error:
+            event_v2.retain_current_event_notices_v2(
+                root, lease, _input(raw), raw, mapping
+            )
+        assert not isinstance(error.value, event_v2.CurrentEventRetentionTimeErrorV2)
+
+
+@pytest.mark.parametrize(
+    "corruption", ("artifact", "source-date", "notice-date", "mapping")
+)
+def test_expiry_does_not_mask_source_or_canonical_invalidity(
+    tmp_path, monkeypatch, corruption
+):
+    root = tmp_path / "source-expiry"
+    root.mkdir(mode=0o700)
+    raw = _artifact()
+    acquired = StorageRootLease.try_acquire(root)
+    assert acquired.lease is not None
+    monkeypatch.setattr(
+        event_v2, "_trusted_utc_now", lambda: datetime(2026, 8, 27, 9, tzinfo=UTC)
+    )
+    with acquired.lease as lease:
+        mapping = _mapping(root, lease)
+        event_input = _input(raw)
+        if corruption == "artifact":
+            raw += b"\n"
+        elif corruption == "source-date":
+            event_input = replace(
+                event_input,
+                source_filename="CF-AN-equities-24-08-2026-to-25-08-2026.csv",
+            )
+        elif corruption == "notice-date":
+            raw = raw.replace(b"26-Aug-2026", b"24-Aug-2026").replace(
+                b"2026-08-26", b"2026-08-24"
+            )
+            event_input = _input(raw)
+        else:
+            object.__setattr__(
+                mapping.projection.members[0], "provider_mapping_revision", "a" * 64
+            )
+        with pytest.raises(ValueError) as error:
+            event_v2.retain_current_event_notices_v2(
+                root, lease, event_input, raw, mapping
+            )
+        assert not isinstance(error.value, event_v2.CurrentEventRetentionTimeErrorV2)
+        assert not (root / ".current-event-notice-v1").exists()

@@ -18,8 +18,11 @@ Sprints 20–23 (#210, #211, #213, #215) and Windows validation #208 are closed.
 There are no open PRs. The five open issues are future work: #126, #139, #144,
 #177 and #178. After the owner's choice, Sprint 24 milestone 16 and issue #220
 were created and read back; #220 is open, not delivered.
-The GitHub Project could not be read: the current CLI credential lacks
-`read:project`. Issue state is verified; Project state is not.
+At the initial planning checkpoint the GitHub Project could not be read because
+the CLI credential lacked project scope. Access was subsequently restored with
+owner authorization. On resumption, issue #220 was read back as open and its
+Project item as **In Progress**; the handoff records High priority, Story and
+High risk. Implementation, review and release remain pending.
 
 Both Hindsight banks responded. The canonical project tag and documented legacy
 project tag were searched. The Sprint 23 delivery memory agrees with closed
@@ -134,7 +137,10 @@ orders are outside this slice. No delivery date is promised before readiness.
 ## Open decisions and evidence limits
 
 - Owner choice resolved: implement the event-notice slice first (#220).
-- Project access: obtain the necessary scope before claiming board consistency.
+- Project access restored; issue #220 and its In Progress Project status were
+  revalidated on 2026-09-26. The previous protection exception remains expired.
+  A fresh protection read returned HTTP 403 (GitHub plan restriction); any
+  required release decision follows preparation of a reviewed passing candidate.
 - Before implementation, freeze successor schema, independent acquisition seam,
   temporal and failure rules, and applicable source-use boundary in the Issue.
 - Tests, live provider calls and runtime changes were not performed during this
@@ -151,3 +157,47 @@ orders are outside this slice. No delivery date is promised before readiness.
 - [Plan 27 source-use boundary](../plans/27-current-same-pass-market-regime-contract.md#source-use-and-consumer-boundary)
 - [Plan 34 admission gate](../plans/34-swing-research-feature-map.md)
 - [Mandatory project instructions](../mandatory-agent-instructions.md)
+
+## Resumed implementation assignment — 2026-09-26
+
+The actual checkout is `/home/krunaldodiya/WorkSpace/Code/SwingTradingAIAssistant`,
+on `codex/sprint24-planning`, preserving planning commit `11f5871` and both draft
+files. The registered `/mnt/d` path is stale. Python 3.11 validation uses
+`/tmp/sprint24-validation-venv`; the old Python 3.14 environment is not the test
+environment. Both Hindsight banks recalled context successfully. The prior
+retain operation for `sprint24-event-notice-context-20260926` is still pending;
+memory persistence is not confirmed. Current Issue and repository authority
+govern over older memories and dated roadmap status.
+
+Plan 37 freezes the additive one-stock path followed by the accepted 1–10-member
+batch, temporal, failure and compatibility matrix. Reusing Event V2 supplies
+missing notice context without another source or research calculation; the
+main risks are private-data disclosure, mismatched canonical identities and
+false temporal alignment. The smallest adequate option is a V3 wrapper of the
+existing V2 price dossier plus the existing event producer: **accepted** within
+#220, with no extra analytical module.
+
+Routing: one implementation agent uses inherited Codex model/effort (host model
+telemetry unavailable), appropriate for the bounded but R3 integration and its
+adversarial tests. It owns runtime, tests, Plan 37 and the workflow guide, with
+no nested delegation, live sources or release effects. The coordinator owns
+this note, tracker, integration and final gates. Separate fresh-context reviewers
+will own functional/domain and security/privacy/provenance verdicts on the
+committed candidate. The owner subsequently requested persistent goal mode; the Sprint 24
+delivery goal is active, with the same authority and release boundaries.
+
+## Candidate preparation
+
+The implementation writer supplied 230 passing focused/affected cases in the
+prepared Python 3.11 environment, clean focused formatting/lint/type checks,
+and a complete local evidence report. This is not full-suite or release proof.
+The retention-internal deadline gap was corrected with an explicit temporal
+exception after source, canonical, prefix and storage-integrity checks; generic
+integrity errors remain fatal. The accepted scope is unchanged.
+
+Independent functional/domain and security/privacy/provenance assignments use
+fresh native-agent contexts, requested GPT-6 Sol with high reasoning under the
+project routing policy. They review the same complete base-to-committed-candidate
+change, remain read-only and cannot delegate. Exact model telemetry is unavailable;
+requested settings are not asserted as independently observed. Full local,
+installed, bounded live-source, hosted and release evidence remains pending.

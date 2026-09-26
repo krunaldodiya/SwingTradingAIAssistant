@@ -3,7 +3,8 @@
 from typing import Final
 
 AGENT_RESEARCH_RUN_RUNTIME_SOURCE_SHA256_V1: Final[dict[str, str]] = {
-    "src/swing_trading_ai_assistant/market_data/agent_research_run.py": "a9fa43308f898f42bf4ee0bf551c2d987573c1b2bb5f695c97f238a32d623a15",
-    "src/swing_trading_ai_assistant/market_data/cli.py": "0ae8a08571e91943fbb00fd5cac6a175afe88a4946d99e385a325c6c8653c1aa",
+    "src/swing_trading_ai_assistant/market_data/agent_event_context.py": "3ca530707a76d94d737a7d10814b604649871820dc2110aacf5e747d07bf510d",
+    "src/swing_trading_ai_assistant/market_data/agent_research_run.py": "1271f1e01a35f00c66f348f96b02ad9ddd4943b595f079bf617fb2fdc2fd514f",
+    "src/swing_trading_ai_assistant/market_data/cli.py": "92af59e25dbb0d6e1410767248a24471f0a15a50a6f46c66fc4da8c603bcc7a7",
     "src/swing_trading_ai_assistant/market_data/runtime_source_verifier.py": "834fb3261a269b35e582d91b7c497be276bd102078bb9d71816fe2f77a4c721a",
 }

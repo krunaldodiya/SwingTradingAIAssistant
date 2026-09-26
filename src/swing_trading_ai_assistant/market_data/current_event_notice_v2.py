@@ -64,6 +64,63 @@ _CONFIGURATION_IDENTITY: Final = hashlib.sha256(
 _IST: Final = ZoneInfo("Asia/Kolkata")
 
 
+class CurrentEventRetentionTimeErrorV2(ValueError):
+    """Fresh clock expiry after source, prefix and storage integrity admission."""
+
+    def __init__(
+        self, code: Literal["ACQUISITION_CUTOFF_EXCEEDED", "ACQUISITION_DATE_ROLLOVER"]
+    ) -> None:
+        if code not in {"ACQUISITION_CUTOFF_EXCEEDED", "ACQUISITION_DATE_ROLLOVER"}:
+            raise ValueError("invalid event retention temporal failure")
+        self.code = code
+        # Preserve the delivered ValueError diagnostic for legacy callers.
+        super().__init__("current event V2 source-time integrity invalid")
+
+
+def _fresh_retention_time_failure(
+    known_at: datetime, mapping: CurrentResearchMappingProjectionV2
+) -> Literal["ACQUISITION_CUTOFF_EXCEEDED", "ACQUISITION_DATE_ROLLOVER"] | None:
+    source_date = mapping.selected_at.astimezone(_IST).date()
+    observed_date = known_at.astimezone(_IST).date()
+    if observed_date < source_date:
+        raise ValueError("current event V2 source-time integrity invalid")
+    if observed_date > source_date:
+        return "ACQUISITION_DATE_ROLLOVER"
+    if known_at > mapping.decision_cutoff:
+        return "ACQUISITION_CUTOFF_EXCEEDED"
+    return None
+
+
+def _require_retention_source_binding(
+    mapping: CurrentResearchMappingProjectionV2,
+    source_filename: str,
+    members: tuple[CurrentEventMemberProjectionV2, ...],
+) -> None:
+    """Check source/canonical equations independently of the fresh archive clock."""
+    source_range = _parse_filename_range(source_filename)
+    if (
+        source_range is None
+        or source_range[1] != mapping.selected_at.astimezone(_IST).date()
+        or any(
+            not _mapping_valid_on_source_date(member, source_range[1])
+            for member in mapping.members
+        )
+        or any(
+            not source_range[0]
+            <= cast(datetime, parser(text)).date()
+            <= source_range[1]
+            for member in members
+            for notice in member.notices
+            for text, parser in (
+                (notice.broadcast_at, _event_datetime),
+                (notice.receipt_at, _receipt_datetime),
+                (notice.dissemination_at, _event_datetime),
+            )
+        )
+    ):
+        raise ValueError("current event V2 source-time integrity invalid")
+
+
 def _wire(value: object) -> object:
     if type(value) is datetime:
         return (
@@ -127,6 +184,8 @@ def _verify_final_archive_binding(
     operation: object,
     directory: int,
     objects: tuple[tuple[str, bytes | None, int], ...] = (),
+    *,
+    absent_objects: tuple[tuple[str, int], ...] = (),
 ) -> None:
     try:
         # Descriptor access itself re-establishes root liveness and can fail
@@ -155,6 +214,9 @@ def _verify_final_archive_binding(
                 and _stable_object(directory, name, expected) is None
             ):
                 raise ValueError("current event V2 archive object invalid")
+        for name, maximum in absent_objects:
+            if _read_stable_private_object(directory, name, maximum) is not None:
+                raise ValueError("current event V2 archive prefix changed")
         _validate_archive_directory(root, directory)
         _validate_archive_root(root)
         ensure_live()
@@ -1134,6 +1196,7 @@ def retain_current_event_notices_v2(  # noqa: C901 - explicit logical commit
             )
         )
     members = tuple(local_members)
+    _require_retention_source_binding(mapping, event_input.source_filename, members)
     projection_core = {
         "contract_version": _CONTRACT,
         "schema_identity_sha256": _SCHEMA_IDENTITY,
@@ -1219,17 +1282,21 @@ def retain_current_event_notices_v2(  # noqa: C901 - explicit logical commit
             prefix_exists = True
         except FileNotFoundError:
             prefix_exists = False
-        if not prefix_exists and (
-            known_at > mapping.decision_cutoff
-            or source_date is None
-            or source_date != known_at.astimezone(_IST).date()
-            or source_date != mapping.selected_at.astimezone(_IST).date()
-            or any(
-                not _mapping_valid_on_source_date(member, source_date)
-                for member in mapping.members
-            )
-        ):
-            raise ValueError("current event V2 source-time integrity invalid")
+        if not prefix_exists:
+            temporal_failure = _fresh_retention_time_failure(known_at, mapping)
+            if temporal_failure is not None:
+                # Preserve the no-archive effect on rejected fresh acquisitions.
+                _validate_archive_root(operation.descriptor)
+                try:
+                    os.stat(
+                        ".current-event-notice-v1",
+                        dir_fd=operation.descriptor,
+                        follow_symlinks=False,
+                    )
+                except FileNotFoundError:
+                    operation.ensure_live()
+                    raise CurrentEventRetentionTimeErrorV2(temporal_failure) from None
+                raise ValueError("current event V2 archive authority invalid")
         directory = _open_archive(operation.descriptor)
         try:
             existing_objects = tuple(
@@ -1250,17 +1317,6 @@ def retain_current_event_notices_v2(  # noqa: C901 - explicit logical commit
             # clock's source-date/cutoff admission.  A valid prefix owns its
             # original source knowledge time across IST rollover; only a new
             # acquisition must satisfy the fresh clock relationship.
-            if stored is None and (
-                known_at > mapping.decision_cutoff
-                or source_date is None
-                or source_date != known_at.astimezone(_IST).date()
-                or source_date != mapping.selected_at.astimezone(_IST).date()
-                or any(
-                    not _mapping_valid_on_source_date(member, source_date)
-                    for member in mapping.members
-                )
-            ):
-                raise ValueError("current event V2 source-time integrity invalid")
             if stored is not None:
                 try:
                     stored_core = _decode_stored_projection_v2(
@@ -1364,6 +1420,40 @@ def retain_current_event_notices_v2(  # noqa: C901 - explicit logical commit
             ):
                 if existing is not None and existing[0] != expected:
                     raise ValueError("current event V2 immutable archive conflict")
+            if stored is None:
+                temporal_failure = _fresh_retention_time_failure(known_at, mapping)
+                if temporal_failure is not None:
+                    # Recheck both present objects and missing suffixes. Expiry
+                    # must not hide a corrupt/replaced prefix or archive/root.
+                    for existing, (name, expected, maximum) in zip(
+                        existing_objects, names_and_values, strict=True
+                    ):
+                        observed = _read_stable_private_object(directory, name, maximum)
+                        if (existing is None) != (observed is None) or (
+                            observed is not None and observed[0] != expected
+                        ):
+                            raise ValueError(
+                                "current event V2 immutable archive conflict"
+                            )
+                    _verify_final_archive_binding(
+                        operation,
+                        directory,
+                        tuple(
+                            (name, expected, maximum)
+                            for existing, (name, expected, maximum) in zip(
+                                existing_objects, names_and_values, strict=True
+                            )
+                            if existing is not None
+                        ),
+                        absent_objects=tuple(
+                            (name, maximum)
+                            for existing, (name, _, maximum) in zip(
+                                existing_objects, names_and_values, strict=True
+                            )
+                            if existing is None
+                        ),
+                    )
+                    raise CurrentEventRetentionTimeErrorV2(temporal_failure)
             for existing, (name, expected, maximum) in zip(
                 existing_objects, names_and_values, strict=True
             ):
@@ -1409,6 +1499,7 @@ def retain_current_event_notices_v2(  # noqa: C901 - explicit logical commit
 
 __all__ = [
     "CurrentEventAcquisitionAttemptV2",
+    "CurrentEventRetentionTimeErrorV2",
     "CurrentEventMemberProjectionV2",
     "RetainedCurrentEventNoticeProjectionV2",
     "current_event_notice_runtime_code_identity_v2",

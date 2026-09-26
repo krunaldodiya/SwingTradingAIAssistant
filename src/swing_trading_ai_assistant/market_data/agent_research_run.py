@@ -68,10 +68,10 @@ def _runtime_identity() -> str:
     return _identity(observed)
 
 
-def run_agent_research_current(  # noqa: C901 - explicit admitted feature states stay local.
-    symbols: tuple[str, ...], storage_root: Path, *, research: ResearchService
-) -> dict[str, object]:
-    """Run V2 once per symbol and project only admitted, comparable facts."""
+def validate_agent_research_request(
+    symbols: tuple[str, ...], storage_root: Path
+) -> None:
+    """Validate the bounded explicit request before any storage or provider effects."""
     if (
         type(symbols) is not tuple
         or not 1 <= len(symbols) <= 10
@@ -87,6 +87,13 @@ def run_agent_research_current(  # noqa: C901 - explicit admitted feature states
         or not storage_root.is_absolute()
     ):
         raise CurrentStockResearchInputError("invalid agent research request")
+
+
+def run_agent_research_current(  # noqa: C901 - explicit admitted feature states stay local.
+    symbols: tuple[str, ...], storage_root: Path, *, research: ResearchService
+) -> dict[str, object]:
+    """Run V2 once per symbol and project only admitted, comparable facts."""
+    validate_agent_research_request(symbols, storage_root)
 
     runtime_identity = _runtime_identity()
     members: list[dict[str, object]] = []
@@ -459,6 +466,7 @@ def run_agent_swing_research_current(  # noqa: C901 - selection and output check
     research: ResearchService,
     confirm_research: ConfirmResearchService,
     previous_research: PreviousResearchService,
+    selected_results: list[CurrentStockResearchResultV2] | None = None,
 ) -> dict[str, object]:
     """Versioned agent result with at most one admitted prior-session anchor."""
     decisions: dict[str, tuple[date | None, str]] = {}
@@ -529,7 +537,17 @@ def run_agent_swing_research_current(  # noqa: C901 - selection and output check
         decisions[symbol] = (latest, "PREVIOUS_WINDOW_UNAVAILABLE")
         return initial
 
-    report = run_agent_research_current(symbols, storage_root, research=choose)
+    def capture_selected(
+        symbol: str, root: Path, *, question: str, refresh: bool = False
+    ) -> CurrentStockResearchResultV2:
+        result = choose(symbol, root, question=question, refresh=refresh)
+        if selected_results is not None:
+            selected_results.append(result)
+        return result
+
+    report = run_agent_research_current(
+        symbols, storage_root, research=capture_selected
+    )
     report["contract_version"] = "agent-current-research-run@v2"
     members = report["members"]
     if type(members) is not list:
