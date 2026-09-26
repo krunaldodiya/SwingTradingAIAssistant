@@ -1,5 +1,21 @@
 # Upcoming Sprints Overview
 
+## Active Sprint 25 — September 26, 2026
+
+The owner accepted [Sprint 25 / #222](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/222)
+and requested bounded persistent goal execution. [Plan 38](plans/38-agent-current-cohort-context-contract.md)
+freezes integration of existing Market Regime and Industry Participation into
+opt-in agent research V4: 1–10 research stocks beside an explicit 2–50-member
+comparison cohort. Calculations are reused, with separate source/time bindings,
+owner-private output and honest missing context. Relative Strength remains a
+separate future capability. Implementation and verification are in progress;
+no Sprint25 release or live-provider qualification is claimed.
+
+Sprint24 event-notice context was delivered by [PR221](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/221),
+merged at `37064206e390aed01a17810e71b6433bb2cd5a74`; issue220 and milestone16 are
+closed and the Project item is Done. Earlier planning checkpoints below remain
+historical; they do not override the live tracker or Plan38.
+
 ## Next planning checkpoint — September 22, 2026
 
 The owner has chosen to retain the next-sprint discussion before migrating to
