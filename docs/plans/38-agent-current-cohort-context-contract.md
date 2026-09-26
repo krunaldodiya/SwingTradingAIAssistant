@@ -148,3 +148,15 @@ stock picking, signals, orders, generalized persistence/replay/attestation,
 monitoring and source redistribution. Rollback uses unchanged V1–V3 and leaves
 retained evidence and predecessor readers intact. The prior release exception
 has expired; it supplies no Sprint25 authority.
+
+## Pre-implementation seam audit
+
+Read-only agent `context_seam_audit` confirmed the reused producer sequence and
+separate-cohort wrapper are feasible. Its review is design evidence, not final
+independent approval. Two required corrections at the new orchestration boundary:
+prepare retained same-date Upstox mappings before the raw adapter, and never
+reinterpret generic raw acquisition or archive failures as harmless source
+absence. The legacy default raw downloader catches broad Exception; the new
+path must use a narrow classified adapter or fail that ambiguous outcome fatally,
+with discriminating storage/integrity tests. No existing reducer rewrite is
+required or authorized by this correction.
