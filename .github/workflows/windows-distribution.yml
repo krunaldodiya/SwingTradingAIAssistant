@@ -1,29 +1,35 @@
 name: Windows distribution conformance
+
 on:
   workflow_dispatch:
+
 permissions:
   contents: read
+
+concurrency:
+  group: windows-distribution
+  cancel-in-progress: false
+
 jobs:
-  dispatch-probe:
-    if: github.actor == 'krunaldodiya' && github.ref == 'refs/heads/codex/self-hosted-ci'
-    runs-on: [self-hosted, Linux, X64, swing-ci-linux]
-    timeout-minutes: 3
+  conformance:
+    # No pull_request, push, repository_dispatch, or user-supplied source refs.
+    if: github.ref == 'refs/heads/main' && github.repository == 'krunaldodiya/SwingTradingAIAssistant'
+    runs-on: [self-hosted, Windows, X64, swing-windows-conformance]
+    timeout-minutes: 45
     steps:
-      - name: Verify local execution without checkout or secrets
-        shell: bash
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify WSL installed wheel and published Docker Desktop digest
+        shell: powershell
+        run: ./scripts/verify_windows_distribution.ps1
+      - name: Retain conformance receipts on the Windows host
+        if: always()
+        shell: powershell
         run: |
-          set -euo pipefail
-          test "$RUNNER_ENVIRONMENT" = self-hosted
-          test "$(uname -s)" = Linux
-          printf 'WSL self-hosted dispatch verified; runner=%s\n' "$RUNNER_NAME"
-      - name: Verify isolated Docker and private bind permissions
-        shell: bash
-        run: |
-          set -euo pipefail
-          docker info
-          install -d -m 700 "$HOME/probe"
-          printf 'synthetic probe\n' > "$HOME/probe/input"
-          chmod 600 "$HOME/probe/input"
-          docker run --rm --user "$(id -u):$(id -g)" --mount "type=bind,src=$HOME/probe,dst=/probe,readonly" alpine:3.22 cat /probe/input
-          test ! -S /var/run/docker.sock
-          printf 'isolated engine verified\n' > "$SWING_CI_ARTIFACTS/probe.txt"
+          $ErrorActionPreference = 'Stop'
+          $target = Join-Path $env:LOCALAPPDATA "SwingTradingAIAssistant/ci-receipts/$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          New-Item -ItemType Directory -Force -Path $target | Out-Null
+          Copy-Item -Recurse -ErrorAction Stop artifacts/windows-distribution/* $target

@@ -359,6 +359,91 @@ def _candidate_artifact(
     return candidates[0]
 
 
+def _job_annotation(api: Api, *, repository: str, job_id: int) -> Mapping[str, Any]:
+    annotations = api.get_json(
+        f"/repos/{repository}/check-runs/{job_id}/annotations", {"per_page": "100"}
+    )
+    if not isinstance(annotations, list) or len(annotations) >= 100:
+        raise ValueError("incomplete annotation response")
+    notices = [
+        _required_mapping(a, "annotation")
+        for a in cast(list[object], annotations)
+        if _required_mapping(a, "annotation").get("title") == "Exact CI admission v1"
+    ]
+    if len(notices) != 1 or notices[0].get("annotation_level") != "notice":
+        raise ValueError("exactly one admission notice is required")
+    raw = _required_string(notices[0].get("message"), "admission notice")
+    if len(raw.encode()) > _MAX_RECORD_BYTES:
+        raise ValueError("admission notice is too large")
+    record = _required_mapping(json.loads(raw), "admission record")
+    if frozenset(record) != _RECORD_KEYS:
+        raise ValueError("admission record has unknown or missing fields")
+    return record
+
+
+def _candidate_annotation(
+    api: Api, *, repository: str, head_sha: str, merged_at: datetime
+) -> tuple[Mapping[str, Any], Mapping[str, Any]]:
+    """Read the successful job's GitHub-owned notice, without artifact storage."""
+    response = _required_mapping(
+        api.get_json(
+            f"/repos/{repository}/actions/workflows/ci.yml/runs",
+            {
+                "event": "pull_request",
+                "status": "completed",
+                "head_sha": head_sha,
+                "per_page": "100",
+            },
+        ),
+        "workflow runs response",
+    )
+    runs = response.get("workflow_runs")
+    if not isinstance(runs, list):
+        raise ValueError("workflow runs are missing")
+    candidates: list[tuple[Mapping[str, Any], Mapping[str, Any]]] = []
+    for value in cast(list[object], runs):
+        run = _required_mapping(value, "workflow run")
+        if not _run_matches(run, head_sha=head_sha, merged_at=merged_at):
+            continue
+        run_id = _required_int(run.get("id"), "run id")
+        attempt = _required_int(run.get("run_attempt"), "run attempt")
+        result = _required_mapping(
+            api.get_json(
+                f"/repos/{repository}/actions/runs/{run_id}/attempts/{attempt}/jobs",
+                {"per_page": "100"},
+            ),
+            "jobs response",
+        )
+        jobs = result.get("jobs")
+        if not isinstance(jobs, list) or result.get("total_count") != len(jobs):
+            raise ValueError("incomplete jobs response")
+        matches = [
+            _required_mapping(job, "job")
+            for job in cast(list[object], jobs)
+            if _required_mapping(job, "job").get("name") == "Quality and build"
+        ]
+        if len(matches) != 1:
+            raise ValueError("exactly one quality job is required")
+        job = matches[0]
+        labels = job.get("labels")
+        if (
+            job.get("status") != "completed"
+            or job.get("conclusion") != "success"
+            or job.get("run_id") != run_id
+            or job.get("run_attempt") != attempt
+            or not isinstance(labels, list)
+            or not {"self-hosted", "Linux", "X64", "swing-ci-linux"}.issubset(labels)
+            or _parse_time(job.get("completed_at"), "job completion") > merged_at
+        ):
+            raise ValueError("quality job does not establish trusted prior execution")
+        job_id = _required_int(job.get("id"), "job id")
+        record = _job_annotation(api, repository=repository, job_id=job_id)
+        candidates.append((run, record))
+    if len(candidates) != 1:
+        raise ValueError("exactly one successful CI admission is required")
+    return candidates[0]
+
+
 def verify_admission(
     event: Mapping[str, Any],
     context: Mapping[str, str],
@@ -391,14 +476,24 @@ def verify_admission(
     if base_sha != before:
         raise ValueError("pull request base does not match push.before")
 
-    run, artifact = _candidate_artifact(
-        api, repository=repository, head_sha=head_sha, merged_at=merged_at
-    )
+    transport = context.get("admission_transport", "artifact")
+    if transport == "check-annotation":
+        run, record = _candidate_annotation(
+            api, repository=repository, head_sha=head_sha, merged_at=merged_at
+        )
+    elif transport == "artifact":
+        run, artifact = _candidate_artifact(
+            api, repository=repository, head_sha=head_sha, merged_at=merged_at
+        )
+        artifact_id = _required_int(artifact.get("id"), "artifact id")
+        raw_zip = api.get_bytes(
+            f"/repos/{repository}/actions/artifacts/{artifact_id}/zip"
+        )
+        record = _artifact_record(raw_zip, artifact.get("digest"))
+    else:
+        raise ValueError("unsupported admission transport")
     run_id = _required_int(run.get("id"), "workflow run id")
     run_attempt = _required_int(run.get("run_attempt"), "workflow run attempt")
-    artifact_id = _required_int(artifact.get("id"), "artifact id")
-    raw_zip = api.get_bytes(f"/repos/{repository}/actions/artifacts/{artifact_id}/zip")
-    record = _artifact_record(raw_zip, artifact.get("digest"))
 
     expected_ref = f"{repository}/{_WORKFLOW_PATH}@refs/pull/{pr_number}/merge"
     expected_values: dict[str, object] = {
@@ -464,6 +559,7 @@ def _write_output(path: Path, *, admitted: bool, reason: str) -> None:
 def _context() -> dict[str, str]:
     return {
         "repository": os.environ.get("GITHUB_REPOSITORY", ""),
+        "admission_transport": os.environ.get("CI_ADMISSION_TRANSPORT", "artifact"),
         "sha": os.environ.get("GITHUB_SHA", ""),
         "workflow_ref": os.environ.get("CI_WORKFLOW_REF", ""),
         "workflow_sha": os.environ.get("CI_WORKFLOW_SHA", ""),
@@ -472,13 +568,17 @@ def _context() -> dict[str, str]:
     }
 
 
-def _issue(output: Path) -> int:
+def _issue(output: Path, *, annotation: bool = False) -> int:
     event = _load_event(Path(os.environ["GITHUB_EVENT_PATH"]))
     record = build_admission_record(event, _context())
     output.write_text(
         json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n",
         encoding="utf-8",
     )
+    if annotation:
+        raw = json.dumps(record, sort_keys=True, separators=(",", ":"))
+        escaped = raw.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+        print(f"::notice title=Exact CI admission v1::{escaped}")
     return 0
 
 
@@ -498,9 +598,10 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("mode", choices=("issue", "verify"))
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--annotation", action="store_true")
     args = parser.parse_args(argv)
     if args.mode == "issue":
-        return _issue(args.output)
+        return _issue(args.output, annotation=args.annotation)
     return _verify(args.output)
 
 

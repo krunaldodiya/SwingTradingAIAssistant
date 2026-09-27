@@ -320,3 +320,114 @@ def test_verify_admission_rejects_tested_commit_parent_mismatch() -> None:
 
     with pytest.raises(ValueError, match="exact pull request merge"):
         ci_admission.verify_admission(_push_event(), _context(), api, _git_value)
+
+
+class AnnotationApi(FakeApi):
+    def __init__(self) -> None:
+        super().__init__()
+        self.jobs: dict[str, Any] = {
+            "total_count": 1,
+            "jobs": [
+                {
+                    "id": 555,
+                    "name": "Quality and build",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "run_id": RUN_ID,
+                    "run_attempt": RUN_ATTEMPT,
+                    "completed_at": "2026-08-27T12:00:00Z",
+                    "labels": ["self-hosted", "Linux", "X64", "swing-ci-linux"],
+                }
+            ],
+        }
+        self.annotations: list[dict[str, object]] = [
+            {
+                "title": "Exact CI admission v1",
+                "annotation_level": "notice",
+                "message": json.dumps(_record()),
+            }
+        ]
+
+    def get_json(self, path: str, query: dict[str, str] | None = None) -> object:
+        if path.endswith(f"/actions/runs/{RUN_ID}/attempts/{RUN_ATTEMPT}/jobs"):
+            return self.jobs
+        if path.endswith("/check-runs/555/annotations"):
+            return self.annotations
+        assert not path.endswith("/artifacts"), (
+            "annotation mode must not use paid artifact storage"
+        )
+        return super().get_json(path, query)
+
+    def get_bytes(self, path: str) -> bytes:
+        raise AssertionError("annotation mode must not download artifacts")
+
+
+def _annotation_context() -> dict[str, str]:
+    return {**_context(), "admission_transport": "check-annotation"}
+
+
+def test_annotation_admission_reuses_exact_tree_without_artifact_storage() -> None:
+    assert ci_admission.verify_admission(
+        _push_event(), _annotation_context(), AnnotationApi(), _git_value
+    )[0]
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("conclusion", "failure"),
+        ("status", "in_progress"),
+        ("run_attempt", 2),
+        ("run_id", 999),
+        ("labels", ["ubuntu-24.04"]),
+        ("completed_at", "2026-08-27T12:02:00Z"),
+    ],
+)
+def test_annotation_admission_rejects_wrong_execution(
+    field: str, value: object
+) -> None:
+    api = AnnotationApi()
+    api.jobs["jobs"][0][field] = value
+    with pytest.raises(ValueError):
+        ci_admission.verify_admission(
+            _push_event(), _annotation_context(), api, _git_value
+        )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "missing",
+        "duplicate",
+        "malformed",
+        "oversize",
+        "wrong-tree",
+        "extra-field",
+        "not-notice",
+        "truncated-jobs",
+    ],
+)
+def test_annotation_admission_rejects_incomplete_or_tampered_evidence(
+    mutation: str,
+) -> None:
+    api = AnnotationApi()
+    if mutation == "missing":
+        api.annotations = []
+    elif mutation == "duplicate":
+        api.annotations *= 2
+    elif mutation == "malformed":
+        api.annotations[0]["message"] = "not json"
+    elif mutation == "oversize":
+        api.annotations[0]["message"] = "x" * 8193
+    elif mutation == "not-notice":
+        api.annotations[0]["annotation_level"] = "warning"
+    elif mutation == "truncated-jobs":
+        api.jobs["total_count"] = 101
+    else:
+        record = _record()
+        record["tested_tree" if mutation == "wrong-tree" else "extra"] = "0" * 40
+        api.annotations[0]["message"] = json.dumps(record)
+    with pytest.raises(ValueError):
+        ci_admission.verify_admission(
+            _push_event(), _annotation_context(), api, _git_value
+        )

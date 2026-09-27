@@ -16,10 +16,15 @@ concurrency:
 jobs:
   quality:
     name: Quality and build
-    if: github.event_name == 'pull_request'
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.repository == 'krunaldodiya/SwingTradingAIAssistant' &&
+      github.actor == 'krunaldodiya' &&
+      github.event.pull_request.user.login == 'krunaldodiya' &&
+      github.event.pull_request.head.repo.full_name == github.repository
     permissions:
       contents: read
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux, X64, swing-ci-linux]
     timeout-minutes: 60
     steps:
       - name: Check out repository
@@ -89,6 +94,7 @@ jobs:
           steps.changes.outputs.lifecycle_gate == 'true'
         uses: astral-sh/setup-uv@61cb8a9741eeb8a550a1b8544337180c0fc8476b # v7.2.0
         with:
+          enable-cache: false
           version: "0.9.24"
           python-version: "3.11"
           checksum: "fb13ad85106da6b21dd16613afca910994446fe94a78ee0b5bed9c75cd066078"
@@ -134,14 +140,13 @@ jobs:
           --prior-commit "$PR_BASE_SHA"
           --receipt "$RUNNER_TEMP/linux-distribution-receipt.json"
 
-      - name: Retain Linux distribution receipt
+      - name: Retain Linux distribution receipt locally
         if: steps.changes.outputs.full_gate == 'true'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: linux-distribution-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/linux-distribution-receipt.json
-          if-no-files-found: error
-          retention-days: 7
+        run: |
+          set -eu
+          target="$SWING_CI_ARTIFACTS/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          mkdir -p "$target"
+          cp "$RUNNER_TEMP/linux-distribution-receipt.json" "$target/"
 
       - name: Issue exact-tree CI admission
         env:
@@ -149,25 +154,28 @@ jobs:
           CI_WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: >-
           python3 .github/scripts/ci_admission.py issue
-          --output "$RUNNER_TEMP/ci-admission.json"
+          --output "$RUNNER_TEMP/ci-admission.json" --annotation
 
-      - name: Retain exact-tree CI admission
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: ci-admission-v1-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/ci-admission.json
-          if-no-files-found: error
-          retention-days: 1
-          compression-level: 0
+      - name: Retain exact-tree CI admission locally
+        run: |
+          set -eu
+          target="$SWING_CI_ARTIFACTS/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          mkdir -p "$target"
+          cp "$RUNNER_TEMP/ci-admission.json" "$target/"
+
 
   main-backstop:
     name: Main admission backstop
-    if: github.event_name == 'push'
+    if: >-
+      github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+      github.repository == 'krunaldodiya/SwingTradingAIAssistant' &&
+      github.actor == 'krunaldodiya'
     permissions:
       actions: read
       contents: read
       pull-requests: read
-    runs-on: ubuntu-24.04
+      checks: read
+    runs-on: [self-hosted, Linux, X64, swing-ci-linux]
     timeout-minutes: 60
     steps:
       - name: Check out repository
@@ -181,6 +189,7 @@ jobs:
         continue-on-error: true
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          CI_ADMISSION_TRANSPORT: check-annotation
         run: >-
           python3 .github/scripts/ci_admission.py verify
           --output "$GITHUB_OUTPUT"
@@ -209,6 +218,7 @@ jobs:
           steps.admission.outputs.admitted != 'true'
         uses: astral-sh/setup-uv@61cb8a9741eeb8a550a1b8544337180c0fc8476b # v7.2.0
         with:
+          enable-cache: false
           version: "0.9.24"
           python-version: "3.11"
           checksum: "fb13ad85106da6b21dd16613afca910994446fe94a78ee0b5bed9c75cd066078"
