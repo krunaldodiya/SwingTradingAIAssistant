@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from test_agent_cohort_integration import _setup
 
@@ -153,3 +155,64 @@ def test_interruption_around_context_publication_never_emits_partial_json(
     retry = StorageRootLease.try_acquire_existing(root)
     assert retry.lease is not None
     retry.lease.close()
+
+
+@pytest.mark.parametrize("after_commit", [False, True])
+def test_explicit_command_after_context_interruption_preserves_commit_boundary(
+    tmp_path, monkeypatch, capsys, after_commit
+):
+    root, path, members, kwargs, source, _ = _setup(tmp_path, monkeypatch)
+    publish = api.regime._publish_exact
+    completed = []
+
+    def interrupt(directory, name, raw, maximum):
+        result = publish(directory, name, raw, maximum)
+        if name.startswith("completion-"):
+            completed.append(name)
+            raise KeyboardInterrupt
+        return result
+
+    archive_type = api.regime.FileCurrentSamePassMarketContextArchiveV1
+    archive_exact = archive_type.archive_exact
+
+    def interrupt_committed(self, *args, **options):
+        retained = archive_exact(self, *args, **options)
+        assert type(retained) is api.regime.RetainedCurrentSamePassMarketContextV4
+        completed.append(next(root.rglob("completion-*.json")).name)
+        raise KeyboardInterrupt
+
+    if after_commit:
+        monkeypatch.setattr(archive_type, "archive_exact", interrupt_committed)
+    else:
+        monkeypatch.setattr(api.regime, "_publish_exact", interrupt)
+    with pytest.raises(KeyboardInterrupt):
+        _run_cli(monkeypatch, root, path, members, kwargs)
+    output = capsys.readouterr()
+    assert output.out == output.err == ""
+    assert len(completed) == 1
+    marker = next(root.rglob(completed[0]))
+    original_files = {p: p.read_bytes() for p in marker.parent.iterdir() if p.is_file()}
+    assert source.calls == []
+
+    monkeypatch.setattr(api.regime, "_publish_exact", publish)
+    monkeypatch.setattr(archive_type, "archive_exact", archive_exact)
+    code = _run_cli(monkeypatch, root, path, members, kwargs)
+    output = capsys.readouterr()
+    assert all(p.read_bytes() == original for p, original in original_files.items())
+    if not after_commit:
+        # A marker without the final admissibility guard is not a completed commit.
+        assert code == 2
+        assert output.out == ""
+        assert output.err == "internal_error\n"
+        assert source.calls == []
+        return
+    # This unchanged synthetic stock fixture has usable price facts.
+    assert code == 0, output.err
+    assert output.err == ""
+    report = json.loads(output.out)
+    assert report["cohort_context"]["market_regime"]["availability"] == "OBSERVED"
+    assert (
+        report["cohort_context"]["industry_participation"]["availability"] == "OBSERVED"
+    )
+    assert len(source.calls) == 1
+    assert all(p.read_bytes() == original for p, original in original_files.items())

@@ -37,15 +37,15 @@ def test_demo_runs_actual_cli_and_reports_tool_computed_change() -> None:
     assert value["question"] == "PRICE_BEHAVIOR"
     assert (
         value["result_identity_sha256"]
-        == "19c108c8ea05878bbc8e49f226e47662a0c4fa2ae8c77ab85c31764a6affbe15"
+        == "966377f6fc6bf602465f0cbf2969abacc6389921b07f4eee166a2b52a8210da2"
     )
     assert (
         value["previous_observation_identity_sha256"]
-        == "fcd9d70492dc2e7dc6acf56437dbf6a298c3c2a91b24372f40ec30ba95ca6654"
+        == "c2dc5fb4f7e0ec011aefd7928501f044f7c18062661f58dc2d0159310267bee6"
     )
     assert (
         value["current_observation_identity_sha256"]
-        == "46b34743b7b2bb6c10f1366bd055dc494341f1f8ffbdc29633368f2abe7158ab"
+        == "b06f30002236d10e4780f19cdc22d56951b055e19ea4cd3bdc75f3aba0f0f971"
     )
     body = next(
         item for item in value["facts"] if item["path"] == "CANDLE_GEOMETRY.body_size"

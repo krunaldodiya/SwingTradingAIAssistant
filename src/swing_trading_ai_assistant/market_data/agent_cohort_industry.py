@@ -21,11 +21,20 @@ from .current_industry_classification import (
     RetainedCurrentIndustrySnapshotV1,
     parse_current_industry_artifact_v1,
     project_current_supplied_cohort_industry_v1,
+    revalidate_retained_current_industry_snapshot_v1,
 )
 from .http import HttpTransport
 from .storage_root_lease import StorageRootLease
 
 _IST = ZoneInfo("Asia/Kolkata")
+
+
+class RetainedIndustryAcquisitionError(acquisition.CurrentEvidenceAcquisitionError):
+    """Keep exact retained evidence available when the later time check expires."""
+
+    def __init__(self, code: str, retained: RetainedCurrentIndustrySnapshotV1) -> None:
+        super().__init__(code)
+        self.retained = retained
 
 
 class _IndustryWindow:
@@ -86,7 +95,7 @@ def _utc(value: object) -> bool:
     )
 
 
-def acquire_and_retain_agent_industry(
+def acquire_and_retain_agent_industry(  # noqa: C901 -- source checks and final integrity precedence.
     root: Path,
     lease: StorageRootLease,
     cohort_identity: str,
@@ -123,6 +132,7 @@ def acquire_and_retain_agent_industry(
         selected_at,
         decision_cutoff,
     )
+    retained: object = None
     try:
         window.before_effect()
         observation = acquisition._fetch_exact(  # pyright: ignore[reportPrivateUsage]
@@ -175,6 +185,12 @@ def acquire_and_retain_agent_industry(
                 "ACQUISITION_CUTOFF_EXCEEDED"
             )
         return retained, observation.known_at
+    except acquisition.CurrentEvidenceAcquisitionError as error:
+        if type(retained) is RetainedCurrentIndustrySnapshotV1:
+            raise RetainedIndustryAcquisitionError(error.code.value, retained) from None
+        raise
     finally:
+        if type(retained) is RetainedCurrentIndustrySnapshotV1:
+            revalidate_retained_current_industry_snapshot_v1(retained, root, lease)
         # Optional absence/expiry may never conceal lost storage authority.
         window.authority()

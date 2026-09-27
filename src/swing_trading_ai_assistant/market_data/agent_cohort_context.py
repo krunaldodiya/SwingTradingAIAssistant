@@ -26,7 +26,10 @@ from .adjusted_daily.service_v3 import (
     adjusted_daily_request_identity_v3,
     adjusted_daily_schedule_identity_v3,
 )
-from .agent_cohort_industry import acquire_and_retain_agent_industry
+from .agent_cohort_industry import (
+    RetainedIndustryAcquisitionError,
+    acquire_and_retain_agent_industry,
+)
 from .agent_cohort_request import AgentCohortMappings, validate_agent_cohort_request
 from .agent_event_context import run_agent_event_research_current
 from .agent_research_run import (
@@ -44,6 +47,8 @@ from .current_corporate_action_screen import (
 from .current_industry_classification import (
     CurrentIndustryCohortMemberV1,
     CurrentIndustryRetentionTimeErrorV1,
+    RetainedCurrentIndustrySnapshotV1,
+    revalidate_retained_current_industry_snapshot_v1,
 )
 from .http import HttpTransport, HttpTransportError
 from .instrument_snapshot import (
@@ -308,6 +313,7 @@ def _acquire_context(  # noqa: C901 - explicit integrity-first orchestration sta
         clock, selected, effect_deadline, lambda: _authority(root, lease)
     )  # pyright: ignore[reportPrivateUsage]
     resolved: list[Any] = []
+    retained_industry: RetainedCurrentIndustrySnapshotV1 | None = None
     context: object = None
     retained_schedule: ScheduleEvidenceResult | None = None
     try:
@@ -435,7 +441,7 @@ def _acquire_context(  # noqa: C901 - explicit integrity-first orchestration sta
             },
         }
         if report.evidence_state == "OBSERVED":
-            result["industry_participation"] = _industry(
+            result["industry_participation"], retained_industry = _industry(
                 root, lease, request, context, clock, industry_transport
             )
     except _Insufficient as error:
@@ -497,6 +503,10 @@ def _acquire_context(  # noqa: C901 - explicit integrity-first orchestration sta
                     )
                     if reread != original:
                         raise ValueError("cohort final mapping binding mismatch")
+        if retained_industry is not None:
+            revalidate_retained_current_industry_snapshot_v1(
+                retained_industry, root, lease
+            )
     return result
 
 
@@ -519,7 +529,9 @@ def _industry(
     context: regime.RetainedCurrentSamePassMarketContextV4,
     clock: _Clock,
     transport: HttpTransport | None,
-) -> dict[str, object]:
+) -> tuple[dict[str, object], RetainedCurrentIndustrySnapshotV1 | None]:
+    classification: object = None
+    retained: RetainedCurrentIndustrySnapshotV1 | None = None
     try:
         if clock.now() + timedelta(seconds=30) > request.decision_cutoff:
             raise _Insufficient("ACQUISITION_CUTOFF_EXCEEDED")
@@ -535,6 +547,11 @@ def _industry(
             decision_cutoff=request.decision_cutoff,
             clock=clock.now,
             transport=transport,
+        )
+        retained = (
+            classification
+            if type(classification) is RetainedCurrentIndustrySnapshotV1
+            else None
         )
         report = cast(
             Callable[
@@ -565,12 +582,15 @@ def _industry(
             "fact": None
             if report.industries is None
             else [json.loads(row.canonical_json_bytes()) for row in report.industries],
-        }
+        }, retained
     except (
         acquisition.CurrentEvidenceAcquisitionError,
         CurrentIndustryRetentionTimeErrorV1,
         _Insufficient,
     ) as error:
+        if isinstance(error, RetainedIndustryAcquisitionError):
+            retained = error.retained
+            classification = retained
         code = (
             error.code.value
             if isinstance(error, acquisition.CurrentEvidenceAcquisitionError)
@@ -580,7 +600,12 @@ def _industry(
             "availability": "INSUFFICIENT_EVIDENCE",
             "reasons": [code],
             "fact": None,
-        }
+        }, retained
+    finally:
+        if type(classification) is RetainedCurrentIndustrySnapshotV1:
+            revalidate_retained_current_industry_snapshot_v1(
+                classification, root, lease
+            )
 
 
 def run_agent_cohort_research_current(

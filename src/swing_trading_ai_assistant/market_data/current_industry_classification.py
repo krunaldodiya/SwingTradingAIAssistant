@@ -662,8 +662,17 @@ def _retained_canonical_json_bytes(
     return _canonical(result)
 
 
+@dataclass(frozen=True, slots=True, repr=False)
+class _IndustryArchiveBinding:
+    root: Path
+    root_identity: tuple[int, int]
+    directory_identity: tuple[int, int]
+    objects: tuple[tuple[str, bytes, os.stat_result], ...]
+
+
 @dataclass(frozen=True, slots=True, init=False, repr=False)
 class _ArchiveRetainedSeal:
+    binding: _IndustryArchiveBinding
     archive_identity_sha256: str
     archive_receipt_identity_sha256: str
     retained_identity_sha256: str
@@ -1169,6 +1178,28 @@ class FileCurrentIndustryArchiveV1:
             "snapshot_identity_sha256",
         ):
             object.__setattr__(retained_seal, name, getattr(candidate, name))
+        bound_objects: list[tuple[str, bytes, os.stat_result]] = []
+        for name, raw in (
+            (raw_name, artifact),
+            (snapshot_name, snapshot_raw),
+            (receipt_name, receipt_raw),
+            (marker_name, marker_raw),
+        ):
+            info = _stable_object(directory, name, raw)
+            if info is None:
+                raise ValueError("classification archive binding invalid")
+            bound_objects.append((name, raw, info))
+        root_info, directory_info = os.fstat(root), os.fstat(directory)
+        object.__setattr__(
+            retained_seal,
+            "binding",
+            _IndustryArchiveBinding(
+                self._root,
+                (root_info.st_dev, root_info.st_ino),
+                (directory_info.st_dev, directory_info.st_ino),
+                tuple(bound_objects),
+            ),
+        )
         object.__setattr__(retained_seal, "_seal", _ARCHIVE_RETAINED_SEAL)
         retained = object.__new__(RetainedCurrentIndustrySnapshotV1)
         for name in RetainedCurrentIndustrySnapshotV1.__dataclass_fields__:
@@ -1179,6 +1210,64 @@ class FileCurrentIndustryArchiveV1:
         if not _archive_minted_retained(retained):
             raise ValueError
         return retained
+
+
+def revalidate_retained_current_industry_snapshot_v1(
+    retained: RetainedCurrentIndustrySnapshotV1,
+    root: Path,
+    lease: StorageRootLease,
+) -> None:
+    """Read-only check of the original archive binding before later publication.
+
+    No object is created, restored, or republished. The seal retains the exact
+    bytes and filesystem identities admitted when the archive originally minted
+    this object, including its original knowledge time.
+    """
+    if not _archive_minted_retained(retained):
+        raise ValueError("retained Industry archive invalid")
+    seal = cast(_ArchiveRetainedSeal, getattr(retained, "_archive_seal", None))
+    binding = seal.binding
+    if (
+        binding.root != root
+        or _retention_receipt_bytes(retained) != binding.objects[2][1]
+    ):
+        raise ValueError("retained Industry archive invalid")
+    with lease.read_operation(root) as operation:
+        operation.ensure_live()
+        descriptor = operation.descriptor
+        _validate_archive_root(descriptor)
+        root_info = os.fstat(descriptor)
+        if (root_info.st_dev, root_info.st_ino) != binding.root_identity:
+            raise ValueError("retained Industry root invalid")
+        directory = os.open(
+            _ARCHIVE_DIRECTORY,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+            dir_fd=descriptor,
+        )
+        try:
+            _validate_archive_directory(descriptor, directory)
+            directory_info = os.fstat(directory)
+            if (
+                directory_info.st_dev,
+                directory_info.st_ino,
+            ) != binding.directory_identity:
+                raise ValueError("retained Industry directory invalid")
+            for name, expected, admitted in binding.objects:
+                current = _read_stable_private_object(directory, name, len(expected))
+                if (
+                    current is None
+                    or current[0] != expected
+                    or not _same_metadata(current[1], admitted)
+                ):
+                    raise ValueError("retained Industry archive invalid")
+            for name, _raw, admitted in binding.objects:
+                if not _named_binding_matches(directory, name, admitted):
+                    raise ValueError("retained Industry archive invalid")
+            _validate_archive_directory(descriptor, directory)
+            _validate_archive_root(descriptor)
+            operation.ensure_live()
+        finally:
+            os.close(directory)
 
 
 def _valid_archive_input(
