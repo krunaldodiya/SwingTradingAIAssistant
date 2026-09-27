@@ -14,6 +14,22 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  reject-untrusted-main:
+    name: Reject unauthorized main actor
+    if: >-
+      github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+      github.repository == 'krunaldodiya/SwingTradingAIAssistant' &&
+      github.actor != 'krunaldodiya'
+    permissions: {}
+    runs-on: [self-hosted, Linux, X64, swing-ci-linux]
+    timeout-minutes: 5
+    steps:
+      - name: Reject without checking out untrusted source
+        shell: bash
+        run: |
+          echo 'Main admission rejected: this actor is outside the approved owner-only runner policy.' >&2
+          exit 1
+
   quality:
     name: Quality and build
     if: >-
