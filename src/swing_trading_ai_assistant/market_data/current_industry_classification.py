@@ -72,6 +72,22 @@ _ARCHIVE_RETAINED_SEAL: Final = object()
 _ARCHIVE_LOCK: Final = Lock()
 
 
+class CurrentIndustryRetentionClockErrorV1(RuntimeError):
+    """Trusted retention time cannot precede a just-observed source."""
+
+    def __init__(self) -> None:
+        super().__init__("classification retention clock reversed")
+
+
+class CurrentIndustryRetentionTimeErrorV1(RuntimeError):
+    """The exact retained knowledge cannot precede the incoming observation."""
+
+    code = "CLASSIFICATION_OBSERVATION_AFTER_RETENTION"
+
+    def __init__(self) -> None:
+        super().__init__("classification observation after retention")
+
+
 class _AmbiguousArtifactIdentity(ValueError):
     pass
 
@@ -646,8 +662,17 @@ def _retained_canonical_json_bytes(
     return _canonical(result)
 
 
+@dataclass(frozen=True, slots=True, repr=False)
+class _IndustryArchiveBinding:
+    root: Path
+    root_identity: tuple[int, int]
+    directory_identity: tuple[int, int]
+    objects: tuple[tuple[str, bytes, os.stat_result], ...]
+
+
 @dataclass(frozen=True, slots=True, init=False, repr=False)
 class _ArchiveRetainedSeal:
+    binding: _IndustryArchiveBinding
     archive_identity_sha256: str
     archive_receipt_identity_sha256: str
     retained_identity_sha256: str
@@ -928,6 +953,43 @@ def _snapshot_with_identity(
     )
 
 
+def _check_observation_prepublication(
+    directory: int,
+    raw_name: str,
+    artifact: bytes,
+    snapshot_name: str,
+    snapshot_raw: bytes,
+    receipt_name: str,
+    marker_name: str,
+    observed_at: datetime,
+) -> None:
+    """Check relevant existing bytes before a timing-only fresh-write rejection."""
+    for name, expected in ((raw_name, artifact), (snapshot_name, snapshot_raw)):
+        existing = _read_stable_private_object(directory, name, len(expected))
+        if existing is not None and existing[0] != expected:
+            raise ValueError("classification archive conflict")
+    receipt = _read_stable_private_object(
+        directory, receipt_name, _MAX_RETENTION_RECEIPT_BYTES
+    )
+    if receipt is None:
+        # Existing snapshot without receipt is already a failed publication under
+        # this archive's immutable recovery contract; expiry must not mask it.
+        if (
+            _read_stable_private_object(directory, snapshot_name, len(snapshot_raw))
+            is not None
+            or _read_stable_private_object(
+                directory, marker_name, _MAX_COMPLETION_MARKER_BYTES
+            )
+            is not None
+        ):
+            raise ValueError("classification archive incomplete")
+        sampled_at = _trusted_utc_now()
+        if not _trusted_utc(sampled_at):
+            raise ValueError("classification clock invalid")
+        if sampled_at < observed_at:
+            raise CurrentIndustryRetentionClockErrorV1()
+
+
 class FileCurrentIndustryArchiveV1:
     def __init__(self, root: object) -> None:
         if not isinstance(root, Path) or not root.is_absolute():
@@ -940,7 +1002,11 @@ class FileCurrentIndustryArchiveV1:
         artifact: bytes,
         snapshot: PrivateCurrentIndustrySnapshotV1,
         lease: StorageRootLease,
+        *,
+        observed_at: datetime | None = None,
     ) -> RetainedCurrentIndustrySnapshotV1 | CurrentIndustryClassificationFailureV1:
+        if observed_at is not None and not _trusted_utc(observed_at):
+            raise TypeError("classification observation time invalid")
         if not _valid_archive_input(input, artifact, snapshot, lease):
             raise TypeError("classification archive input invalid")
         try:
@@ -954,6 +1020,18 @@ class FileCurrentIndustryArchiveV1:
                 _validate_archive_root(root)
                 directory = _open_archive_directory(root)
                 try:
+                    if observed_at is not None:
+                        _check_observation_prepublication(
+                            directory,
+                            raw_name,
+                            artifact,
+                            snapshot_name,
+                            snapshot_raw,
+                            receipt_name,
+                            marker_name,
+                            observed_at,
+                        )
+                        operation.ensure_live()
                     _publish_object(directory, raw_name, artifact)
                     snapshot_published = _publish_object(
                         directory, snapshot_name, snapshot_raw
@@ -979,9 +1057,25 @@ class FileCurrentIndustryArchiveV1:
                         snapshot_published,
                         receipt_name,
                         marker_name,
+                        observed_at,
                     )
+                except (
+                    CurrentIndustryRetentionTimeErrorV1,
+                    CurrentIndustryRetentionClockErrorV1,
+                ):
+                    operation.ensure_live()
+                    _validate_archive_root(root)
+                    _validate_archive_directory(root, directory)
+                    raise
                 finally:
                     os.close(directory)
+        except (
+            CurrentIndustryRetentionTimeErrorV1,
+            CurrentIndustryRetentionClockErrorV1,
+        ):
+            with lease.root_operation(self._root) as operation:
+                operation.ensure_live()
+            raise
         except Exception:
             return _failure(("CLASSIFICATION_ARCHIVE_FAILED",), snapshot.cohort_size)
 
@@ -998,6 +1092,7 @@ class FileCurrentIndustryArchiveV1:
         snapshot_published: bool,
         receipt_name: str,
         marker_name: str,
+        observed_at: datetime | None,
     ) -> RetainedCurrentIndustrySnapshotV1:
         existing = _read_stable_private_object(
             directory, receipt_name, _MAX_RETENTION_RECEIPT_BYTES
@@ -1009,6 +1104,8 @@ class FileCurrentIndustryArchiveV1:
             sampled_at = _trusted_utc_now()
             if not _trusted_utc(sampled_at):
                 raise ValueError
+            if observed_at is not None and sampled_at < observed_at:
+                raise CurrentIndustryRetentionClockErrorV1()
             candidate = _candidate_from_snapshot(
                 snapshot, sampled_at + _RETENTION_COMPLETION_SAFETY_MARGIN
             )
@@ -1067,6 +1164,12 @@ class FileCurrentIndustryArchiveV1:
             marker_raw,
             candidate.known_at,
         )
+        # Replays keep their original knowledge time. Complete integrity checks
+        # above before classifying a later observation as temporally inadmissible.
+        if observed_at is not None and candidate.known_at < observed_at:
+            # The complete binding was checked immediately above; the caller also
+            # rechecks its typed root operation before publishing this outcome.
+            raise CurrentIndustryRetentionTimeErrorV1()
         retained_seal = object.__new__(_ArchiveRetainedSeal)
         for name in (
             "archive_identity_sha256",
@@ -1075,6 +1178,28 @@ class FileCurrentIndustryArchiveV1:
             "snapshot_identity_sha256",
         ):
             object.__setattr__(retained_seal, name, getattr(candidate, name))
+        bound_objects: list[tuple[str, bytes, os.stat_result]] = []
+        for name, raw in (
+            (raw_name, artifact),
+            (snapshot_name, snapshot_raw),
+            (receipt_name, receipt_raw),
+            (marker_name, marker_raw),
+        ):
+            info = _stable_object(directory, name, raw)
+            if info is None:
+                raise ValueError("classification archive binding invalid")
+            bound_objects.append((name, raw, info))
+        root_info, directory_info = os.fstat(root), os.fstat(directory)
+        object.__setattr__(
+            retained_seal,
+            "binding",
+            _IndustryArchiveBinding(
+                self._root,
+                (root_info.st_dev, root_info.st_ino),
+                (directory_info.st_dev, directory_info.st_ino),
+                tuple(bound_objects),
+            ),
+        )
         object.__setattr__(retained_seal, "_seal", _ARCHIVE_RETAINED_SEAL)
         retained = object.__new__(RetainedCurrentIndustrySnapshotV1)
         for name in RetainedCurrentIndustrySnapshotV1.__dataclass_fields__:
@@ -1085,6 +1210,64 @@ class FileCurrentIndustryArchiveV1:
         if not _archive_minted_retained(retained):
             raise ValueError
         return retained
+
+
+def revalidate_retained_current_industry_snapshot_v1(
+    retained: RetainedCurrentIndustrySnapshotV1,
+    root: Path,
+    lease: StorageRootLease,
+) -> None:
+    """Read-only check of the original archive binding before later publication.
+
+    No object is created, restored, or republished. The seal retains the exact
+    bytes and filesystem identities admitted when the archive originally minted
+    this object, including its original knowledge time.
+    """
+    if not _archive_minted_retained(retained):
+        raise ValueError("retained Industry archive invalid")
+    seal = cast(_ArchiveRetainedSeal, getattr(retained, "_archive_seal", None))
+    binding = seal.binding
+    if (
+        binding.root != root
+        or _retention_receipt_bytes(retained) != binding.objects[2][1]
+    ):
+        raise ValueError("retained Industry archive invalid")
+    with lease.read_operation(root) as operation:
+        operation.ensure_live()
+        descriptor = operation.descriptor
+        _validate_archive_root(descriptor)
+        root_info = os.fstat(descriptor)
+        if (root_info.st_dev, root_info.st_ino) != binding.root_identity:
+            raise ValueError("retained Industry root invalid")
+        directory = os.open(
+            _ARCHIVE_DIRECTORY,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+            dir_fd=descriptor,
+        )
+        try:
+            _validate_archive_directory(descriptor, directory)
+            directory_info = os.fstat(directory)
+            if (
+                directory_info.st_dev,
+                directory_info.st_ino,
+            ) != binding.directory_identity:
+                raise ValueError("retained Industry directory invalid")
+            for name, expected, admitted in binding.objects:
+                current = _read_stable_private_object(directory, name, len(expected))
+                if (
+                    current is None
+                    or current[0] != expected
+                    or not _same_metadata(current[1], admitted)
+                ):
+                    raise ValueError("retained Industry archive invalid")
+            for name, _raw, admitted in binding.objects:
+                if not _named_binding_matches(directory, name, admitted):
+                    raise ValueError("retained Industry archive invalid")
+            _validate_archive_directory(descriptor, directory)
+            _validate_archive_root(descriptor)
+            operation.ensure_live()
+        finally:
+            os.close(directory)
 
 
 def _valid_archive_input(

@@ -35,6 +35,11 @@ from swing_trading_ai_assistant.research_packet.current_price_context_v2 import 
 )
 
 from .account_rate_limit import ThreadSafeAccountRateLimiterV1
+from .agent_cohort_context import run_agent_cohort_research_current
+from .agent_cohort_request import (
+    parse_agent_cohort_mappings,
+    validate_agent_cohort_request,
+)
 from .agent_event_context import run_agent_event_research_current
 from .agent_research_run import (
     run_agent_research_current,
@@ -584,7 +589,25 @@ def build_parser() -> argparse.ArgumentParser:
     )
     agent_run.add_argument("--output", choices=("json",), required=True)
     agent_run.add_argument(
-        "--contract-version", choices=("v1", "v2", "v3"), default="v1"
+        "--contract-version", choices=("v1", "v2", "v3", "v4"), default="v1"
+    )
+    agent_run.add_argument(
+        "--context-symbol",
+        action="append",
+        help="V4: repeat for each of 2–50 ordered comparison stocks",
+    )
+    agent_run.add_argument(
+        "--context-purpose",
+        help="V4: describe the comparison group (1–160 printable characters)",
+    )
+    agent_run.add_argument(
+        "--context-mappings-file",
+        type=Path,
+        metavar="ABSOLUTE_PRIVATE_JSON",
+        help=(
+            "V4: private JSON declaring dated cohort mappings; omission leaves "
+            "cohort context insufficient while stock research continues"
+        ),
     )
     probe = commands.add_parser(
         "probe-upstox",
@@ -713,10 +736,43 @@ def _run_agent_research_command(
     | None,
 ) -> int:
     try:
-        if args.contract_version in {"v2", "v3"}:
+        context_options = (
+            args.context_symbol,
+            args.context_purpose,
+            args.context_mappings_file,
+        )
+        if args.contract_version != "v4" and any(
+            value is not None for value in context_options
+        ):
+            raise CurrentStockResearchInputError("context requires V4")
+        mappings = None
+        context_symbols = tuple(args.context_symbol or ())
+        if args.contract_version == "v4":
+            validate_agent_cohort_request(
+                tuple(args.symbol),
+                args.storage_root,
+                context_symbols,
+                args.context_purpose,
+            )
+            if args.context_mappings_file is not None:
+                try:
+                    raw = _read_current_regime_input(args.context_mappings_file)
+                except (OSError, _RequestInvalid):
+                    raise CurrentStockResearchInputError(
+                        "invalid cohort mappings file"
+                    ) from None
+                mappings = parse_agent_cohort_mappings(raw, context_symbols)
+        if args.contract_version in {"v2", "v3", "v4"}:
             runner = run_agent_swing_research_current
             if args.contract_version == "v3":
                 runner = run_agent_event_research_current
+            elif args.contract_version == "v4":
+                runner = partial(
+                    run_agent_cohort_research_current,
+                    context_symbols=context_symbols,
+                    context_purpose=args.context_purpose,
+                    mappings=mappings,
+                )
             report = runner(
                 tuple(args.symbol),
                 args.storage_root,

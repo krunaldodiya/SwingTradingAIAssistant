@@ -73,3 +73,73 @@ provenance may not be sent to hosted AI services, published or redistributed.**
 This opt-in is bounded personal/noncommercial local research under the existing
 source-use contract, not a new disclosure permission. See
 [Plan 37](../plans/37-agent-current-event-notice-context-contract.md).
+
+## Optional comparison-cohort context (V4)
+
+V4 adds one separately observed Market Regime and Industry context to the V3
+stock dossiers. Choose 1–10 research stocks and a separate ordered comparison
+list of 2–50 stocks. The lists may overlap or differ; the command never silently
+unites them, substitutes a member or reduces the comparison denominator.
+A caller description does not establish index membership or market-wide breadth.
+
+With an existing private dated-mapping document:
+
+```sh
+market-data research-run-current \
+  --contract-version v4 \
+  --symbol PNB \
+  --context-symbol PNB --context-symbol TCS \
+  --context-purpose "My explicit comparison group" \
+  --context-mappings-file /absolute/private/cohort-mappings.json \
+  --storage-root "$HOME/SwingTradingAIAssistantData/agent-research" \
+  --output json
+```
+
+The mapping file must be an absolute, owner-private regular file, with no
+symlink or hardlink, and at most 64 KiB. The closed JSON contract is
+`agent-current-cohort-mappings@v1`: its `members` array must match the requested
+context symbols exactly and in order. Each member includes canonical identity,
+original dated validity, BharatStock mapping identity and provider revision.
+The exact required fields and validation rules are in
+[Plan 38's dated-input contract](../plans/38-agent-current-cohort-context-contract.md#accepted-dated-mapping-input-supplement--2026-09-27).
+Duplicate or unknown keys, invalid dates, a wrong mapping digest and mismatched
+members reject the command before acquisition. The digest follows the existing
+`mapping_identity_v3` function; it is not an arbitrary label.
+
+Use supported dated mapping declarations. Today's symbol lookup does not prove
+past identity: do not manufacture historical start dates to make a request pass.
+The output labels mapping authority `OWNER_SUPPLIED`, preserves the supplied
+revision and intervals, and fingerprints the input bytes. It cross-checks current
+retained identities and requires the declared intervals to cover all 21 selected
+completed sessions. These checks do not independently verify a caller's
+historical assertion. This workflow does not acquire historical mapping evidence
+automatically or establish historical index membership.
+
+Omitting `--context-mappings-file` leaves cohort facts null with
+`MAPPING_EVIDENCE_NOT_PROVIDED`, while independent V3 stock research continues.
+An explicitly supplied unreadable, unsafe or malformed file rejects the command;
+it is not treated as omission. Context options are rejected by V1–V3.
+
+The batch `cohort_context` records the requested group, caller purpose, identity,
+source profile, times, availability and admitted aggregate facts. Context reuses
+Upstox raw completed daily data with existing BharatStock direction-comparability
+evidence. Stock dossiers use their existing source profile and selection times.
+Equal end dates do not establish joint comparability, and the original
+price-only `jointly_comparable` field retains its meaning. Context never shifts
+lagged stock prices forward or stitches singleton dossiers into a cohort.
+
+A missing comparison member withholds the whole-cohort aggregate. Unavailable
+Industry classification withholds Industry rows while preserving admitted Market
+Regime and stock facts. Existing calendar coverage, historical mapping intervals,
+source admission and time bounds still apply; supplied mappings alone do not
+guarantee observed context. Corrupted retained evidence, unsafe storage,
+unexpected errors and interruption remain fatal, with no partial JSON output.
+The exit code continues to describe price/structure availability, so exit 0 does
+not imply that cohort context is available. Check each context availability and
+reason before using a fact.
+
+All V4 output remains owner-private, including aggregate counts, Industry names,
+status and provenance. It is not authorized for hosted AI disclosure or
+redistribution. V3's event limitation still applies: no matching notice means
+only no match in that snapshot, not no event risk or source completeness.
+Relative Strength, rankings, trading signals and orders are outside this command.
