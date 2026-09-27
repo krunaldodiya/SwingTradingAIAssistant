@@ -18,8 +18,10 @@ jobs:
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.event == 'push' &&
       github.event.workflow_run.head_branch == 'main' &&
-      github.event.workflow_run.head_repository.full_name == github.repository
-    runs-on: ubuntu-24.04
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      github.repository == 'krunaldodiya/SwingTradingAIAssistant' &&
+      github.event.workflow_run.actor.login == 'krunaldodiya'
+    runs-on: [self-hosted, Linux, X64, swing-ci-linux]
     timeout-minutes: 60
     permissions:
       contents: read
@@ -45,6 +47,7 @@ jobs:
       - name: Set up locked build toolchain
         uses: astral-sh/setup-uv@61cb8a9741eeb8a550a1b8544337180c0fc8476b # v7.2.0
         with:
+          enable-cache: false
           version: "0.9.24"
           python-version: "3.11"
           checksum: "fb13ad85106da6b21dd16613afca910994446fe94a78ee0b5bed9c75cd066078"
@@ -135,10 +138,11 @@ jobs:
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
           docker logout ghcr.io
 
-      - name: Retain publication receipt
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: oci-publication-${{ github.event.workflow_run.head_sha }}
-          path: ${{ runner.temp }}/oci-publication-receipt.json
-          if-no-files-found: error
-          retention-days: 30
+      - name: Retain publication receipt locally
+        run: |
+          set -eu
+          target="$SWING_CI_ARTIFACTS/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          mkdir -p "$target"
+          cp "$RUNNER_TEMP/oci-publication-receipt.json" "$target/"
+          cp "$RUNNER_TEMP/linux-distribution-receipt.json" "$target/"
+          jq -c '{source_commit,digest,published_image_id}' "$target/oci-publication-receipt.json" >> "$GITHUB_STEP_SUMMARY"

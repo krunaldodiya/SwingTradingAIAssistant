@@ -144,9 +144,12 @@ not needed or restored for #208.
 The manually triggered **Windows distribution conformance** workflow accepts
 only `main`, has no caller-supplied code or artifact inputs, and uses pinned
 checkout/upload actions. Its release constants deliberately require a reviewed
-change when testing a new published artifact. It uploads the runner identity,
-artifact hashes, progress/failure receipt and installed-test logs for 90 days.
-Keep long-lived release evidence linked from the issue before artifact expiry.
+change when testing a new published artifact. It retains the runner identity,
+artifact hashes, progress/failure receipt and installed-test logs on the Windows
+runner under LocalAppData/SwingTradingAIAssistant/ci-receipts. The project
+[self-hosted workflow](self-hosted-ci.md) supersedes Actions artifact uploads;
+keep release evidence backed up and linked from the issue. This remains a manual
+Docker Desktop qualification, not a prerequisite for the native WSL Linux runner.
 
 The owner authorized runner `swing-windows11-wsl2`, label
 `swing-windows-conformance`, installed at `D:\actions-runner-swing` under the

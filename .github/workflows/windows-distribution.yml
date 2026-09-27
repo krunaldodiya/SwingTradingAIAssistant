@@ -25,11 +25,11 @@ jobs:
       - name: Verify WSL installed wheel and published Docker Desktop digest
         shell: powershell
         run: ./scripts/verify_windows_distribution.ps1
-      - name: Retain host, artifact identities and conformance receipts
+      - name: Retain conformance receipts on the Windows host
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: windows-distribution-${{ github.sha }}-${{ github.run_id }}
-          path: artifacts/windows-distribution/
-          if-no-files-found: error
-          retention-days: 90
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $target = Join-Path $env:LOCALAPPDATA "SwingTradingAIAssistant/ci-receipts/$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          New-Item -ItemType Directory -Force -Path $target | Out-Null
+          Copy-Item -Recurse -ErrorAction Stop artifacts/windows-distribution/* $target
