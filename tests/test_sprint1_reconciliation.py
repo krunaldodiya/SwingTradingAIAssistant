@@ -46,13 +46,41 @@ _CI_STATIC_BLOCKS = {
 _APPROVED_ACTIONS = (
     "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2",
     "astral-sh/setup-uv@61cb8a9741eeb8a550a1b8544337180c0fc8476b # v7.2.0",
-    "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2",
-    "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2",
     "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2",
     "astral-sh/setup-uv@61cb8a9741eeb8a550a1b8544337180c0fc8476b # v7.2.0",
 )
-_APPROVED_JOB_IDS = ("quality", "main-backstop")
+_APPROVED_JOB_IDS = ("reject-untrusted-main", "quality", "main-backstop")
+_APPROVED_JOB_CONDITIONS = {
+    "quality": (
+        "github.event_name == 'pull_request' && "
+        "github.repository == 'krunaldodiya/SwingTradingAIAssistant' && "
+        "github.actor == 'krunaldodiya' && "
+        "github.event.pull_request.user.login == 'krunaldodiya' && "
+        "github.event.pull_request.head.repo.full_name == github.repository"
+    ),
+    "main-backstop": (
+        "github.event_name == 'push' && github.ref == 'refs/heads/main' && "
+        "github.repository == 'krunaldodiya/SwingTradingAIAssistant' && "
+        "github.actor == 'krunaldodiya'"
+    ),
+}
+_REJECTION_JOB = """  reject-untrusted-main:
+    name: Reject unauthorized main actor
+    if: >-
+      github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+      github.repository == 'krunaldodiya/SwingTradingAIAssistant' &&
+      github.actor != 'krunaldodiya'
+    permissions: {}
+    runs-on: [self-hosted, Linux, X64, swing-ci-linux]
+    timeout-minutes: 5
+    steps:
+      - name: Reject without checking out untrusted source
+        shell: bash
+        run: |
+          echo 'Main admission rejected: this actor is outside the approved owner-only runner policy.' >&2
+          exit 1"""
 _APPROVED_STEP_NAMES = (
+    "Reject without checking out untrusted source",
     "Check out repository",
     "Classify the sealed change",
     "Run lightweight Markdown gate",
@@ -62,9 +90,9 @@ _APPROVED_STEP_NAMES = (
     "Run authoritative quality gate",
     "Build distribution",
     "Verify Linux wheel and OCI distribution",
-    "Retain Linux distribution receipt",
+    "Retain Linux distribution receipt locally",
     "Issue exact-tree CI admission",
-    "Retain exact-tree CI admission",
+    "Retain exact-tree CI admission locally",
     "Check out repository",
     "Verify exact prior CI admission",
     "Run admitted merge integrity gate",
@@ -76,17 +104,15 @@ _APPROVED_STEP_NAMES = (
 )
 _REQUIRED_CI_FRAGMENTS = (
     "    name: Quality and build",
-    "    if: github.event_name == 'pull_request'",
     "    name: Main admission backstop",
-    "    if: github.event_name == 'push'",
     "      actions: read",
     "      pull-requests: read",
+    "      checks: read",
     "          python3 .github/scripts/ci_admission.py issue",
-    '          --output "$RUNNER_TEMP/ci-admission.json"',
-    "          name: ci-admission-v1-${{ github.run_id }}-${{ github.run_attempt }}",
-    "          if-no-files-found: error",
-    "          retention-days: 1",
-    "          compression-level: 0",
+    '          --output "$RUNNER_TEMP/ci-admission.json" --annotation',
+    '          target="$SWING_CI_ARTIFACTS/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"',
+    '          cp "$RUNNER_TEMP/ci-admission.json" "$target/"',
+    "          CI_ADMISSION_TRANSPORT: check-annotation",
     "        continue-on-error: true",
     "          GITHUB_TOKEN: ${{ github.token }}",
     "          python3 .github/scripts/ci_admission.py verify",
@@ -99,7 +125,7 @@ _REQUIRED_CI_FRAGMENTS = (
     '          uv run --no-sync --extra dev pytest -m "not private_source"',
     "          uv run --no-sync --extra dev python scripts/verify_linux_distribution.py",
     '          --receipt "$RUNNER_TEMP/linux-distribution-receipt.json"',
-    "          name: linux-distribution-${{ github.run_id }}-${{ github.run_attempt }}",
+    '          cp "$RUNNER_TEMP/linux-distribution-receipt.json" "$target/"',
 )
 
 
@@ -126,8 +152,33 @@ def _normalize(text: str) -> str:
     return " ".join(text.split())
 
 
+def _validate_job_policy(job_lines: tuple[str, ...]) -> None:
+    job_ids = tuple(
+        line[2:-1] for line in job_lines if re.fullmatch(r"  [a-z][a-z0-9-]*:", line)
+    )
+    if job_ids != _APPROVED_JOB_IDS:
+        raise ValueError("CI jobs differ from the approved exclusive contract")
+    starts = [job_lines.index(f"  {job_id}:") for job_id in job_ids]
+    job_blocks = {
+        job_id: "\n".join(job_lines[start:end])
+        for job_id, start, end in zip(
+            job_ids, starts, starts[1:] + [len(job_lines)], strict=True
+        )
+    }
+    if job_blocks["reject-untrusted-main"] != _REJECTION_JOB:
+        raise ValueError(
+            "Unauthorized main rejection must remain permissionless and fixed"
+        )
+    for job_id, expected in _APPROVED_JOB_CONDITIONS.items():
+        conditions = re.findall(
+            r"^    if: >-\n((?:      .+\n)+)", job_blocks[job_id], re.MULTILINE
+        )
+        if len(conditions) != 1 or _normalize(conditions[0]) != expected:
+            raise ValueError("CI owner and source trust conditions differ")
+
+
 def validate_ci_workflow(text: str) -> None:
-    """Validate the exclusive two-job CI admission and fallback contract."""
+    """Validate owner-only self-hosted rejection, admission and fallback."""
     blocks = _root_blocks(text)
     if any(
         blocks[header] != expected for header, expected in _CI_STATIC_BLOCKS.items()
@@ -135,11 +186,7 @@ def validate_ci_workflow(text: str) -> None:
         raise ValueError("CI static block differs from the approved contract")
 
     job_lines = blocks["jobs:"]
-    job_ids = tuple(
-        line[2:-1] for line in job_lines if re.fullmatch(r"  [a-z][a-z0-9-]*:", line)
-    )
-    if job_ids != _APPROVED_JOB_IDS:
-        raise ValueError("CI jobs differ from the approved exclusive contract")
+    _validate_job_policy(job_lines)
     step_names = tuple(
         line.split("- name: ", maxsplit=1)[1]
         for line in job_lines
@@ -175,6 +222,9 @@ def validate_ci_workflow(text: str) -> None:
         or commands.count(admitted_condition) != 1
         or commands.count(fallback_condition) != 5
         or jobs_text.count('PYTEST_XDIST_AUTO_NUM_WORKERS: "2"') != 2
+        or jobs_text.count("    runs-on: [self-hosted, Linux, X64, swing-ci-linux]")
+        != 3
+        or jobs_text.count("          enable-cache: false") != 2
     ):
         raise ValueError("CI admission, quality, or fallback contract is missing")
     if any(re.fullmatch(r"\s+[a-z-]+:\s+write", line) for line in job_lines):
@@ -198,6 +248,25 @@ def test_ci_structural_contract_rejects_privilege_pin_activity_and_gate_regressi
     validate_ci_workflow(workflow)
 
     fixtures = (
+        workflow.replace("swing-ci-linux", "unreviewed-runner"),
+        workflow.replace("enable-cache: false", "enable-cache: true"),
+        workflow.replace("github.actor == 'krunaldodiya'", "github.actor == 'other'"),
+        workflow.replace(
+            "github.actor != 'krunaldodiya'", "github.actor == 'krunaldodiya'"
+        ),
+        workflow.replace(
+            "    permissions: {}", "    permissions:\n      contents: read"
+        ),
+        workflow.replace("          exit 1", "          exit 0", 1),
+        workflow.replace(" --annotation", ""),
+        workflow.replace(
+            "CI_ADMISSION_TRANSPORT: check-annotation",
+            "CI_ADMISSION_TRANSPORT: artifact",
+        ),
+        workflow.replace('cp "$RUNNER_TEMP/ci-admission.json" "$target/"', "true"),
+        workflow.replace(
+            'cp "$RUNNER_TEMP/linux-distribution-receipt.json" "$target/"', "true"
+        ),
         workflow.replace("contents: read", "contents: write"),
         workflow.replace("contents: read", "contents: read # still read-only"),
         workflow.replace("contents: read", "contents: read\n  issues: write"),
