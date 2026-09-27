@@ -160,3 +160,67 @@ absence. The legacy default raw downloader catches broad Exception; the new
 path must use a narrow classified adapter or fail that ambiguous outcome fatally,
 with discriminating storage/integrity tests. No existing reducer rewrite is
 required or authorized by this correction.
+
+## Accepted dated mapping input supplement — 2026-09-27
+
+Owner explicitly accepted supplied dated cohort mappings in the project chat,
+resolving the symbol-only prerequisite recorded in issue #222. This supplements
+the first working slice: a positive V4 context path requires admitted dated
+mapping inputs. Current symbol lookup alone proves only current identity and
+MUST NOT be widened into historical validity. Automatic historical mapping
+acquisition, new providers and backfill remain excluded.
+
+V4 adds optional `--context-mappings-file PATH`; older versions reject it before
+any effects. Reuse the existing private, regular, single-link, no-follow bounded
+input reader with a 64-KiB maximum. An explicitly supplied unreadable, unsafe or
+malformed file rejects the command before provider or archive effects. Omission
+is distinct: preserve independent V3 stock research and publish context with
+null facts and reason `MAPPING_EVIDENCE_NOT_PROVIDED`, with no context-provider
+effects. Never present that outcome as the completed positive integration.
+
+The closed JSON envelope has exactly `contract_version` with literal
+`agent-current-cohort-mappings@v1` and `members`, an array of 2–50 objects.
+Each object has exactly the existing CurrentSamePassEquityMemberV4 fields:
+
+- `isin`, `exchange`, `instrument_type`, `segment`, `effective_symbol`;
+- `valid_from`, `valid_through`, `provider_symbol`, `mapping_version`;
+- `mapping_valid_from`, `mapping_valid_through`, `mapping_identity`,
+  `provider_mapping_revision`.
+
+All keys are required. Values are strings, except `mapping_valid_through` may
+be null. Non-null dates round-trip exactly as YYYY-MM-DD. Existing member
+validation governs the literals NSE/EQUITY/EQ, symbol equality, ISIN and revision
+grammars, ordered intervals and mapping version
+`bharatstock-isin-exchange-mapping@v1`. Reject duplicate JSON keys, unknown keys,
+nonfinite values, invalid types, aliases/duplicate ISINs, missing/extra members
+and any mismatch with the exact ordered `--context-symbol` list before effects.
+Recompute `mapping_identity` using existing `mapping_identity_v3`; a syntactically
+valid digest alone is insufficient. Keep caller order distinct from any producer
+canonical sorting, without changing producer identity equations.
+
+Mapping authority is explicitly `OWNER_SUPPLIED`. Preserve the supplied revision,
+validity intervals and mapping identity unchanged, fingerprint the exact input
+bytes and carry their provenance into the context result. These declarations
+are caller assertions, not independently verified historical mappings, official
+index membership or a new source qualification. The existing retained producer
+request preserves the admitted member data; no new mapping store is introduced.
+Never expose the local input path or raw document in public/sanitized output.
+
+Resolve current retained same-IST-date Upstox identity and require exact ISIN,
+exchange, instrument type, segment and effective-symbol agreement. This checks
+current consistency, not historical validity. Preserve caller-supplied mapping
+revision separately from current snapshot provenance. Existing session admission
+and adjusted-provider validation must still prove that both declared intervals
+cover all 21 selected completed sessions. Missing, expired or conflicting
+current evidence withholds the whole context under the existing closed failure
+rules; never shrink the cohort or repair intervals. Malformed caller input is
+command rejection, while structurally valid but insufficient interval coverage
+is explicit context insufficiency.
+
+Add adversarial evidence for omitted versus unreadable file, exact/limit-plus-one
+byte and member bounds, duplicate/unknown keys and invalid JSON values, wrong
+mapping digest, member order/alias substitution, current identity conflicts,
+partial session coverage and no historical inference. The actual CLI positive
+case must load this serialized input and exercise real producer/retention seams.
+All other Plan38 scope, timing reserve, failure precedence, privacy, compatibility,
+review and release requirements remain in force.
