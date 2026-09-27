@@ -115,7 +115,8 @@ jobs:
             docker push "$remote_tag"
             published_id="$local_id"
           fi
-          digest="$(docker image inspect "$remote_tag" --format '{{index .RepoDigests 0}}')"
+          digest="$(docker image inspect "$remote_tag" --format '{{json .RepoDigests}}' |
+            python3 .github/scripts/registry_digest.py "$image")"
           case "$digest" in
             "$image"@sha256:*) ;;
             *) echo 'No registry digest was returned.' >&2; exit 1 ;;
