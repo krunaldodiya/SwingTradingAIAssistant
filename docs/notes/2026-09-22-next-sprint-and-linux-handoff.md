@@ -20,6 +20,32 @@ The roadmap and upcoming-sprints overview link this decision. It records
 priority and proposed scope, not a replacement for architecture, Plan 34's
 necessary-only feature admission, source authorization or delivery gates.
 
+## Later owner clarification: intended end product
+
+Date: 2026-09-23; recovered from project memory on 2026-09-27.
+Status: accepted product direction; detailed signal and strategy contracts
+remain unapproved by this record.
+
+The owner clarified that the primary consumer is an AI agent harness; manual
+human CLI use is secondary. Answering individual questions and the bounded
+single-stock/watchlist commands are useful intermediate capabilities, not the
+final product success criterion. The intended experience is agent-initiated
+research over a selected stock, an explicit list, or the default point-in-time
+Nifty 100, comparison of candidates, and eventually evidence-backed candidate,
+`BUY`, `HOLD`, `EXIT`, or `NO_TRADE` conclusions through the external harness.
+
+This clarifies the existing [external-consumer architecture](../architecture-freeze-v1.md#external-consumer-ai-agent-harness).
+It does not say the current package delivers a Nifty 100 signal engine. Signal
+labels, strategy and ranking policy, hard eligibility/risk rules, portfolio
+snapshots, source authority, and historical/out-of-sample validation still need
+their own contracts and evidence. Deterministic calculations stay in the tool;
+contextual reasoning stays in the harness; broker orders and autonomous position
+management remain excluded.
+
+Source: Hindsight `pi-projects`, document
+`codex-20260923-product-endstate-nifty100-agent-signals`, read back on recovery;
+content SHA-256 `dc4e9aeadcd18c3e9da5a2c8c7b95549f40efa7fc90169afca2f0d5ffae8c2c7`.
+
 ## First priority after migration
 
 **Single-stock, evidence-backed research through an external AI assistant.**
@@ -110,6 +136,37 @@ promise to execute all six in its row order.
   files, credentials or every migration dependency are safe to erase. Preserve
   any still-local work and securely migrate/re-establish credentials before
   formatting. macOS Keychain contents do not travel in the data archive.
+
+### Later September 22 backup checkpoint
+
+Status: recovered historical completion record with a recovery-key custody
+limitation. This is a later backup set than the portable export above; its
+reported checks do not retroactively verify the earlier set or establish the
+condition of remote files today.
+
+At the owner's request, separate encrypted backups were made for
+[Hindsight](https://drive.google.com/drive/folders/1d-uWbjkyUKPfEMP_sq0OmqvmUgbKE13S)
+and [SwingTradingAIAssistantData](https://drive.google.com/drive/folders/1DKwQjsjFWnbU6skeAoD34JAhqMICrh7j).
+The saved completion record reports downloaded ciphertext SHA-256 equality,
+a consistent native Hindsight snapshot at `2026-09-22T15:55:44Z` containing
+2 banks, 1,318 documents and 23 tables, and a successful network-isolated native
+restore and binary table roundtrip. The data snapshot contained 10,185 files
+and 418 directories with hashes and modes checked.
+
+The requested full 100-stock capture for that day was still pending and was
+not claimed included. The encryption recovery key existed locally only;
+independent owner custody was still needed for total machine-loss recovery.
+Older backups remained intact, and no recurring schedule was installed. The
+completion record itself postdates the database snapshot, so it was not part of
+that snapshot. Full backup/recovery automation remains governed by
+[#177](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/177).
+
+Source: Hindsight `pi-projects`, document
+`codex-20260922-separate-linux-backups`, content SHA-256
+`13535c5212f86cf3d6502362dcdcb9f050c7263e599e04e239bd624b00992232`.
+The historical verification directory was `~/Downloads/linux-backups-20260922/`.
+This import read back the completion record; it did not download the archives,
+repeat a restore, inspect keys, or verify current key custody.
 
 ## Resume on Linux
 

@@ -38,8 +38,11 @@ update those documents as well as the note.
 
 ## Notes index
 
+- [2026-09-27 — Hindsight memory reconciliation and recovered lessons](2026-09-27-hindsight-memory-reconciliation.md)
+- [2026-09-23 — Sprint 20 live-research closeout and disclosure exception](2026-09-23-live-research-closeout.md)
 - [2026-09-22 — Next research-assistant priorities and Linux handoff](2026-09-22-next-sprint-and-linux-handoff.md)
 - [2026-09-21 — Current-workflow efficiency investigation](2026-09-21-current-workflow-efficiency.md)
+- [2026-08-24 — Retained playlist research and disposition](2026-08-24-playlist-research-disposition.md)
 
 - [2026-08-10 — ARK-112 disposition and Sprint 3 scope exchange](2026-08-10-ark-112-disposition-and-scope-exchange.md)
 - [2026-08-09 — Provider, account, and execution connector separation](2026-08-09-provider-account-and-execution-connector-separation-hypothesis.md)
