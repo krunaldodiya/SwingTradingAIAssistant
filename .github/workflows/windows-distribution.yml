@@ -6,7 +6,7 @@ permissions:
 jobs:
   dispatch-probe:
     if: github.actor == 'krunaldodiya' && github.ref == 'refs/heads/codex/self-hosted-ci'
-    runs-on: [self-hosted, Linux, X64, swing-ci-probe]
+    runs-on: [self-hosted, Linux, X64, swing-ci-linux]
     timeout-minutes: 3
     steps:
       - name: Verify local execution without checkout or secrets
@@ -16,3 +16,14 @@ jobs:
           test "$RUNNER_ENVIRONMENT" = self-hosted
           test "$(uname -s)" = Linux
           printf 'WSL self-hosted dispatch verified; runner=%s\n' "$RUNNER_NAME"
+      - name: Verify isolated Docker and private bind permissions
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker info
+          install -d -m 700 "$HOME/probe"
+          printf 'synthetic probe\n' > "$HOME/probe/input"
+          chmod 600 "$HOME/probe/input"
+          docker run --rm --user "$(id -u):$(id -g)" --mount "type=bind,src=$HOME/probe,dst=/probe,readonly" alpine:3.22 cat /probe/input
+          test ! -S /var/run/docker.sock
+          printf 'isolated engine verified\n' > "$SWING_CI_ARTIFACTS/probe.txt"
