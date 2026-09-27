@@ -4133,6 +4133,23 @@ def _sealed_v4_boundary() -> tuple[object, ...]:  # noqa: C901
         except (OSError, RuntimeError, TypeError, ValueError):
             return False
 
+    def revalidate(
+        value: object,
+        lease: StorageRootLease,
+        trusted_clock: _TrustedClockV1,
+    ) -> bool:
+        """Recheck the original sealed files before a later caller projection."""
+        if not validate(value):
+            return False
+        binding = archive_bindings[value._archive_seal]
+        return adopt(
+            binding.candidate.context_object.request,
+            value,
+            binding.candidate,
+            lease,
+            trusted_clock,
+        )
+
     def industry_projection(
         value: object,
     ) -> tuple[
@@ -4401,6 +4418,7 @@ def _sealed_v4_boundary() -> tuple[object, ...]:  # noqa: C901
         packet_projection,
         research_binding_request,
         research_binding_projection,
+        revalidate,
     )
 
 
@@ -4414,6 +4432,7 @@ def _sealed_v4_boundary() -> tuple[object, ...]:  # noqa: C901
     _packet_projection_from_retained_context_v4,
     _research_binding_request_from_retained_context_v4,
     _research_binding_projection_from_retained_context_v4,
+    revalidate_retained_current_same_pass_market_context_v4,
 ) = _sealed_v4_boundary()
 
 
