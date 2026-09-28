@@ -4,7 +4,9 @@ Owner accepted this delivery change on 2026-09-27 in issue #222. Linux validatio
 main admission and OCI publication use only `[self-hosted, Linux, X64,
 swing-ci-linux]`. There is no GitHub-hosted fallback. The manual Windows workflow
 retains its separate Windows runner requirement; Linux results do not qualify
-Windows or Docker Desktop. This host currently uses native Docker Engine in WSL2.
+Windows or Docker Desktop. Issue #228 adds native Linux Podman support; the owner's
+current Ubuntu host already has rootless Podman. Docker remains supported on
+hosts where it is available; installing Docker is not required for Podman CI.
 
 ## Execution and trust
 
@@ -17,26 +19,44 @@ actor and same-repository, owner-authored pull requests. Do not approve fork or
 other untrusted workflows for this runner. Repository collaborators and workflow
 changes are a trust boundary and require review before expanding that policy.
 
-Each job gets a new runner container, Docker-in-Docker engine, network and shared
-work volume. No host Docker socket, owner home, development checkout or private
-market data directory is mounted into the job. Docker bind paths share `/ci`
+Each job gets a new runner container, nested Podman or Docker engine, network and
+shared work volume. No host engine socket, owner home, development checkout or
+private market data directory is mounted into the job. Bind paths share `/ci`
 between runner and nested engine, preserving the application's UID/permission
 checks. The nested engine is privileged; this is a trusted-job container boundary,
 not a virtual-machine security guarantee against hostile code or kernel exploits.
 The Docker API has no published host port and is reachable only on its job network.
+The Podman API uses a private Unix socket in the job volume, accessible to the
+runner group. Rootless Podman maps the host user to runner UID/GID 1000; the
+nested engine runs as root only inside its disposable container.
 Runner and nested engine have finite CPU/memory budgets. Old job workspaces and
-Docker state are removed after receipt capture, so PR residue cannot become a
-later release workspace. No host-wide Docker prune is used.
+engine state are removed after receipt capture, so PR residue cannot become a
+later release workspace. No host-wide engine prune is used.
 
 ## Provisioning and operation
 
-Build `.github/runner/Dockerfile` with Docker, record the resulting immutable image
-ID, then set `SWING_CI_RUNNER_IMAGE=sha256:...` for the controller. The official
-runner and nested Docker base images are digest-pinned. Apt tools are resolved
+The host needs Bash, Python3, flock, authenticated GitHub CLI and one usable
+container engine. The owner installs/authenticates GitHub CLI on this host. Reuse
+the existing Podman setup. `SWING_CONTAINER_RUNTIME=auto` probes Podman first,
+then Docker. Set `podman` or `docker` to require that engine; explicit selection
+fails if unavailable. Selection happens before job resources are created and is
+fixed for the whole job, including verification and publication. A failed command
+never switches engines. Engine access and version are recorded in private receipts.
+
+Build `.github/runner/Dockerfile` with the selected engine, record the resulting
+immutable image ID, then set `SWING_CI_RUNNER_IMAGE=sha256:...` for the controller.
+Podman may print the ID without the `sha256:` prefix; retain the full 64-character
+ID and add that prefix in the environment file. For example:
+
+```sh
+podman build -f .github/runner/Dockerfile -t localhost/swing-ci-runner .github/runner
+podman image inspect localhost/swing-ci-runner --format '{{.Id}}'
+```
+
+The official runner and both nested engine images are digest-pinned. Apt tools are resolved
 when the runner image is built; the resulting image ID, build log and installed
 versions are the deployment identity, not a claim of reproducible apt resolution.
-Host prerequisites are Bash, Docker, GitHub CLI, Python3 and flock. The runner image
-contains the job tools; uv/Python and dependencies use the existing locked workflow.
+The runner image contains both engine clients and job tools; uv/Python and dependencies use the existing locked workflow.
 
 Default controller state is `$HOME/.local/state/swing-ci`, mode0700. A file lock
 prevents two controllers sharing that state. A systemd user service can use:
@@ -51,12 +71,17 @@ RestartSec=15
 TimeoutStopSec=90
 ```
 
-Install the reviewed controller at that path and put only the immutable runner
-image ID in the environment file. Service startup uses the host's existing `gh`
+Install the reviewed controller and `scripts/container_runtime.py` together in
+`~/.local/lib/swing-ci/`. Put the immutable runner image ID and
+`SWING_CONTAINER_RUNTIME=podman` in the private environment file on this host. Service startup uses the host's existing `gh`
 authentication; do not copy credentials into job images or source control. Enable
-it under `default.target`. WSL, the user service manager and Docker must be running;
-Windows sleep or WSL shutdown prevents work. Existing machine startup configuration
-is preserved. Service restart is verified separately from a Windows reboot.
+it under `default.target` only after the exact controller/image has passed review
+and qualification. Native Linux, the user service manager and the selected engine
+must be available; host suspend/shutdown prevents work. Existing machine startup
+configuration is preserved. Service restart is verified separately from a reboot.
+Before activating a replacement runner, ensure queued workflow revisions support
+the selected runtime; older Docker-only workflows cannot be qualified with Podman.
+Retain prior failed/queued-run history and integrate the prerequisite through PRs.
 
 To stop, stop the user service. To roll back runner infrastructure, retain and select
 the prior verified image/controller, without restoring paid hosted runner labels.

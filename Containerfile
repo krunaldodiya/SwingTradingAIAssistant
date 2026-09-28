@@ -1,6 +1,6 @@
 # Linux x86_64 local distribution. The build context contains only the exact
 # application wheel and uv.lock-exported, hash-checked runtime requirements.
-FROM python:3.11.16-slim-bookworm@sha256:4b4c524dc3dce996864e030c7bd9c6b0e517597189fee48f48e05b499442444b AS builder
+FROM docker.io/library/python:3.11.16-slim-bookworm@sha256:4b4c524dc3dce996864e030c7bd9c6b0e517597189fee48f48e05b499442444b AS builder
 
 COPY --from=ghcr.io/astral-sh/uv:0.9.24@sha256:e4bc0bb4310505e7104f06430c0a2271a58f60a756a3b2c287bb409890081b2a /uv /bin/uv
 COPY requirements.txt /tmp/requirements.txt
@@ -18,7 +18,7 @@ RUN set -- /tmp/*.whl && \
     /opt/app/bin/python -c "from importlib.metadata import version; assert version('swing-trading-ai-assistant') == '$APP_VERSION'" && \
     /opt/app/bin/market-data --help >/dev/null
 
-FROM python:3.11.16-slim-bookworm@sha256:4b4c524dc3dce996864e030c7bd9c6b0e517597189fee48f48e05b499442444b
+FROM docker.io/library/python:3.11.16-slim-bookworm@sha256:4b4c524dc3dce996864e030c7bd9c6b0e517597189fee48f48e05b499442444b
 
 ARG APP_VERSION
 ARG SOURCE_REVISION
