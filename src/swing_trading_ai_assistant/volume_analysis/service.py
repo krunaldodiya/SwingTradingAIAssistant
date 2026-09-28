@@ -19,10 +19,10 @@ from swing_trading_ai_assistant.market_data.corporate_actions import (
 from swing_trading_ai_assistant.market_data.current_raw_price_context import (
     CurrentRawInvocationControlV1,
     CurrentRawMemberProjectionV1,
+    admitted_current_raw_context_binding_v1,
     admitted_current_raw_volumes_v1,
     read_retained_current_raw_context_v1,
     recheck_retained_current_raw_context_v1,
-    validate_admitted_current_raw_context_v1,
 )
 from swing_trading_ai_assistant.market_data.runtime_source_verifier import (
     runtime_source_sha256,
@@ -160,11 +160,18 @@ def _screen_integrity(
     root: Path,
     lease: StorageRootLease,
     control: CurrentRawInvocationControlV1,
-) -> tuple[object, ...]:
+) -> tuple[object, ...] | None:
     # The legacy price reader intentionally collapses unavailable screening.
     # Volume requires corrupt evidence to be terminal, even if another member
     # or input is missing. Inspect all requested screens through their real
     # retained store before reduction, and bind the same receipts afterwards.
+    with lease.read_operation(root) as operation:
+        try:
+            os.stat(
+                "catalog.duckdb", dir_fd=operation.descriptor, follow_symlinks=False
+            )
+        except FileNotFoundError:
+            return None
     cutoff = control.retain_evidence_cutoff()
     receipts: list[object] = []
     with DuckDBCatalog(root, read_only=True, lease=lease) as catalog:
@@ -188,6 +195,7 @@ def _read_members(
     lease: StorageRootLease,
     control: CurrentRawInvocationControlV1,
 ) -> tuple[list[dict[str, object]], list[dict[str, object]], str | None]:
+    screens = _screen_integrity(request, root, lease, control)
     store = ScheduleEvidenceStore(root, lease)
     schedule, absent = store._resolve_raw_history(  # pyright: ignore[reportPrivateUsage]
         request.schedule_identity_sha256, deadline=control
@@ -201,11 +209,14 @@ def _read_members(
         sessions: list[dict[str, object]] = []
         schedule_as_of = None
     else:
-        screens = _screen_integrity(request, root, lease, control)
-        members, sessions = _project(request, root, lease, control)
-        if _screen_integrity(request, root, lease, control) != screens:
-            raise StorageRootLeaseError("volume screen authority changed")
+        if screens is None:
+            members = _withheld(request, "DEPENDENCY_BLOCKED", "RAW_MAPPING_MISSING")
+            sessions = []
+        else:
+            members, sessions = _project(request, root, lease, control)
         schedule_as_of = instant(schedule.schedule.as_of)
+    if _screen_integrity(request, root, lease, control) != screens:
+        raise StorageRootLeaseError("volume screen authority changed")
     final, final_absent = store._resolve_raw_history(  # pyright: ignore[reportPrivateUsage]
         request.schedule_identity_sha256, deadline=control
     )
@@ -221,18 +232,41 @@ def _project(  # noqa: C901 -- ordered integrity, comparability and math admissi
     control: CurrentRawInvocationControlV1,
 ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
     raw = read_retained_current_raw_context_v1(
-        root, request=request.raw_input(), lease=lease, control=control
+        root,
+        request=request.raw_input(),
+        lease=lease,
+        control=control,
+        distinguish_missing_partitions=True,
     )
     if any(reason in _FATAL_REASONS for reason in raw.reasons):
         raise StorageRootLeaseError("volume retained integrity failed")
     if raw.admitted is None:
         repeated = read_retained_current_raw_context_v1(
-            root, request=request.raw_input(), lease=lease, control=control
+            root,
+            request=request.raw_input(),
+            lease=lease,
+            control=control,
+            distinguish_missing_partitions=True,
         )
         if repeated != raw:
             raise StorageRootLeaseError("volume retained authority changed")
         return _withheld(request, raw.state, raw.reasons[0]), []
-    projection = validate_admitted_current_raw_context_v1(raw.admitted)
+    projection, root_identity = admitted_current_raw_context_binding_v1(raw.admitted)
+    expected = request.raw_input()
+    if (
+        projection.input_identity_sha256 != expected.input_identity_sha256
+        or projection.request_identity_sha256 != expected.request_identity_sha256
+        or projection.ordered_selection_identity_sha256
+        != expected.ordered_selection_identity_sha256
+        or projection.canonical_cohort_identity_sha256
+        != expected.canonical_cohort_identity_sha256
+        or projection.member_inputs != request.members
+        or projection.data_selection_time != request.data_selection_time
+        or projection.schedule_identity_sha256 != request.schedule_identity_sha256
+        or projection.evidence_cutoff != control.evidence_cutoff
+        or root_identity != StorageRootLease.admit_existing_private_identity(root)
+    ):
+        raise StorageRootLeaseError("volume producer selection binding invalid")
     if (projection.provider, projection.price_basis, projection.bar_basis) != (
         "UPSTOX",
         "RAW",
@@ -261,6 +295,23 @@ def _project(  # noqa: C901 -- ordered integrity, comparability and math admissi
         state, reason, fact = member.state, member.reason, None
         if not comparable:
             state, reason = "UNSUPPORTED", "SESSION_COMPARABILITY_UNSUPPORTED"
+        elif any(
+            time > projection.evidence_cutoff
+            for time in (
+                *member.raw_source_times,
+                *(
+                    (member.mapping_retrieved_at,)
+                    if member.mapping_retrieved_at is not None
+                    else ()
+                ),
+                *(
+                    (member.screen_knowledge_at,)
+                    if member.screen_knowledge_at is not None
+                    else ()
+                ),
+            )
+        ):
+            state, reason = "INSUFFICIENT_EVIDENCE", "SOURCE_FUTURE_KNOWN"
         elif member.state == "OBSERVED":
             if grid is None:
                 raise StorageRootLeaseError("volume producer binding unavailable")
@@ -280,7 +331,11 @@ def _project(  # noqa: C901 -- ordered integrity, comparability and math admissi
             }
         )
     recheck_retained_current_raw_context_v1(
-        raw.admitted, root, lease=lease, control=control
+        raw.admitted,
+        root,
+        lease=lease,
+        control=control,
+        distinguish_missing_partitions=True,
     )
     return members, sessions
 

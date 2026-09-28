@@ -157,3 +157,35 @@ Still required: the remaining frozen adversarial matrix, complete compatibility
 and transitive source-coverage audit, usage documentation, independent exact-byte
 reviews, full configured gates and installed-artifact verification. No sprint
 completion, hosted pass, merge or release is claimed.
+
+## September 28 adversarial candidate checkpoint
+
+The Volume boundary now distinguishes a genuinely absent catalog partition from
+an unreadable or corrupt retained object. The raw reader's new opt-in missing
+partition mode is used only by Volume; its default legacy projection and reason
+remain unchanged. Screens and catalog integrity are checked even when a calendar
+or another member is missing. Producer admission must match the exact request,
+cohort, schedule, cutoff and root. Source times later than the pinned cutoff yield
+`SOURCE_FUTURE_KNOWN` without a fact; canonical member validity must cover the
+selection date. Mandatory runtime/result identity changes follow source changes;
+existing feature schemas, calculations and legacy projection bytes are preserved.
+
+Ninety-eight focused Volume tests pass, including real temporary-root retained
+producer/CLI agreement, zero/action precedence, missing dependencies and members,
+corrupt catalog/calendar/screen, input and root safety, clock edges, request and
+runtime-source substitution, raw/root replacement during calculation, interruption
+and exact retry, partial/special/unequal sessions, future knowledge, ordered
+selection, 1/50/51-member request bounds and the 64-KiB input edge. The actual
+console executable also returned exit 1 and typed missing-calendar JSON from a
+private request without creating the absent root. Usage is documented in
+[Volume context](../volume-context.md).
+
+All runtime source maps were refreshed through both source-root and package-relative
+references until dependency hashes converged; their existing consistency test
+passes. Repository Ruff formatting/lint and Vulture pass. The configured
+`uv run --no-sync --extra dev pyright` passes with zero errors. An earlier direct
+Pyright invocation used the wrong Python environment and could not resolve the
+installed DuckDB/PyArrow dependencies; no source workaround or gate weakening
+was applied. Existing price-context compatibility checks are recorded separately
+when complete. Full suite/coverage, distributions, independent reviews and hosted
+checks remain outstanding at this checkpoint.

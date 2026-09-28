@@ -87,6 +87,12 @@ class VolumeRequest:
             raise ValueError("invalid volume request interval")
         for member in self.members:
             CurrentPriceContextMemberV1(**asdict(member))
+            if (
+                not member.valid_from
+                <= self.data_selection_time.astimezone(_IST).date()
+                <= member.valid_through
+            ):
+                raise ValueError("volume member is not valid at selection")
         if len(self.canonical_bytes) > 64 * 1024:
             raise ValueError("volume request too large")
 

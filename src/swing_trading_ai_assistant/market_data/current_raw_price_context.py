@@ -443,10 +443,12 @@ def read_retained_current_raw_context_v1(  # noqa: C901
     request: CurrentRawPriceContextInputV1,
     lease: StorageRootLease,
     control: CurrentRawInvocationControlV1,
+    distinguish_missing_partitions: bool = False,
 ) -> RetainedCurrentRawContextOutcomeV1:
     """Read the exact retained 21-session raw context under the caller lease."""
     if (
-        type(request) is not CurrentRawPriceContextInputV1
+        type(distinguish_missing_partitions) is not bool
+        or type(request) is not CurrentRawPriceContextInputV1
         or type(lease) is not StorageRootLease
         or type(control) is not CurrentRawInvocationControlV1
     ):
@@ -651,13 +653,19 @@ def read_retained_current_raw_context_v1(  # noqa: C901
                             "RAW_MAPPING_CORRUPT",
                         )
                     )
-                except (PartitionReadFailureV1, ProvisionalPartitionUnavailableV1):
+                except (
+                    PartitionReadFailureV1,
+                    ProvisionalPartitionUnavailableV1,
+                ) as error:
                     members.append(
                         _member_failure(
                             position,
                             member,
                             "INSUFFICIENT_EVIDENCE",
-                            "RAW_PARTITION_CORRUPT",
+                            "RAW_BAR_MISSING"
+                            if distinguish_missing_partitions
+                            and isinstance(error, _RawPartitionMissingV1)
+                            else "RAW_PARTITION_CORRUPT",
                         )
                     )
             catalog.ensure_read_identity()
@@ -707,6 +715,10 @@ def read_retained_current_raw_context_v1(  # noqa: C901
     )
 
 
+class _RawPartitionMissingV1(ProvisionalPartitionUnavailableV1):
+    """An absent catalog entry, distinct from a failed retained object read."""
+
+
 def _member_rows(  # noqa: C901
     root: Path,
     lease: StorageRootLease,
@@ -740,7 +752,7 @@ def _member_rows(  # noqa: C901
                 schedule_digest_sha256=schedule_digest_sha256,
             )
             if metadata is None:
-                raise ProvisionalPartitionUnavailableV1("missing")
+                raise _RawPartitionMissingV1("missing")
             if (
                 metadata.plan.security_id != plan.security_id
                 or metadata.plan.instrument_key != plan.instrument_key
@@ -751,9 +763,10 @@ def _member_rows(  # noqa: C901
             raw_source_times.append(metadata.published_at)
         else:
             manifest = catalog.get_manifest(plan)
+            if manifest is None:
+                raise _RawPartitionMissingV1("missing")
             if (
-                manifest is None
-                or str(manifest.state) != "VERIFIED"
+                str(manifest.state) != "VERIFIED"
                 or str(manifest.validation_outcome) != "PASSED"
             ):
                 raise ProvisionalPartitionUnavailableV1("unverified")
@@ -898,6 +911,7 @@ def recheck_retained_current_raw_context_v1(
     *,
     lease: StorageRootLease,
     control: CurrentRawInvocationControlV1,
+    distinguish_missing_partitions: bool = False,
 ) -> None:
     projection = validate_admitted_current_raw_context_v1(value)
     control.ensure_live()
@@ -914,6 +928,7 @@ def recheck_retained_current_raw_context_v1(
         ),
         lease=lease,
         control=control,
+        distinguish_missing_partitions=distinguish_missing_partitions,
     )
     if fresh.admitted is None:
         raise StorageRootLeaseError("retained raw source authority changed")

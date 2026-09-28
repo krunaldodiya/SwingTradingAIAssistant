@@ -28,4 +28,8 @@ CURRENT_STOCK_RESEARCH_RUNTIME_SOURCE_SHA256_V1: Final[dict[str, str]] = {
     "src/swing_trading_ai_assistant/market_data/universe_snapshot.py": "d579f6dcd2a24f2e07448258d9d723b55a8cfa42e4a6d9852c1f8edea9ab9e53",
     "src/swing_trading_ai_assistant/market_structure/current_live.py": "592cecf888eee4347cf9ff6c45f03705df27c557a3d6d21df51b8ea7fdf73c31",
     "src/swing_trading_ai_assistant/research_packet/bharatstock.py": "3c069177245684811588e3a8cb8a77b3835d8823073ede6b0de5f97a93a59abc",
+    "src/swing_trading_ai_assistant/volume_analysis/__init__.py": "89cce37fb8cc6c1b9b12b0959cf4a2edb5103e13dcf93ce1b969092af3f147c3",
+    "src/swing_trading_ai_assistant/volume_analysis/current.py": "e55e854e4a1629be4e2bf522dc1dcaf2cd9ae763784ac557b6b201591a6c8618",
+    "src/swing_trading_ai_assistant/volume_analysis/request.py": "241fa165aa3e684037499a187d18779f835997ce9c064a6a32a2c542dc6ecc97",
+    "src/swing_trading_ai_assistant/volume_analysis/service.py": "2c32760436edd60e758f15473c59e65fb022a44703a72caa5246d86e07f407e6",
 }
