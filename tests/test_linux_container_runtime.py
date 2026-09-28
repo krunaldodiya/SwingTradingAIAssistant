@@ -1,6 +1,8 @@
 """Distribution checks retain isolation and ownership across engines."""
 
 import importlib.util
+import os
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -41,3 +43,74 @@ def test_unselected_engine_cannot_run(monkeypatch):
     api = load(monkeypatch)
     with pytest.raises(RuntimeError, match="selected"):
         api._container("fixture-image")
+
+
+def test_remote_build_recovery_requires_new_generation_before_inspection(
+    monkeypatch, tmp_path
+):
+    api = load(monkeypatch)
+    generation = tmp_path / "generation"
+    generation.write_text("1\n")
+    generation.chmod(0o640)
+    monkeypatch.setattr(api, "_PODMAN_GENERATION", generation, raising=False)
+    monkeypatch.setattr(api, "_RUNTIME", "/usr/bin/podman")
+    monkeypatch.setenv("CONTAINER_HOST", "unix:///ci/podman.sock")
+    monkeypatch.setattr(api, "_PODMAN_ROOTLESS", False)
+    reads = []
+
+    def run(args, **kwargs):
+        reads.append(args)
+        return subprocess.CompletedProcess(args, 0, b"{}", b"")
+
+    monkeypatch.setattr(api, "_run", run)
+    monkeypatch.setattr(api.time, "sleep", lambda _: generation.write_text("2\n"))
+    api._wait_for_podman_recovery(1)
+    assert generation.read_text() == "2\n"
+    assert reads and all("info" in args for args in reads)
+
+
+def test_remote_build_recovery_does_not_accept_stale_generation(monkeypatch, tmp_path):
+    api = load(monkeypatch)
+    generation = tmp_path / "generation"
+    generation.write_text("1\n")
+    generation.chmod(0o640)
+    monkeypatch.setattr(api, "_PODMAN_GENERATION", generation, raising=False)
+    ticks = iter([0, 11])
+    monkeypatch.setattr(api.time, "monotonic", lambda: next(ticks))
+    with pytest.raises(RuntimeError, match="recover"):
+        api._wait_for_podman_recovery(1)
+
+
+@pytest.mark.parametrize(
+    "case", ["zero", "third", "extra", "mode", "symlink", "hardlink", "fifo"]
+)
+def test_private_engine_generation_rejects_untrusted_shape(monkeypatch, tmp_path, case):
+    api = load(monkeypatch)
+    generation = tmp_path / "generation"
+    generation.write_text(
+        {"zero": "0\n", "third": "3\n", "extra": "2\nx"}.get(case, "2\n")
+    )
+    generation.chmod(0o666 if case == "mode" else 0o640)
+    if case == "fifo":
+        generation.unlink()
+        os.mkfifo(generation, 0o640)
+    elif case == "symlink":
+        target = generation.rename(tmp_path / "target")
+        generation.symlink_to(target)
+    elif case == "hardlink":
+        (tmp_path / "second").hardlink_to(generation)
+    monkeypatch.setattr(api, "_PODMAN_GENERATION", generation)
+    with pytest.raises((RuntimeError, OSError)):
+        api._podman_generation()
+
+
+def test_job_engine_already_restarted_fails_before_build(monkeypatch, tmp_path):
+    api = load(monkeypatch)
+    generation = tmp_path / "generation"
+    generation.write_text("2\n")
+    generation.chmod(0o640)
+    monkeypatch.setattr(api, "_PODMAN_GENERATION", generation)
+    monkeypatch.setattr(api, "_RUNTIME", "/usr/bin/podman")
+    monkeypatch.setenv("CONTAINER_HOST", "unix:///ci/podman.sock")
+    with pytest.raises(RuntimeError, match="before interruption"):
+        api._verify_interrupted_build(["podman", "build", "--tag", "test", "."], "test")

@@ -137,3 +137,29 @@ bounded removal and failure propagation. Only the identified synthetic job's
 remaining resources were recovered. A separate earlier probe was invalidated
 because the coordinator edited the shell source while Bash was reading it;
 qualification now executes a frozen copy. Both failed logs remain retained.
+
+## Native Podman cancellation correction (September 28)
+
+The exact 7af72ed full CI attempt passed 5,618 tests and 87.40% coverage, then
+failed distribution interruption: cancelling the remote build caused the pinned
+Podman 5.8.7 service to abort in Buildah `getImageRootfs` with an assignment to a
+nil map. Isolated actual-image probes reproduced it; the same interrupted run
+without the preceding interrupted build passed. Serial build stages did not fix
+it. Complete panic/exit evidence is retained privately; OOMKilled was false.
+Upstream [Buildah #7098](https://github.com/podman-container-tools/buildah/pull/7098)
+describes a related cleanup/stage-lifetime race but remains unmerged; no upstream
+patch, different engine, nightly image or weaker gate is adopted.
+
+The bounded current-blocker correction allows one same-store private-service
+restart only after exit 134. Other exits retain failure, a second abort exhausts
+the budget, and stopping the engine does not restart it. Each service start
+restores socket ownership/mode and atomically records a bounded generation.
+The distribution verifier requires generation one before the cancellation, then
+requires generation two and a responsive API within ten seconds before checking
+that the interrupted image is absent. Native host Podman and Docker keep their
+existing interruption paths. No build/run mutation is retried and no engine is
+switched. The original image identity, CLI/output, mount/source checks and rollback
+still run; the receipt explicitly records the private service restart. This is
+recovery from a known pinned-engine failure, not a claim that the upstream crash
+is fixed. The observed diagnostic recovery preserved the original image and
+application behavior; permanent candidate reviews and full gates remain required.
