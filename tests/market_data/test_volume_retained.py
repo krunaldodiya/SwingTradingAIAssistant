@@ -18,6 +18,7 @@ from current_raw_acquisition_fixtures import (
     schedule,
     seed_root,
 )
+from current_raw_acquisition_fixtures import request as raw_request
 
 import swing_trading_ai_assistant.market_data.current_raw_acquisition as acquisition
 import swing_trading_ai_assistant.market_data.current_raw_acquisition_transport as transport
@@ -527,3 +528,62 @@ def test_raw_minute_failure_cannot_be_averaged_away(
         )
         assert result["members"][0]["reason"] == reason
         assert result["members"][0]["fact"] is None
+
+
+def test_over_range_daily_volume_withholds_only_affected_member(tmp_path, monkeypatch):
+    value = schedule()
+    value = replace(
+        value,
+        sessions=tuple(
+            replace(item, close_at=item.open_at + timedelta(minutes=2))
+            for item in value.sessions
+        ),
+    )
+    raw = raw_request(value, members=members(2))
+    root = tmp_path / "root"
+    seed_root(root, retained_action=True, schedule_value=value, request_value=raw)
+
+    def body(volume):
+        candles = [
+            [
+                (item.open_at + timedelta(minutes=offset)).isoformat(),
+                100.0,
+                101.0,
+                99.0,
+                100.5,
+                volume,
+                None,
+            ]
+            for item in value.sessions
+            for offset in range(2)
+        ]
+        return json.dumps({"status": "success", "data": {"candles": candles}}).encode()
+
+    wire = RecordedWire([WireReply(body=body(2**62)), WireReply(body=body(10))])
+    monkeypatch.setattr(transport, "build_opener", wire.build_opener)
+    monkeypatch.setattr(
+        acquisition, "EnvironmentAccessTokenProvider", FixtureTokenProvider
+    )
+    acquired = acquisition.acquire_missing_current_raw_evidence_v1(
+        raw, root, control=control(raw)
+    )
+    assert acquired.outcome == "ACQUISITION_COMPLETED"
+    request = VolumeRequest(
+        raw.data_selection_time,
+        raw.admission_deadline,
+        raw.schedule_identity_sha256,
+        raw.members,
+    )
+    before = inventory(root)
+    result = research_current_volume(
+        request, root, clock=lambda: request.data_selection_time
+    )
+    assert result["state"] == "NONREADY"
+    assert result["members"][0]["state"] == "UNSUPPORTED"
+    assert result["members"][0]["reason"] == "VOLUME_RANGE_UNSUPPORTED"
+    assert result["members"][0]["fact"] is None
+    assert result["members"][1]["state"] == "OBSERVED"
+    assert result["members"][1]["fact"]["baseline_numerator"] == 20
+    assert result["members"][1]["fact"]["relation"] == "EQUAL"
+    assert inventory(root) == before
+    assert wire.attempts == 2

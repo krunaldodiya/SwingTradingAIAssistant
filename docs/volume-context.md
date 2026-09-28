@@ -80,6 +80,8 @@ For example, a mean of 10 and latest volume of 25 produces a baseline of `10/1`,
 a ratio of `5/2` and `ABOVE`. This example is arithmetic, not a market observation.
 A zero latest volume is valid when the baseline is positive. A zero baseline
 returns `ZERO_BASELINE` and no fact; no infinite or neutral ratio is invented.
+A retained daily sum above `2^63 - 1` returns `VOLUME_RANGE_UNSUPPORTED`
+for that stock, while other stocks retain their independent results.
 
 The response includes the ordered selection, selected sessions, source and
 knowledge-time bindings, calculation and runtime identities, result identity,

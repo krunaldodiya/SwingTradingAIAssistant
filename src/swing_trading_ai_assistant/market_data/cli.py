@@ -82,6 +82,7 @@ from .current_cohort import (
     RetainedCurrentNifty50UniverseResolverV1,
     parse_current_cohort_manifest_bytes_v1,
 )
+from .current_raw_price_context import CurrentRawInvocationControlV1
 from .current_stock_research import (
     CurrentStockResearchInputError,
     CurrentStockResearchResultV1,
@@ -1219,9 +1220,15 @@ def _run_volume_command(args: argparse.Namespace, clock: _ClockV1) -> int:
         request = volume_request_from_json(_read_current_regime_input(args.input_file))
     except ValueError:
         raise _RequestInvalid from None
-    result = research_current_volume(request, args.storage_root, clock=clock.now)
+    control = CurrentRawInvocationControlV1(
+        clock,
+        selection=request.data_selection_time,
+        deadline=request.admission_deadline,
+    )
+    result = research_current_volume(request, args.storage_root, clock=control.now)
     output = volume_json(result).decode("ascii")
-    # Assemble and verify the complete response before the first stdout write.
+    # Preserve clock continuity through serialization and the first output write.
+    control.ensure_live()
     sys.stdout.write(output)
     return 0 if result["state"] == "OBSERVED" else 1
 

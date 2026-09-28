@@ -315,11 +315,14 @@ def _project(  # noqa: C901 -- ordered integrity, comparability and math admissi
         elif member.state == "OBSERVED":
             if grid is None:
                 raise StorageRootLeaseError("volume producer binding unavailable")
-            calculated = calculate_volume(grid)
-            if calculated is None:
-                state, reason = "INSUFFICIENT_EVIDENCE", "ZERO_BASELINE"
+            if any(value > 2**63 - 1 for value in grid):
+                state, reason = "UNSUPPORTED", "VOLUME_RANGE_UNSUPPORTED"
             else:
-                fact = asdict(calculated)
+                calculated = calculate_volume(grid)
+                if calculated is None:
+                    state, reason = "INSUFFICIENT_EVIDENCE", "ZERO_BASELINE"
+                else:
+                    fact = asdict(calculated)
         members.append(
             {
                 "position": member.position,

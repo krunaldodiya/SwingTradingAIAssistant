@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+import swing_trading_ai_assistant.market_data.cli as cli
 import swing_trading_ai_assistant.volume_analysis.current as arithmetic
 from swing_trading_ai_assistant.market_data.cli import main
 from swing_trading_ai_assistant.market_data.current_raw_price_context import (
@@ -163,3 +164,46 @@ def test_runtime_source_origin_substitution_is_rejected(tmp_path, monkeypatch):
     with pytest.raises(ValueError, match="runtime source identity invalid"):
         research_current_volume(data, root, clock=lambda: data.data_selection_time)
     assert list(root.iterdir()) == []
+
+
+@pytest.mark.parametrize("case", ["deadline", "rollover", "regression", "naive"])
+def test_cli_checks_clock_after_serialization(tmp_path, monkeypatch, capsys, case):
+    data = request()
+    path = tmp_path / "request.json"
+    path.write_bytes(data.canonical_bytes)
+    path.chmod(0o600)
+    current = data.data_selection_time + timedelta(seconds=1)
+    serialize = cli.volume_json
+
+    def delayed(value):
+        nonlocal current
+        output = serialize(value)
+        current = {
+            "deadline": data.admission_deadline,
+            "rollover": datetime(2026, 9, 15, 18, 30, tzinfo=UTC),
+            "regression": data.data_selection_time,
+            "naive": data.data_selection_time.replace(tzinfo=None),
+        }[case]
+        return output
+
+    class Clock:
+        def now(self):
+            return current
+
+    monkeypatch.setattr(cli, "volume_json", delayed)
+    status = main(
+        [
+            "volume-context-current",
+            "--input-file",
+            str(path),
+            "--storage-root",
+            str(tmp_path / "absent"),
+            "--output",
+            "json",
+        ],
+        trusted_clock=Clock(),
+    )
+    output = capsys.readouterr()
+    assert status == 2
+    assert output.out == ""
+    assert output.err == "internal_error\n"
