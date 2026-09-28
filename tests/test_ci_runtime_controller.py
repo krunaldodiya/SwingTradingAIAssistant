@@ -28,10 +28,14 @@ with open(os.environ["PROBE_LOG"],"a") as f:f.write(json.dumps([Path(sys.argv[0]
 if args[0]=="info":
  print('{{"host":{{"security":{{"rootless":true}}}}}}');sys.exit({int(engine_failure)})
 if args[0]=="cp":sys.exit({int(copy_failure)})
+if args[0]=="ps":
+ marker=Path(os.environ["PROBE_LOG"]+".runner")
+ print(marker.read_text() if marker.exists() else "")
 if args[0]=="version":print('{{"Client":{{"Version":"fixture"}}}}')
 if args[0]=="run" and "--name" in args:
  name=args[args.index("--name")+1]
  if name.endswith("-{failure}"):sys.exit(19)
+ if name.endswith("-runner"):Path(os.environ["PROBE_LOG"]+".runner").write_text(name)
  if name.endswith("-runner") and {failure!r} in {{"SIGINT","SIGTERM"}}:
   os.kill(os.getppid(),getattr(signal,{failure!r}))
 """)
@@ -225,3 +229,72 @@ def test_engine_teardown_failure_cannot_report_success(tmp_path):
     job = next((tmp_path / "state/jobs").iterdir())
     assert (job / "controller-exit").read_text().strip() == "1"
     assert not (job / "jit").exists()
+
+
+@pytest.mark.parametrize("runtime", ["podman", "docker"])
+def test_failed_creation_without_runner_does_not_preserve_engine(tmp_path, runtime):
+    env, log = fixture_tools(tmp_path, runtime, failure="runner", copy_failure=True)
+    result = subprocess.run(  # noqa: S603 -- isolated synthetic engine
+        ["/bin/bash", str(SCRIPT)],
+        env=env,
+        capture_output=True,
+        timeout=15,
+        check=False,
+    )
+    assert result.returncode == 19
+    calls = [json.loads(line) for line in log.read_text().splitlines()]
+    assert not any(call[1] == "cp" for call in calls)
+    assert any(call[1:3] == ["volume", "rm"] for call in calls)
+    assert any(call[1:3] == ["network", "rm"] for call in calls)
+    assert any(call[1] == "rm" and call[-1].endswith("-engine") for call in calls)
+    job = next((tmp_path / "state/jobs").iterdir())
+    assert (job / "controller-exit").read_text().strip() == "19"
+    assert not (job / "jit").exists()
+    assert Path(str(log) + ".unregistered").exists()
+
+
+def test_unknown_runner_state_preserves_evidence_but_not_registration(tmp_path):
+    env, log = fixture_tools(tmp_path, "podman")
+    engine = tmp_path / "bin/podman"
+    engine.write_text(
+        engine.read_text().replace(
+            'if args[0]=="ps":', 'if args[0]=="ps":sys.exit(23)\nif args[0]=="ps":'
+        )
+    )
+    result = subprocess.run(  # noqa: S603 -- isolated synthetic engine
+        ["/bin/bash", str(SCRIPT)],
+        env=env,
+        capture_output=True,
+        timeout=15,
+        check=False,
+    )
+    assert result.returncode == 1
+    assert b"Runner state unavailable" in result.stderr
+    calls = [json.loads(line) for line in log.read_text().splitlines()]
+    assert not any(
+        call[1] in {"cp", "rm"} or call[1:3] == ["volume", "rm"] for call in calls
+    )
+    job = next((tmp_path / "state/jobs").iterdir())
+    assert not (job / "jit").exists()
+    assert Path(str(log) + ".unregistered").exists()
+
+
+def test_disappeared_runner_cannot_report_success(tmp_path):
+    env, log = fixture_tools(tmp_path, "podman")
+    engine = tmp_path / "bin/podman"
+    engine.write_text(
+        engine.read_text().replace(
+            'if args[0]=="ps":', 'if args[0]=="ps":sys.exit(0)\nif args[0]=="ps":'
+        )
+    )
+    result = subprocess.run(  # noqa: S603 -- isolated synthetic engine
+        ["/bin/bash", str(SCRIPT)],
+        env=env,
+        capture_output=True,
+        timeout=15,
+        check=False,
+    )
+    assert result.returncode == 1
+    calls = [json.loads(line) for line in log.read_text().splitlines()]
+    assert not any(call[1] == "cp" for call in calls)
+    assert any(call[1:3] == ["volume", "rm"] for call in calls)

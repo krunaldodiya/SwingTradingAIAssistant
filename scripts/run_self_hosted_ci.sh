@@ -55,6 +55,21 @@ cleanup() {
             > /dev/null 2> "$job_dir/unregister.log" || true
     fi
     if [[ $runner_attempted == true ]]; then
+        if ! runner_names=$(timeout --kill-after=2s 5s "$runtime" ps --all --filter "name=$runner" --format '{{.Names}}'); then
+            echo 'Runner state unavailable; retaining job resources for recovery' >&2
+            printf '1\n' > "$job_dir/controller-exit"
+            exit 1
+        fi
+        if [[ -z $runner_names ]]; then
+            runner_attempted=false
+            cleanup_failed
+        elif [[ $runner_names != "$runner" ]]; then
+            echo 'Runner state ambiguous; retaining job resources for recovery' >&2
+            printf '1\n' > "$job_dir/controller-exit"
+            exit 1
+        fi
+    fi
+    if [[ $runner_attempted == true ]]; then
         if ! timeout --kill-after=2s 20s "$runtime" cp "$runner:/ci/artifacts" "$job_dir/receipts"; then
             echo 'Receipt copy failed; retaining job containers and volume for recovery' >&2
             printf '1\n' > "$job_dir/controller-exit"
