@@ -79,11 +79,23 @@ def test_remote_build_recovery_accepts_healthy_service(
     generation.chmod(0o640)
     monkeypatch.setattr(api, "_PODMAN_GENERATION", generation)
     monkeypatch.setattr(api, "_RUNTIME", "/usr/bin/podman")
-    monkeypatch.setattr(
-        api, "_run", lambda args, **kwargs: subprocess.CompletedProcess(args, 0)
-    )
     ticks = iter([0, 1, 11])
-    monkeypatch.setattr(api.time, "monotonic", lambda: next(ticks))
+    observed = []
+
+    def clock():
+        value = next(ticks)
+        observed.append(value)
+        return value
+
+    def health(args, **kwargs):
+        # A live first service can still be processing the cancelled build.
+        # Do not accept its early response as completion of the observation window.
+        if not restarted:
+            assert observed[-1] >= 10
+        return subprocess.CompletedProcess(args, 0)
+
+    monkeypatch.setattr(api, "_run", health)
+    monkeypatch.setattr(api.time, "monotonic", clock)
     monkeypatch.setattr(api.time, "sleep", lambda _: None)
     api._wait_for_podman_recovery(1)
     assert api._podman_generation() - 1 == int(restarted)

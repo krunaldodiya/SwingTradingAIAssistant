@@ -155,9 +155,10 @@ restart only after exit 134. Other exits retain failure, a second abort exhausts
 the budget, and stopping the engine does not restart it. Each service start
 restores socket ownership/mode and atomically records a bounded generation.
 The distribution verifier requires generation one before the cancellation, then
-requires a responsive API within ten seconds before checking that the interrupted
-image is absent. A healthy service may remain at generation one; if it aborts,
-the replacement must be generation two. The verifier accepts neither generation
+observes cancellation for up to ten seconds before checking that the interrupted
+image is absent. A healthy generation-one service must answer at the end of that
+window: an early response can precede asynchronous cleanup and an abort. If it
+aborts, the generation-two replacement may proceed as soon as its API responds. The verifier accepts neither generation
 without a responsive API. Native host Podman and Docker keep their
 existing interruption paths. No build/run mutation is retried and no engine is
 switched. The original image identity, CLI/output, mount/source checks and rollback

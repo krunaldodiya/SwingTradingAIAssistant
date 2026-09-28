@@ -285,8 +285,13 @@ def _job_podman() -> bool:
 
 def _wait_for_podman_recovery(before: int) -> None:
     deadline = time.monotonic() + 10
-    while time.monotonic() < deadline:
-        if _podman_generation() in (before, before + 1):
+    while True:
+        elapsed = time.monotonic() >= deadline
+        generation = _podman_generation()
+        # Remote cancellation can answer info before asynchronous cleanup aborts.
+        # Observe the original service for the full cancellation window; a
+        # replacement has already crossed that abort boundary.
+        if generation == before + 1 or elapsed:
             try:
                 health = _run([_engine(), "info", "--format", "{{json .}}"], timeout=1)
             except subprocess.TimeoutExpired:
@@ -294,6 +299,8 @@ def _wait_for_podman_recovery(before: int) -> None:
             else:
                 if health.returncode == 0:
                     return
+        if elapsed:
+            break
         time.sleep(0.1)
     raise RuntimeError("private Podman engine did not recover after interruption")
 
