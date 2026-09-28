@@ -33,6 +33,13 @@ from swing_trading_ai_assistant.research_packet.current_price_context_v2 import 
     current_price_context_request_from_canonical_json_bytes_v2,
     research_current_price_context_v2,
 )
+from swing_trading_ai_assistant.volume_analysis import (
+    research_current_volume,
+    volume_request_from_json,
+)
+from swing_trading_ai_assistant.volume_analysis.request import (
+    canonical_bytes as volume_json,
+)
 
 from .account_rate_limit import ThreadSafeAccountRateLimiterV1
 from .agent_cohort_context import run_agent_cohort_research_current
@@ -484,6 +491,13 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="ABSOLUTE_OWNER_PRIVATE_ROOT",
     )
     regime_current.add_argument("--output", choices=("json",), required=True)
+    volume_context = commands.add_parser(
+        "volume-context-current",
+        help="compare retained completed-session volume with its prior-session baseline",
+    )
+    volume_context.add_argument("--input-file", type=Path, required=True)
+    volume_context.add_argument("--storage-root", type=Path, required=True)
+    volume_context.add_argument("--output", choices=("json",), required=True)
     price_context_current = commands.add_parser(
         "price-context-current",
         help="return independent retained raw current-price context",
@@ -685,6 +699,8 @@ def main(  # noqa: C901 - command dispatch remains explicit.
                 current_stock_research_confirm_v2,
                 current_stock_research_previous_v2,
             )
+        if args.command == "volume-context-current":
+            return _run_volume_command(args, trusted_clock or _SystemClock())
         if args.command in {"regime-current", "price-context-current"}:
             return _run_current_packet_command(args, trusted_clock or _SystemClock())
         if args.command == "historical-ohlcv-upstox-raw":
@@ -1196,6 +1212,18 @@ def _run_current_regime_command(args: argparse.Namespace) -> int:
         return 2
     sys.stdout.write(report_bytes.decode("utf-8"))
     return exit_code
+
+
+def _run_volume_command(args: argparse.Namespace, clock: _ClockV1) -> int:
+    try:
+        request = volume_request_from_json(_read_current_regime_input(args.input_file))
+    except ValueError:
+        raise _RequestInvalid from None
+    result = research_current_volume(request, args.storage_root, clock=clock.now)
+    output = volume_json(result).decode("ascii")
+    # Assemble and verify the complete response before the first stdout write.
+    sys.stdout.write(output)
+    return 0 if result["state"] == "OBSERVED" else 1
 
 
 def _read_current_regime_input(path: Path) -> bytes:

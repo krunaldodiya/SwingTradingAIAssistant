@@ -125,6 +125,14 @@ If a required capability or independent reviewer is unavailable, continue author
 
 ### 5. Use bounded goal mode when available
 
+Standing owner direction (2026-09-28): default to the available persistent
+Goal feature for authorized software development in this repository. The owner
+has requested continuous autonomous progress; do not ask again merely to start
+or continue an already-authorized, implementation-ready bounded goal. Carry each
+accepted slice through its required implementation, verification and review,
+while retaining all scope, source, protected-effect and release boundaries below.
+This preference does not authorize unrelated goals or global harness changes.
+
 Use the harness's persistent goal or equivalent continuation facility when available, permitted, and useful for an implementation-ready bounded slice that benefits from uninterrupted execution. Goal mode may start only after the governing Issue and sources, first-working/later boundary, contracts, file ownership, risk and adversarial matrix, acceptance evidence, review ownership, non-goals, and pause conditions are frozen.
 
 Goal mode grants continuity, not authority. It MUST pause at the next safe boundary for:

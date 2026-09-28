@@ -121,7 +121,9 @@ evidence does not prove live-provider behavior or effectiveness.
 The Codex coordinator owns the contract, implementation, shared files, tracker
 and integration in isolated branch `codex/sprint26-volume`. Model/effort are
 inherited; no independent reviewer or model telemetry is yet claimed. No
-subordinate implementation agent or persistent goal has been started.
+subordinate implementation agent has been started. At the owner's explicit
+request, a persistent thread Goal now covers verified backup restoration followed
+by this bounded sprint; restoration is complete and implementation has resumed.
 Runtime work is limited to a Volume module, its raw admission seam, CLI,
 necessary source manifests, behavior tests and usage documentation.
 Existing provider acquisition and private stores must not be modified or used
@@ -134,3 +136,24 @@ GitHub Project and milestone tools are unavailable in the connector; sprint
 number is owner-selected planning terminology, not a claimed milestone assignment.
 No configured memory tool is available; this contract and the issue preserve
 the decision. Release and full acceptance are still pending.
+
+## September 28 working-path checkpoint (not acceptance)
+
+The owner-prioritized September 27 Drive backup was restored into the home data
+folder and every file hash, permission and ownership was checked at its final
+location. No market-provider calls were made by recovery; backup automation #177
+remains separate. The private verification receipt stays outside the repository.
+
+The Volume request, SDK and CLI now have a working retained-only path. Forty-eight
+focused tests pass: 20 request cases, 21 arithmetic/initial-boundary cases and
+seven real temporary-root integration cases. The latter cover SDK/CLI agreement,
+no retained writes or extra transport calls, zero baseline, action precedence,
+held root, expired CLI request and corrupt action evidence. The corruption test
+first failed and then passed after adding direct retained-screen integrity checks
+around reduction. Six existing raw-reader/price-CLI checks pass, and focused
+Pyright reports zero errors. These are development checks, not full acceptance.
+
+Still required: the remaining frozen adversarial matrix, complete compatibility
+and transitive source-coverage audit, usage documentation, independent exact-byte
+reviews, full configured gates and installed-artifact verification. No sprint
+completion, hosted pass, merge or release is claimed.

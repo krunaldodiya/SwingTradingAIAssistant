@@ -364,6 +364,8 @@ _ADMITTED: dict[
         object,
         tuple[int, int],
         tuple[object, ...],
+        tuple[tuple[int, ...] | None, ...],
+        bytes,
     ],
 ] = {}
 
@@ -372,6 +374,7 @@ def _mint(
     projection: CurrentRawContextProjectionV1,
     receipts: tuple[object, ...],
     root_identity: tuple[int, int],
+    volumes: tuple[tuple[int, ...] | None, ...],
 ) -> AdmittedCurrentRawContextV1:
     value = object.__new__(AdmittedCurrentRawContextV1)
     seal = object()
@@ -390,6 +393,8 @@ def _mint(
         seal,
         root_identity,
         receipts,
+        volumes,
+        _canonical(volumes),
     )
     return value
 
@@ -412,6 +417,18 @@ def admitted_current_raw_context_binding_v1(
     ):
         raise ValueError("current raw context is not admitted")
     return entry[1], entry[4]
+
+
+def admitted_current_raw_volumes_v1(
+    value: AdmittedCurrentRawContextV1,
+) -> tuple[tuple[int, ...] | None, ...]:
+    """Read immutable daily volume only from the same producer admission."""
+    projection = validate_admitted_current_raw_context_v1(value)
+    entry = _ADMITTED[id(value)]
+    volumes = entry[6]
+    if len(volumes) != len(projection.members) or _canonical(volumes) != entry[7]:
+        raise ValueError("current raw volume binding invalid")
+    return volumes
 
 
 def validate_admitted_current_raw_context_v1(
@@ -477,6 +494,7 @@ def read_retained_current_raw_context_v1(  # noqa: C901
     ):
         return _outcome("UNSUPPORTED", "RAW_WINDOW_LIMIT_EXCEEDED")
 
+    volumes: dict[int, tuple[int, ...]] = {}
     members: list[CurrentRawMemberProjectionV1] = []
     receipts: list[object] = [schedule_result.canonical_bytes]
     try:
@@ -604,6 +622,7 @@ def read_retained_current_raw_context_v1(  # noqa: C901
                             screen.knowledge_at,
                         )
                     )
+                    volumes[position] = tuple(bar.volume for bar in bars)
                     receipts.extend((resolved, checksums, screen))
                 except InstrumentSnapshotNotFoundError:
                     members.append(
@@ -676,7 +695,15 @@ def read_retained_current_raw_context_v1(  # noqa: C901
     if root_identity is None:
         raise StorageRootLeaseError("current raw context root authority lost")
     return RetainedCurrentRawContextOutcomeV1(
-        "OBSERVED", (), len(sessions), _mint(projection, tuple(receipts), root_identity)
+        "OBSERVED",
+        (),
+        len(sessions),
+        _mint(
+            projection,
+            tuple(receipts),
+            root_identity,
+            tuple(volumes.get(index) for index in range(len(members))),
+        ),
     )
 
 
@@ -891,7 +918,11 @@ def recheck_retained_current_raw_context_v1(
     if fresh.admitted is None:
         raise StorageRootLeaseError("retained raw source authority changed")
     refreshed = validate_admitted_current_raw_context_v1(fresh.admitted)
-    if _canonical(refreshed) != _canonical(projection):
+    if _canonical(refreshed) != _canonical(
+        projection
+    ) or admitted_current_raw_volumes_v1(
+        fresh.admitted
+    ) != admitted_current_raw_volumes_v1(value):
         raise StorageRootLeaseError("retained raw source authority changed")
     control.ensure_live()
 
