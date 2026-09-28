@@ -155,11 +155,13 @@ restart only after exit 134. Other exits retain failure, a second abort exhausts
 the budget, and stopping the engine does not restart it. Each service start
 restores socket ownership/mode and atomically records a bounded generation.
 The distribution verifier requires generation one before the cancellation, then
-requires generation two and a responsive API within ten seconds before checking
-that the interrupted image is absent. Native host Podman and Docker keep their
+requires a responsive API within ten seconds before checking that the interrupted
+image is absent. A healthy service may remain at generation one; if it aborts,
+the replacement must be generation two. The verifier accepts neither generation
+without a responsive API. Native host Podman and Docker keep their
 existing interruption paths. No build/run mutation is retried and no engine is
 switched. The original image identity, CLI/output, mount/source checks and rollback
-still run; the receipt explicitly records the private service restart. This is
+still run; the receipt explicitly records zero or one private service restart. This is
 recovery from a known pinned-engine failure, not a claim that the upstream crash
 is fixed. The observed diagnostic recovery preserved the original image and
 application behavior; permanent candidate reviews and full gates remain required.

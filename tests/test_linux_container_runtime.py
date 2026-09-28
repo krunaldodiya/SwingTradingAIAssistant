@@ -45,9 +45,7 @@ def test_unselected_engine_cannot_run(monkeypatch):
         api._container("fixture-image")
 
 
-def test_remote_build_recovery_requires_new_generation_before_inspection(
-    monkeypatch, tmp_path
-):
+def test_remote_build_recovery_waits_for_responsive_replacement(monkeypatch, tmp_path):
     api = load(monkeypatch)
     generation = tmp_path / "generation"
     generation.write_text("1\n")
@@ -60,7 +58,9 @@ def test_remote_build_recovery_requires_new_generation_before_inspection(
 
     def run(args, **kwargs):
         reads.append(args)
-        return subprocess.CompletedProcess(args, 0, b"{}", b"")
+        return subprocess.CompletedProcess(
+            args, 0 if generation.read_text() == "2\n" else 125, b"{}", b""
+        )
 
     monkeypatch.setattr(api, "_run", run)
     monkeypatch.setattr(api.time, "sleep", lambda _: generation.write_text("2\n"))
@@ -69,14 +69,42 @@ def test_remote_build_recovery_requires_new_generation_before_inspection(
     assert reads and all("info" in args for args in reads)
 
 
-def test_remote_build_recovery_does_not_accept_stale_generation(monkeypatch, tmp_path):
+@pytest.mark.parametrize("restarted", [False, True])
+def test_remote_build_recovery_accepts_healthy_service(
+    monkeypatch, tmp_path, restarted
+):
     api = load(monkeypatch)
     generation = tmp_path / "generation"
-    generation.write_text("1\n")
+    generation.write_text("2\n" if restarted else "1\n")
     generation.chmod(0o640)
-    monkeypatch.setattr(api, "_PODMAN_GENERATION", generation, raising=False)
-    ticks = iter([0, 11])
+    monkeypatch.setattr(api, "_PODMAN_GENERATION", generation)
+    monkeypatch.setattr(api, "_RUNTIME", "/usr/bin/podman")
+    monkeypatch.setattr(
+        api, "_run", lambda args, **kwargs: subprocess.CompletedProcess(args, 0)
+    )
+    ticks = iter([0, 1, 11])
     monkeypatch.setattr(api.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(api.time, "sleep", lambda _: None)
+    api._wait_for_podman_recovery(1)
+    assert api._podman_generation() - 1 == int(restarted)
+
+
+@pytest.mark.parametrize("generation_value", ["1\n", "2\n"])
+def test_remote_build_recovery_rejects_unresponsive_service(
+    monkeypatch, tmp_path, generation_value
+):
+    api = load(monkeypatch)
+    generation = tmp_path / "generation"
+    generation.write_text(generation_value)
+    generation.chmod(0o640)
+    monkeypatch.setattr(api, "_PODMAN_GENERATION", generation)
+    monkeypatch.setattr(api, "_RUNTIME", "/usr/bin/podman")
+    monkeypatch.setattr(
+        api, "_run", lambda args, **kwargs: subprocess.CompletedProcess(args, 125)
+    )
+    ticks = iter([0, 1, 11])
+    monkeypatch.setattr(api.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(api.time, "sleep", lambda _: None)
     with pytest.raises(RuntimeError, match="recover"):
         api._wait_for_podman_recovery(1)
 

@@ -286,7 +286,7 @@ def _job_podman() -> bool:
 def _wait_for_podman_recovery(before: int) -> None:
     deadline = time.monotonic() + 10
     while time.monotonic() < deadline:
-        if _podman_generation() == before + 1:
+        if _podman_generation() in (before, before + 1):
             try:
                 health = _run([_engine(), "info", "--format", "{{json .}}"], timeout=1)
             except subprocess.TimeoutExpired:
