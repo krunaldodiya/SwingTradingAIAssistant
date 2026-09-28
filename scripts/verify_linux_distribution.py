@@ -1,6 +1,6 @@
 """Build and challenge the Linux wheel/OCI distribution from one exact wheel.
 
-Run after ``uv build``. Docker receives a temporary two-file context: the wheel
+Run after ``uv build``. The selected engine receives a temporary two-file context: the wheel
 and hash-checked runtime requirements exported from the repository lock.
 """
 
@@ -12,12 +12,26 @@ import json
 import os
 import shutil
 import signal
+import stat
 import subprocess
 import tempfile
 import time
 import tomllib
 import uuid
 from pathlib import Path
+
+from container_runtime import select_runtime
+
+_RUNTIME: str | None = None
+_PODMAN_ROOTLESS = False
+_PODMAN_GENERATION = Path("/ci/podman-engine-generation")
+
+
+def _engine() -> str:
+    if _RUNTIME is None:
+        raise RuntimeError("container engine must be selected before execution")
+    return _RUNTIME
+
 
 ROOT = Path(__file__).resolve().parents[1]
 DEMO = "swing_trading_ai_assistant._examples.single_stock_research_demo"
@@ -66,9 +80,11 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _container(image: str, *, entrypoint: str | None = None) -> list[str]:
+def _container(
+    image: str, *, entrypoint: str | None = None, user: str = "10001:10001"
+) -> list[str]:
     command = [
-        "docker",
+        _engine(),
         "run",
         "--rm",
         "--network",
@@ -81,6 +97,9 @@ def _container(image: str, *, entrypoint: str | None = None) -> list[str]:
         "--security-opt",
         "no-new-privileges",
     ]
+    command.extend(("--user", user))
+    if _PODMAN_ROOTLESS:
+        command.append("--userns=keep-id")
     if entrypoint is not None:
         command.extend(("--entrypoint", entrypoint))
     return [*command, image]
@@ -113,8 +132,8 @@ def _mounted_request(
     mount = f"type=bind,src={root},dst=/data"
     if readonly:
         mount += ",readonly"
-    command = _container(image)
-    command[2:2] = ["--user", user, "--mount", mount]
+    command = _container(image, user=user)
+    command[2:2] = ["--mount", mount]
     return _run([*command, *_research_request(selected)])
 
 
@@ -237,7 +256,59 @@ def _verify_image_source(image: str, scratch: Path) -> None:
         raise RuntimeError("altered image source produced a public CLI result")
 
 
+def _podman_generation() -> int:
+    descriptor = os.open(
+        _PODMAN_GENERATION, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+    )
+    try:
+        info = os.fstat(descriptor)
+        value = os.read(descriptor, 3)
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_nlink != 1
+            or stat.S_IMODE(info.st_mode) != 0o640
+            or value not in (b"1\n", b"2\n")
+        ):
+            raise RuntimeError("invalid private Podman recovery evidence")
+        return int(value)
+    finally:
+        os.close(descriptor)
+
+
+def _job_podman() -> bool:
+    return (
+        Path(_engine()).name == "podman"
+        and not _PODMAN_ROOTLESS
+        and os.environ.get("CONTAINER_HOST") == "unix:///ci/podman.sock"
+    )
+
+
+def _wait_for_podman_recovery(before: int) -> None:
+    deadline = time.monotonic() + 10
+    while True:
+        elapsed = time.monotonic() >= deadline
+        generation = _podman_generation()
+        # Remote cancellation can answer info before asynchronous cleanup aborts.
+        # Observe the original service for the full cancellation window; a
+        # replacement has already crossed that abort boundary.
+        if generation == before + 1 or elapsed:
+            try:
+                health = _run([_engine(), "info", "--format", "{{json .}}"], timeout=1)
+            except subprocess.TimeoutExpired:
+                pass
+            else:
+                if health.returncode == 0:
+                    return
+        if elapsed:
+            break
+        time.sleep(0.1)
+    raise RuntimeError("private Podman engine did not recover after interruption")
+
+
 def _verify_interrupted_build(build: list[str], image: str) -> None:
+    generation = _podman_generation() if _job_podman() else None
+    if generation is not None and generation != 1:
+        raise RuntimeError("private Podman engine restarted before interruption")
     interrupted_image = f"{image}-interrupted-{uuid.uuid4().hex[:8]}"
     interrupted_build = build.copy()
     interrupted_build[interrupted_build.index("--tag") + 1] = interrupted_image
@@ -261,7 +332,9 @@ def _verify_interrupted_build(build: list[str], image: str) -> None:
         if process.poll() is None:
             os.killpg(process.pid, signal.SIGKILL)
             process.wait(timeout=10)
-    if _run(["docker", "image", "inspect", interrupted_image]).returncode == 0:
+    if generation is not None:
+        _wait_for_podman_recovery(generation)
+    if _run([_engine(), "image", "inspect", interrupted_image]).returncode == 0:
         raise RuntimeError("interrupted build published an image")
 
 
@@ -285,7 +358,7 @@ def _verify_interrupted_run(image: str) -> None:
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
             running = _run(
-                ["docker", "inspect", run_name, "--format", "{{.State.Running}}"]
+                [_engine(), "inspect", run_name, "--format", "{{.State.Running}}"]
             )
             if running.returncode == 0 and running.stdout.strip() == b"true":
                 break
@@ -295,26 +368,26 @@ def _verify_interrupted_run(image: str) -> None:
         else:
             raise RuntimeError("container never became ready for interruption")
         _require_success(
-            _run(["docker", "kill", "--signal=KILL", run_name]),
+            _run([_engine(), "kill", "--signal=KILL", run_name]),
             "container interruption",
         )
         interrupted_stdout, _ = process.communicate(timeout=10)
     finally:
         if process.poll() is None:
-            _run(["docker", "kill", "--signal=KILL", run_name])
+            _run([_engine(), "kill", "--signal=KILL", run_name])
             process.communicate(timeout=10)
     if process.returncode != 137 or interrupted_stdout:
         raise RuntimeError("interrupted container run did not fail closed")
-    if _run(["docker", "inspect", run_name]).returncode == 0:
+    if _run([_engine(), "inspect", run_name]).returncode == 0:
         raise RuntimeError("interrupted container was not removed")
 
 
 def _verify_interruption(build: list[str], image: str) -> None:
-    current_before = _run(["docker", "image", "inspect", image, "--format", "{{.Id}}"])
+    current_before = _run([_engine(), "image", "inspect", image, "--format", "{{.Id}}"])
     _require_success(current_before, "current image before interruption")
     _verify_interrupted_build(build, image)
     _verify_interrupted_run(image)
-    current_after = _run(["docker", "image", "inspect", image, "--format", "{{.Id}}"])
+    current_after = _run([_engine(), "image", "inspect", image, "--format", "{{.Id}}"])
     _require_success(current_after, "current image after interruption")
     if current_before.stdout != current_after.stdout:
         raise RuntimeError("interruption changed the current image")
@@ -422,6 +495,18 @@ def _verify_rollback(prior_commit: str, uv: str, scratch: Path) -> tuple[str, st
 
 
 def verify(wheel: Path, receipt: Path | None, prior_commit: str) -> dict[str, object]:
+    global _RUNTIME, _PODMAN_ROOTLESS  # noqa: PLW0603 -- fixed for one verifier invocation
+    _RUNTIME = select_runtime(allow_job_engine=True)
+    runtime_name = Path(_RUNTIME).name
+    info = _run([_RUNTIME, "info", "--format", "{{json .}}"])
+    _require_success(info, "selected engine information")
+    engine_info = json.loads(info.stdout)
+    _PODMAN_ROOTLESS = (
+        runtime_name == "podman" and engine_info["host"]["security"]["rootless"]
+    )
+    version = _run([_RUNTIME, "version", "--format", "{{json .}}"])
+    _require_success(version, "selected engine version")
+    runtime_version = json.loads(version.stdout)
     if not wheel.is_file() or wheel.suffix != ".whl":
         raise ValueError("one built application wheel is required")
     project = tomllib.loads((ROOT / "pyproject.toml").read_text())
@@ -503,7 +588,7 @@ def verify(wheel: Path, receipt: Path | None, prior_commit: str) -> dict[str, ob
             "clean native wheel",
         )
         build = [
-            "docker",
+            _engine(),
             "build",
             "--platform",
             "linux/amd64",
@@ -536,7 +621,7 @@ def verify(wheel: Path, receipt: Path | None, prior_commit: str) -> dict[str, ob
         _verify_interruption(build, image)
         outcomes = _verify_cli(image, python, scratch)
         config = _run(
-            ["docker", "image", "inspect", image, "--format", "{{json .Config}}"]
+            [_engine(), "image", "inspect", image, "--format", "{{json .Config}}"]
         )
         _require_success(config, "image inspection")
         image_config = json.loads(config.stdout)
@@ -560,9 +645,11 @@ def verify(wheel: Path, receipt: Path | None, prior_commit: str) -> dict[str, ob
         prior_wheel_digest, prior_requirements_digest = _verify_rollback(
             prior_commit, uv, scratch
         )
-        inspection = _run(["docker", "image", "inspect", image, "--format", "{{.Id}}"])
+        inspection = _run([_engine(), "image", "inspect", image, "--format", "{{.Id}}"])
         _require_success(inspection, "image identity")
         result: dict[str, object] = {
+            "container_runtime": runtime_name,
+            "container_runtime_version": runtime_version,
             "source_commit": head,
             "source_tree": tree,
             "source_dirty": dirty,
@@ -575,6 +662,9 @@ def verify(wheel: Path, receipt: Path | None, prior_commit: str) -> dict[str, ob
             "mount_checks": "owner mapped, wrong UID, broad mode, read-only, symlink",
             "source_substitution": "rejected",
             "interrupted_build_and_run": "rejected; current image remained available",
+            "private_podman_service_restarts": (
+                _podman_generation() - 1 if _job_podman() else 0
+            ),
             "rollback_prior_commit": prior_commit,
             "rollback_prior_wheel_sha256": prior_wheel_digest,
             "rollback_prior_requirements_sha256": prior_requirements_digest,

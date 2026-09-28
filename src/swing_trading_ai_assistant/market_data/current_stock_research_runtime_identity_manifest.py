@@ -8,7 +8,7 @@ CURRENT_STOCK_RESEARCH_RUNTIME_SOURCE_SHA256_V1: Final[dict[str, str]] = {
     "src/swing_trading_ai_assistant/market_data/bharatstock_capture_runtime_identity_manifest.py": "6af0ea593fb19b39a5219780b81d2227432264af25d0c496ea579fc9682c5b65",
     "src/swing_trading_ai_assistant/market_data/capture_forward_adjusted_ohlcv.py": "392431179a4ec08d18f117fc584c6c8b413e5646102f20618b8745bfa292b8b7",
     "src/swing_trading_ai_assistant/market_data/catalog.py": "ae17eac5475a39d5ff08173e9b2154c0cf33778f573e7d894656a2ba685294ac",
-    "src/swing_trading_ai_assistant/market_data/cli.py": "7103c8718285e42557ac0523c1bef987a7412561ef179e69eaf4c77843954f2c",
+    "src/swing_trading_ai_assistant/market_data/cli.py": "7e41aa0ed8e9ce98fdaf979dc66a3898ad0408fa29abf3732a763af14339f03d",
     "src/swing_trading_ai_assistant/market_data/corporate_actions.py": "1d74c5cc7e94470452377491d5fa6ead801833bb4f17b4bae3305e73058cd9cc",
     "src/swing_trading_ai_assistant/market_data/current_event_notice.py": "0bf3a93e1b777a5d0062b99814681f02b0d9e206448e46f7edcb8fbebff12fef",
     "src/swing_trading_ai_assistant/market_data/current_evidence_acquisition.py": "0e6055ac79b3b3269d1dff64d641aba8f0812ad95b0a80b3b71e64ac4fae8e2c",
@@ -28,4 +28,8 @@ CURRENT_STOCK_RESEARCH_RUNTIME_SOURCE_SHA256_V1: Final[dict[str, str]] = {
     "src/swing_trading_ai_assistant/market_data/universe_snapshot.py": "d579f6dcd2a24f2e07448258d9d723b55a8cfa42e4a6d9852c1f8edea9ab9e53",
     "src/swing_trading_ai_assistant/market_structure/current_live.py": "592cecf888eee4347cf9ff6c45f03705df27c557a3d6d21df51b8ea7fdf73c31",
     "src/swing_trading_ai_assistant/research_packet/bharatstock.py": "3c069177245684811588e3a8cb8a77b3835d8823073ede6b0de5f97a93a59abc",
+    "src/swing_trading_ai_assistant/volume_analysis/__init__.py": "89cce37fb8cc6c1b9b12b0959cf4a2edb5103e13dcf93ce1b969092af3f147c3",
+    "src/swing_trading_ai_assistant/volume_analysis/current.py": "e55e854e4a1629be4e2bf522dc1dcaf2cd9ae763784ac557b6b201591a6c8618",
+    "src/swing_trading_ai_assistant/volume_analysis/request.py": "241fa165aa3e684037499a187d18779f835997ce9c064a6a32a2c542dc6ecc97",
+    "src/swing_trading_ai_assistant/volume_analysis/service.py": "3c23777c5825f2b4c46c6b5ff9de184826c25910688ef2ec432dfc86da096893",
 }

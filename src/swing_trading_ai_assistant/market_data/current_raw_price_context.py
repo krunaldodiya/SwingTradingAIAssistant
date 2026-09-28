@@ -364,6 +364,8 @@ _ADMITTED: dict[
         object,
         tuple[int, int],
         tuple[object, ...],
+        tuple[tuple[int, ...] | None, ...],
+        bytes,
     ],
 ] = {}
 
@@ -372,6 +374,7 @@ def _mint(
     projection: CurrentRawContextProjectionV1,
     receipts: tuple[object, ...],
     root_identity: tuple[int, int],
+    volumes: tuple[tuple[int, ...] | None, ...],
 ) -> AdmittedCurrentRawContextV1:
     value = object.__new__(AdmittedCurrentRawContextV1)
     seal = object()
@@ -390,6 +393,8 @@ def _mint(
         seal,
         root_identity,
         receipts,
+        volumes,
+        _canonical(volumes),
     )
     return value
 
@@ -414,6 +419,18 @@ def admitted_current_raw_context_binding_v1(
     return entry[1], entry[4]
 
 
+def admitted_current_raw_volumes_v1(
+    value: AdmittedCurrentRawContextV1,
+) -> tuple[tuple[int, ...] | None, ...]:
+    """Read immutable daily volume only from the same producer admission."""
+    projection = validate_admitted_current_raw_context_v1(value)
+    entry = _ADMITTED[id(value)]
+    volumes = entry[6]
+    if len(volumes) != len(projection.members) or _canonical(volumes) != entry[7]:
+        raise ValueError("current raw volume binding invalid")
+    return volumes
+
+
 def validate_admitted_current_raw_context_v1(
     value: object,
 ) -> CurrentRawContextProjectionV1:
@@ -426,10 +443,12 @@ def read_retained_current_raw_context_v1(  # noqa: C901
     request: CurrentRawPriceContextInputV1,
     lease: StorageRootLease,
     control: CurrentRawInvocationControlV1,
+    distinguish_missing_partitions: bool = False,
 ) -> RetainedCurrentRawContextOutcomeV1:
     """Read the exact retained 21-session raw context under the caller lease."""
     if (
-        type(request) is not CurrentRawPriceContextInputV1
+        type(distinguish_missing_partitions) is not bool
+        or type(request) is not CurrentRawPriceContextInputV1
         or type(lease) is not StorageRootLease
         or type(control) is not CurrentRawInvocationControlV1
     ):
@@ -477,6 +496,7 @@ def read_retained_current_raw_context_v1(  # noqa: C901
     ):
         return _outcome("UNSUPPORTED", "RAW_WINDOW_LIMIT_EXCEEDED")
 
+    volumes: dict[int, tuple[int, ...]] = {}
     members: list[CurrentRawMemberProjectionV1] = []
     receipts: list[object] = [schedule_result.canonical_bytes]
     try:
@@ -604,6 +624,7 @@ def read_retained_current_raw_context_v1(  # noqa: C901
                             screen.knowledge_at,
                         )
                     )
+                    volumes[position] = tuple(bar.volume for bar in bars)
                     receipts.extend((resolved, checksums, screen))
                 except InstrumentSnapshotNotFoundError:
                     members.append(
@@ -632,13 +653,19 @@ def read_retained_current_raw_context_v1(  # noqa: C901
                             "RAW_MAPPING_CORRUPT",
                         )
                     )
-                except (PartitionReadFailureV1, ProvisionalPartitionUnavailableV1):
+                except (
+                    PartitionReadFailureV1,
+                    ProvisionalPartitionUnavailableV1,
+                ) as error:
                     members.append(
                         _member_failure(
                             position,
                             member,
                             "INSUFFICIENT_EVIDENCE",
-                            "RAW_PARTITION_CORRUPT",
+                            "RAW_BAR_MISSING"
+                            if distinguish_missing_partitions
+                            and isinstance(error, _RawPartitionMissingV1)
+                            else "RAW_PARTITION_CORRUPT",
                         )
                     )
             catalog.ensure_read_identity()
@@ -676,8 +703,20 @@ def read_retained_current_raw_context_v1(  # noqa: C901
     if root_identity is None:
         raise StorageRootLeaseError("current raw context root authority lost")
     return RetainedCurrentRawContextOutcomeV1(
-        "OBSERVED", (), len(sessions), _mint(projection, tuple(receipts), root_identity)
+        "OBSERVED",
+        (),
+        len(sessions),
+        _mint(
+            projection,
+            tuple(receipts),
+            root_identity,
+            tuple(volumes.get(index) for index in range(len(members))),
+        ),
     )
+
+
+class _RawPartitionMissingV1(ProvisionalPartitionUnavailableV1):
+    """An absent catalog entry, distinct from a failed retained object read."""
 
 
 def _member_rows(  # noqa: C901
@@ -713,7 +752,7 @@ def _member_rows(  # noqa: C901
                 schedule_digest_sha256=schedule_digest_sha256,
             )
             if metadata is None:
-                raise ProvisionalPartitionUnavailableV1("missing")
+                raise _RawPartitionMissingV1("missing")
             if (
                 metadata.plan.security_id != plan.security_id
                 or metadata.plan.instrument_key != plan.instrument_key
@@ -724,9 +763,10 @@ def _member_rows(  # noqa: C901
             raw_source_times.append(metadata.published_at)
         else:
             manifest = catalog.get_manifest(plan)
+            if manifest is None:
+                raise _RawPartitionMissingV1("missing")
             if (
-                manifest is None
-                or str(manifest.state) != "VERIFIED"
+                str(manifest.state) != "VERIFIED"
                 or str(manifest.validation_outcome) != "PASSED"
             ):
                 raise ProvisionalPartitionUnavailableV1("unverified")
@@ -871,6 +911,7 @@ def recheck_retained_current_raw_context_v1(
     *,
     lease: StorageRootLease,
     control: CurrentRawInvocationControlV1,
+    distinguish_missing_partitions: bool = False,
 ) -> None:
     projection = validate_admitted_current_raw_context_v1(value)
     control.ensure_live()
@@ -887,11 +928,16 @@ def recheck_retained_current_raw_context_v1(
         ),
         lease=lease,
         control=control,
+        distinguish_missing_partitions=distinguish_missing_partitions,
     )
     if fresh.admitted is None:
         raise StorageRootLeaseError("retained raw source authority changed")
     refreshed = validate_admitted_current_raw_context_v1(fresh.admitted)
-    if _canonical(refreshed) != _canonical(projection):
+    if _canonical(refreshed) != _canonical(
+        projection
+    ) or admitted_current_raw_volumes_v1(
+        fresh.admitted
+    ) != admitted_current_raw_volumes_v1(value):
         raise StorageRootLeaseError("retained raw source authority changed")
     control.ensure_live()
 

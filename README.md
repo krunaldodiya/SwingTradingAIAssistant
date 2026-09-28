@@ -156,6 +156,15 @@ missing or unsupported retained Industry evidence does not suppress independent
 raw facts. The command emits research facts, never an analytic recommendation,
 live/provider proof, or a claim that missing evidence is neutral.
 
+## Completed-session Volume context (Sprint 26)
+
+`market-data volume-context-current` compares the latest completed session's
+retained raw volume with its preceding 20-session mean. It returns an exact
+ratio and above/equal/below relation for each admitted stock, with explicit
+missing evidence and no provider calls. See the [CLI/SDK usage and boundaries](docs/volume-context.md)
+and [Issue #226](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/226)
+for the current delivery state. This feature is independent of agent V1–V4.
+
 ## Bounded current price-context refresh (Issue #189 delivered)
 
 The additive `current-price-context@v2` boundary, delivered through PR #200, is selected only by

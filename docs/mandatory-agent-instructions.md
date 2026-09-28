@@ -125,6 +125,14 @@ If a required capability or independent reviewer is unavailable, continue author
 
 ### 5. Use bounded goal mode when available
 
+Standing owner direction (2026-09-28): default to the available persistent
+Goal feature for authorized software development in this repository. The owner
+has requested continuous autonomous progress; do not ask again merely to start
+or continue an already-authorized, implementation-ready bounded goal. Carry each
+accepted slice through its required implementation, verification and review,
+while retaining all scope, source, protected-effect and release boundaries below.
+This preference does not authorize unrelated goals or global harness changes.
+
 Use the harness's persistent goal or equivalent continuation facility when available, permitted, and useful for an implementation-ready bounded slice that benefits from uninterrupted execution. Goal mode may start only after the governing Issue and sources, first-working/later boundary, contracts, file ownership, risk and adversarial matrix, acceptance evidence, review ownership, non-goals, and pause conditions are frozen.
 
 Goal mode grants continuity, not authority. It MUST pause at the next safe boundary for:
@@ -372,7 +380,7 @@ history as part of this withdrawal.
 - Runtime-source edits are formatted before every directly and transitively bound source-at-rest manifest is refreshed.
 - R3/R4 review is independent, exact-byte, non-mutating, and blocker-only for the current accepted slice. Review drift or a later commit invalidates the verdict.
 - Release is PR-based. Direct push to `main` is prohibited. Hosted CI, security checks, exact merge ancestry, and main admission must pass where configured.
-- Owner-approved project CI execution is self-hosted only. Use the dedicated disposable WSL/Linux runner for Linux jobs and the existing explicitly manual Windows runner for Windows qualification; never fall back to paid GitHub-hosted runners. Preserve required checks and exact-candidate review. Retain build/distribution receipts on the owner host, and use GitHub check annotations for exact-run admission instead of Actions artifact uploads. GitHub still coordinates jobs and stores check/log metadata; this is not an offline or account-availability guarantee. See `docs/workflows/self-hosted-ci.md`.
+- Owner-approved project CI execution is self-hosted only. Use the dedicated disposable Linux runner with the selected Podman or Docker runtime for Linux jobs and the existing explicitly manual Windows runner for Windows qualification; never fall back to paid GitHub-hosted runners. Preserve required checks and exact-candidate review. Retain build/distribution receipts on the owner host, and use GitHub check annotations for exact-run admission instead of Actions artifact uploads. GitHub still coordinates jobs and stores check/log metadata; this is not an offline or account-availability guarantee. See `docs/workflows/self-hosted-ci.md`.
 - Built packages require both sdist and wheel plus a clean installed-wheel import/runtime smoke when package or runtime identity behavior changes.
 - Failures, skipped checks, unavailable windows, and residual boundaries remain explicit. Never inflate narrower evidence into a broader pass.
 - Cleanup follows successful behavioral proof: remove generated artifacts and obsolete scaffolding without deleting unrelated owner work.

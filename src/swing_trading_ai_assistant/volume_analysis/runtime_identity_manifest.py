@@ -1,8 +1,8 @@
-"""Reviewed fixed-point source map for Issue #188 runtime behavior."""
+"""Reviewed source-at-rest map for the Plan 39 Volume boundary."""
 
 from typing import Final
 
-CURRENT_RAW_INDUSTRY_PARTICIPATION_RUNTIME_SOURCE_SHA256_V1: Final[dict[str, str]] = {
+VOLUME_RUNTIME_SOURCE_SHA256_V1: Final[dict[str, str]] = {
     "src/swing_trading_ai_assistant/historical_evaluation/capability_validation.py": "bd14e060717965ba8ab78faae404fdf0df207a5eecfe7994b23e5a44c199531e",
     "src/swing_trading_ai_assistant/market_data/__init__.py": "1893ac52a1c59b5f91c3fd3d73489adcc86ac4fc5f6cd47d8bfeb62b72b7a4bf",
     "src/swing_trading_ai_assistant/market_data/account_rate_limit.py": "655e233e28f14934efd4133fb873acc23efa44e4efa5b88b3b1cb574a0bb4752",
