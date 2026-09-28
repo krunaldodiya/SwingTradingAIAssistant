@@ -12,6 +12,7 @@ import json
 import os
 import shutil
 import signal
+import stat
 import subprocess
 import tempfile
 import time
@@ -23,6 +24,7 @@ from container_runtime import select_runtime
 
 _RUNTIME: str | None = None
 _PODMAN_ROOTLESS = False
+_PODMAN_GENERATION = Path("/ci/podman-engine-generation")
 
 
 def _engine() -> str:
@@ -254,7 +256,52 @@ def _verify_image_source(image: str, scratch: Path) -> None:
         raise RuntimeError("altered image source produced a public CLI result")
 
 
+def _podman_generation() -> int:
+    descriptor = os.open(
+        _PODMAN_GENERATION, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+    )
+    try:
+        info = os.fstat(descriptor)
+        value = os.read(descriptor, 3)
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_nlink != 1
+            or stat.S_IMODE(info.st_mode) != 0o640
+            or value not in (b"1\n", b"2\n")
+        ):
+            raise RuntimeError("invalid private Podman recovery evidence")
+        return int(value)
+    finally:
+        os.close(descriptor)
+
+
+def _job_podman() -> bool:
+    return (
+        Path(_engine()).name == "podman"
+        and not _PODMAN_ROOTLESS
+        and os.environ.get("CONTAINER_HOST") == "unix:///ci/podman.sock"
+    )
+
+
+def _wait_for_podman_recovery(before: int) -> None:
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        if _podman_generation() in (before, before + 1):
+            try:
+                health = _run([_engine(), "info", "--format", "{{json .}}"], timeout=1)
+            except subprocess.TimeoutExpired:
+                pass
+            else:
+                if health.returncode == 0:
+                    return
+        time.sleep(0.1)
+    raise RuntimeError("private Podman engine did not recover after interruption")
+
+
 def _verify_interrupted_build(build: list[str], image: str) -> None:
+    generation = _podman_generation() if _job_podman() else None
+    if generation is not None and generation != 1:
+        raise RuntimeError("private Podman engine restarted before interruption")
     interrupted_image = f"{image}-interrupted-{uuid.uuid4().hex[:8]}"
     interrupted_build = build.copy()
     interrupted_build[interrupted_build.index("--tag") + 1] = interrupted_image
@@ -278,6 +325,8 @@ def _verify_interrupted_build(build: list[str], image: str) -> None:
         if process.poll() is None:
             os.killpg(process.pid, signal.SIGKILL)
             process.wait(timeout=10)
+    if generation is not None:
+        _wait_for_podman_recovery(generation)
     if _run([_engine(), "image", "inspect", interrupted_image]).returncode == 0:
         raise RuntimeError("interrupted build published an image")
 
@@ -606,6 +655,9 @@ def verify(wheel: Path, receipt: Path | None, prior_commit: str) -> dict[str, ob
             "mount_checks": "owner mapped, wrong UID, broad mode, read-only, symlink",
             "source_substitution": "rejected",
             "interrupted_build_and_run": "rejected; current image remained available",
+            "private_podman_service_restarts": (
+                _podman_generation() - 1 if _job_podman() else 0
+            ),
             "rollback_prior_commit": prior_commit,
             "rollback_prior_wheel_sha256": prior_wheel_digest,
             "rollback_prior_requirements_sha256": prior_requirements_digest,

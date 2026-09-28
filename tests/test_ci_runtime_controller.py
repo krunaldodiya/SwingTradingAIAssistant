@@ -298,3 +298,58 @@ def test_disappeared_runner_cannot_report_success(tmp_path):
     calls = [json.loads(line) for line in log.read_text().splitlines()]
     assert not any(call[1] == "cp" for call in calls)
     assert any(call[1:3] == ["volume", "rm"] for call in calls)
+
+
+@pytest.mark.parametrize(
+    "exits, expected_starts, expected_exit",
+    [
+        ("134,0", 2, 0),
+        ("19,0", 1, 19),
+        ("134,134", 2, 134),
+    ],
+)
+def test_private_engine_recovers_only_one_abort(
+    tmp_path, exits, expected_starts, expected_exit
+):
+    env, log = fixture_tools(tmp_path, "podman")
+    result = subprocess.run(  # noqa: S603 -- fixed private engine fixture
+        ["/bin/bash", str(SCRIPT)],
+        env=env,
+        capture_output=True,
+        timeout=15,
+        check=False,
+    )
+    assert result.returncode == 0
+    calls = [json.loads(line) for line in log.read_text().splitlines()]
+    engine_call = next(
+        c
+        for c in calls
+        if "--name" in c and c[c.index("--name") + 1].endswith("-engine")
+    )
+    command = engine_call[engine_call.index("-c") + 1]
+    private = tmp_path / "private"
+    private.mkdir()
+    command = command.replace("/ci/", str(private) + "/")
+    starts = private / "starts"
+    fake = tmp_path / "bin/podman"
+    fake.write_text(f"""#!{sys.executable}
+import os,socket,time
+from pathlib import Path
+p=Path({str(starts)!r})
+n=int(p.read_text()) if p.exists() else 0
+p.write_text(str(n+1))
+s=socket.socket(socket.AF_UNIX);s.bind({str(private / "podman.sock")!r});s.listen()
+time.sleep(.3)
+os._exit([int(v) for v in {exits!r}.split(',')][n])
+""")
+    result = subprocess.run(  # noqa: S603 -- fixed private engine fixture
+        ["/bin/sh", "-c", command],
+        env=env,
+        capture_output=True,
+        timeout=10,
+        check=False,
+    )
+    assert result.returncode == expected_exit
+    assert starts.read_text() == str(expected_starts)
+    assert (private / "podman-engine-generation").read_text() == f"{expected_starts}\n"
+    assert (private / "podman.sock").stat().st_mode & 0o777 == 0o660

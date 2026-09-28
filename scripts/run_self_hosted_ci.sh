@@ -99,16 +99,32 @@ if [[ $runtime_name == podman ]]; then
         --network "$network" --privileged --memory 4g --cpus 4 \
         --mount "type=volume,src=$volume,dst=/ci" --entrypoint /bin/sh "$engine_image" -c '
         umask 007
-        podman --storage-driver=vfs --cgroup-manager=cgroupfs --events-backend=file \
-            system service --time=0 unix:///ci/podman.sock & pid=$!
-        for i in $(seq 1 50); do
-            if [ -S /ci/podman.sock ]; then
-                chgrp 1000 /ci/podman.sock; chmod 660 /ci/podman.sock
-                wait "$pid"; exit $?
-            fi
-            sleep .1
+        terminate() { kill "$pid" 2>/dev/null; wait "$pid"; exit 143; }
+        trap terminate TERM INT
+        for generation in 1 2; do
+            rm -f /ci/podman.sock
+            podman --storage-driver=vfs --cgroup-manager=cgroupfs --events-backend=file \
+                system service --time=0 unix:///ci/podman.sock & pid=$!
+            ready=false
+            for i in $(seq 1 50); do
+                if [ -S /ci/podman.sock ]; then
+                    chgrp 1000 /ci/podman.sock; chmod 660 /ci/podman.sock
+                    printf "%s\n" "$generation" > /ci/podman-engine-generation.tmp
+                    chgrp 1000 /ci/podman-engine-generation.tmp
+                    chmod 640 /ci/podman-engine-generation.tmp
+                    mv /ci/podman-engine-generation.tmp /ci/podman-engine-generation
+                    ready=true; break
+                fi
+                sleep .1
+            done
+            if [ "$ready" != true ]; then kill "$pid"; wait "$pid"; exit 1; fi
+            wait "$pid"; status=$?
+            printf "private Podman generation %s exited %s\n" "$generation" "$status"
+            # Pinned Buildah can abort during remote build cancellation. One
+            # same-store restart is verified explicitly by the distribution gate.
+            if [ "$status" -ne 134 ]; then exit "$status"; fi
         done
-        kill "$pid"; exit 1' >/dev/null
+        exit 134' >/dev/null
 else
     "$runtime" run -d --name "$engine" --network "$network" --network-alias engine \
         --privileged --memory 4g --cpus 4 -e DOCKER_TLS_CERTDIR= \
