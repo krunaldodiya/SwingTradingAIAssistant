@@ -127,3 +127,13 @@ fails or times out. Verified publication receipts reach the private artifact
 directory before logout can fail. Corrections require fresh exact-byte reviews.
 The owner subsequently completed gh authentication and explicitly resumed the
 Goal; host state now reports active. Earlier setup checkpoint text is historical.
+
+
+The corrected real-controller probe exposed Podman's default 10-second stop wait
+exceeding the first teardown deadline. That run returned zero while its engine
+was still stopping; its cleanup claim was rejected. The corrective adapter uses
+Podman `rm --force --time=0` (Docker keeps its force-removal behavior), with
+bounded removal and failure propagation. Only the identified synthetic job's
+remaining resources were recovered. A separate earlier probe was invalidated
+because the coordinator edited the shell source while Bash was reading it;
+qualification now executes a frozen copy. Both failed logs remain retained.

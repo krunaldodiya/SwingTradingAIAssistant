@@ -7,9 +7,11 @@ script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 runtime=$(python3 "$script_dir/container_runtime.py")
 runtime_name=${runtime##*/}
 userns=()
+remove_args=(--force)
 job_env=(-e SWING_CONTAINER_RUNTIME="$runtime_name")
 if [[ $runtime_name == podman ]]; then
     userns=(--userns=keep-id:uid=1000,gid=1000)
+    remove_args+=(--time=0)
     job_env+=(-e CONTAINER_HOST=unix:///ci/podman.sock)
 else
     job_env+=(-e DOCKER_HOST=tcp://engine:2375)
@@ -38,6 +40,9 @@ timeout --kill-after=2s 10s "$runtime" version --format '{{json .}}' > "$job_dir
 python3 -c 'import json,sys; from pathlib import Path; Path(sys.argv[1]).write_text(json.dumps({"runtime":sys.argv[2],"executable":sys.argv[3],"version":json.loads(Path(sys.argv[4]).read_text())})+"\n")' "$job_dir/runtime.json" "$runtime_name" "$runtime" "$job_dir/runtime-version.json"
 runner_id=''
 runner_attempted=false
+cleanup_failed() {
+    if [[ $status == 0 ]]; then status=1; fi
+}
 cleanup() {
     status=$?
     trap - EXIT
@@ -56,12 +61,12 @@ cleanup() {
             exit 1
         fi
         timeout --kill-after=2s 3s "$runtime" logs "$runner" > "$job_dir/runner.log" 2>&1 || true
-        timeout --kill-after=2s 5s "$runtime" rm -f "$runner" >/dev/null || status=1
+        timeout --kill-after=2s 10s "$runtime" rm "${remove_args[@]}" "$runner" >/dev/null || cleanup_failed
     fi
     timeout --kill-after=2s 3s "$runtime" logs "$engine" > "$job_dir/engine.log" 2>&1 || true
-    timeout --kill-after=2s 5s "$runtime" rm -fv "$engine" >/dev/null 2>&1 || true
-    timeout --kill-after=2s 5s "$runtime" volume rm "$volume" >/dev/null 2>&1 || true
-    timeout --kill-after=2s 5s "$runtime" network rm "$network" >/dev/null 2>&1 || true
+    timeout --kill-after=2s 10s "$runtime" rm -v "${remove_args[@]}" "$engine" >/dev/null 2>&1 || cleanup_failed
+    timeout --kill-after=2s 5s "$runtime" volume rm "$volume" >/dev/null 2>&1 || cleanup_failed
+    timeout --kill-after=2s 5s "$runtime" network rm "$network" >/dev/null 2>&1 || cleanup_failed
     printf '%s\n' "$status" > "$job_dir/controller-exit"
     exit "$status"
 }

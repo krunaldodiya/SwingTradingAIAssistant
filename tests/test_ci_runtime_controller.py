@@ -205,3 +205,23 @@ def test_removal_failure_does_not_skip_credential_cleanup(tmp_path):
     assert not (job / "jit").exists()
     assert Path(str(log) + ".unregistered").exists()
     assert (job / "controller-exit").read_text().strip() == "1"
+
+
+def test_engine_teardown_failure_cannot_report_success(tmp_path):
+    env, log = fixture_tools(tmp_path, "podman")
+    engine = tmp_path / "bin/podman"
+    engine.write_text(
+        engine.read_text()
+        + '\nif args[0]=="rm" and any(a.endswith("-engine") for a in args):sys.exit(21)\n'
+    )
+    result = subprocess.run(  # noqa: S603 -- isolated synthetic engine
+        ["/bin/bash", str(SCRIPT)],
+        env=env,
+        capture_output=True,
+        timeout=15,
+        check=False,
+    )
+    assert result.returncode == 1
+    job = next((tmp_path / "state/jobs").iterdir())
+    assert (job / "controller-exit").read_text().strip() == "1"
+    assert not (job / "jit").exists()
