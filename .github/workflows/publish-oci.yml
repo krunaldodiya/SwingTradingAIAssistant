@@ -76,7 +76,7 @@ jobs:
         run: |
           set -euo pipefail
           receipt="$RUNNER_TEMP/linux-distribution-receipt.json"
-          runtime=$(python3 scripts/container_runtime.py)
+          runtime=$(python3 scripts/container_runtime.py --job-engine)
           test "${runtime##*/}" = "$(jq -r .container_runtime "$receipt")"
           image="ghcr.io/${GITHUB_REPOSITORY,,}"
           version="$(jq -r .version "$receipt")"
@@ -139,13 +139,9 @@ jobs:
             '{source_commit:$source,image:$image,tag:$tag,digest:$digest,local_image_id:$local_id,published_image_id:$published_id,distribution:$verified[0]}' \
             > "$RUNNER_TEMP/oci-publication-receipt.json"
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
-          "$runtime" logout ghcr.io
-
-      - name: Retain publication receipt locally
-        run: |
-          set -eu
           target="$SWING_CI_ARTIFACTS/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           mkdir -p "$target"
           cp "$RUNNER_TEMP/oci-publication-receipt.json" "$target/"
           cp "$RUNNER_TEMP/linux-distribution-receipt.json" "$target/"
           jq -c '{source_commit,digest,published_image_id}' "$target/oci-publication-receipt.json" >> "$GITHUB_STEP_SUMMARY"
+          "$runtime" logout ghcr.io

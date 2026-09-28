@@ -40,7 +40,10 @@ container engine. The owner installs/authenticates GitHub CLI on this host. Reus
 the existing Podman setup. `SWING_CONTAINER_RUNTIME=auto` probes Podman first,
 then Docker. Set `podman` or `docker` to require that engine; explicit selection
 fails if unavailable. Selection happens before job resources are created and is
-fixed for the whole job, including verification and publication. A failed command
+fixed for the whole job, including verification and publication. Host selection
+requires rootless Podman metadata. The verifier/publication selector uses explicit
+job mode to admit the rootful disposable engine only at
+`unix:///ci/podman.sock`; unknown arguments and missing rootless metadata fail. A failed command
 never switches engines. Engine access and version are recorded in private receipts.
 
 Build `.github/runner/Dockerfile` with the selected engine, record the resulting
@@ -87,7 +90,11 @@ To stop, stop the user service. To roll back runner infrastructure, retain and s
 the prior verified image/controller, without restoring paid hosted runner labels.
 A stopped/offline runner leaves jobs queued, never passed. A controller failure
 stops automatic restarts; inspect its journal and private job logs before recovery.
-If receipt copying fails, job resources are retained for recovery instead of erased.
+Cleanup first removes registration files and attempts unregister. External cleanup
+operations have deadlines within the 90-second service stop budget. If receipt
+copying fails or times out, job resources are retained for recovery with a failed
+exit record, while registration files have already been erased. Publication
+receipts are copied before logout, so a logout error cannot skip their retention.
 
 ## Gates, evidence and storage
 

@@ -440,7 +440,7 @@ def _verify_rollback(prior_commit: str, uv: str, scratch: Path) -> tuple[str, st
 
 def verify(wheel: Path, receipt: Path | None, prior_commit: str) -> dict[str, object]:
     global _RUNTIME, _PODMAN_ROOTLESS  # noqa: PLW0603 -- fixed for one verifier invocation
-    _RUNTIME = select_runtime()
+    _RUNTIME = select_runtime(allow_job_engine=True)
     runtime_name = Path(_RUNTIME).name
     info = _run([_RUNTIME, "info", "--format", "{{json .}}"])
     _require_success(info, "selected engine information")

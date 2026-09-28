@@ -106,3 +106,24 @@ entrypoint; it does not prove real GitHub runner registration or workflow execut
 Controller failure tests additionally cover SIGINT/SIGTERM cleanup on both engines.
 Private probe scripts, logs and receipts are retained under the owner host's
 `~/.local/state/swing-ci-runtime/qualification/`.
+
+
+## Review corrections
+
+Full independent reviews of candidate 7996267 identified unsupported selector
+arguments, unbounded cleanup, post-publication receipt retention, rootful host
+Podman admission, and registration cleanup on receipt-copy failure. All are
+current-slice blockers. The corrected selector rejects unknown CLI arguments
+and requires rootless Podman by default. Only the verifier/publication job mode
+may accept the intended rootful disposable engine, and only through the exact
+`unix:///ci/podman.sock` endpoint; the host controller never enables job mode.
+This preserves the already specified nested engine instead of mistaking its
+rootful status for a rootful host installation. Unknown rootless metadata fails.
+
+Cleanup erases registration files and attempts unregister before receipt copy,
+bounds every external cleanup operation within the service stop budget, and
+preserves containers/volume with an explicit failed exit record when copying
+fails or times out. Verified publication receipts reach the private artifact
+directory before logout can fail. Corrections require fresh exact-byte reviews.
+The owner subsequently completed gh authentication and explicitly resumed the
+Goal; host state now reports active. Earlier setup checkpoint text is historical.

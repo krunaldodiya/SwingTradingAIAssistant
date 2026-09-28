@@ -1,7 +1,9 @@
 """Container engine selection must precede effects and remain explicit."""
 
 import importlib.util
+import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -34,7 +36,9 @@ def test_auto_selects_first_usable_runtime(monkeypatch, available, expected):
 
     def run(args, **kwargs):
         calls.append(args)
-        return subprocess.CompletedProcess(args, 0, b"{}", b"")
+        return subprocess.CompletedProcess(
+            args, 0, b'{"host":{"security":{"rootless":true}}}', b""
+        )
 
     monkeypatch.setattr(api.subprocess, "run", run)
     assert api.select_runtime("auto") == "/bin/" + expected
@@ -89,7 +93,10 @@ def test_auto_falls_back_only_during_preflight(monkeypatch):
 
     def run(args, **kwargs):
         return subprocess.CompletedProcess(
-            args, int(args[0].endswith("podman")), b"{}", b""
+            args,
+            int(args[0].endswith("podman")),
+            b'{"host":{"security":{"rootless":true}}}',
+            b"",
         )
 
     monkeypatch.setattr(api.subprocess, "run", run)
@@ -110,6 +117,78 @@ def test_environment_override_is_honored(monkeypatch):
     monkeypatch.setattr(
         api.subprocess,
         "run",
-        lambda args, **kwargs: subprocess.CompletedProcess(args, 0, b"{}", b""),
+        lambda args, **kwargs: subprocess.CompletedProcess(
+            args, 0, b'{"host":{"security":{"rootless":true}}}', b""
+        ),
     )
     assert api.select_runtime() == "/bin/docker"
+
+
+@pytest.mark.parametrize(
+    "info",
+    [
+        b"{}",
+        b'{"host":{"security":{"rootless":false}}}',
+        b'{"host":{"security":{"rootless":"true"}}}',
+    ],
+)
+def test_host_rejects_rootful_or_unknown_podman(monkeypatch, info):
+    api = load()
+    monkeypatch.setattr(api.shutil, "which", lambda name: "/bin/" + name)
+    monkeypatch.setattr(
+        api.subprocess,
+        "run",
+        lambda args, **kwargs: subprocess.CompletedProcess(args, 0, info, b""),
+    )
+    with pytest.raises(RuntimeError, match="podman unavailable"):
+        api.select_runtime("podman")
+
+
+def test_nested_rootful_engine_requires_explicit_job_context(monkeypatch):
+    api = load()
+    monkeypatch.setattr(api.shutil, "which", lambda name: "/bin/" + name)
+    monkeypatch.setattr(
+        api.subprocess,
+        "run",
+        lambda args, **kwargs: subprocess.CompletedProcess(
+            args, 0, b'{"host":{"security":{"rootless":false}}}', b""
+        ),
+    )
+    monkeypatch.delenv("CONTAINER_HOST", raising=False)
+    with pytest.raises(RuntimeError):
+        api.select_runtime("podman", allow_job_engine=True)
+    monkeypatch.setenv("CONTAINER_HOST", "unix:///ci/podman.sock")
+    with pytest.raises(RuntimeError):
+        api.select_runtime("podman")
+    assert api.select_runtime("podman", allow_job_engine=True) == "/bin/podman"
+
+
+def test_cli_rejects_unknown_arguments_before_probe(tmp_path):
+    binary = tmp_path / "podman"
+    marker = tmp_path / "probed"
+    binary.write_text(
+        f"#!{sys.executable}\nfrom pathlib import Path\nPath({str(marker)!r}).touch()\nprint('{{}}')\n"
+    )
+    binary.chmod(0o700)
+    env = dict(os.environ, PATH=str(tmp_path), SWING_CONTAINER_RUNTIME="podman")
+    result = subprocess.run(  # noqa: S603 -- synthetic executable and fixed script
+        [sys.executable, str(SCRIPT), "--runtime", "docker"],
+        env=env,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 2
+    assert not marker.exists()
+
+
+def test_auto_skips_rootful_podman_before_effects(monkeypatch):
+    api = load()
+    monkeypatch.setattr(api.shutil, "which", lambda name: "/bin/" + name)
+    monkeypatch.setattr(
+        api.subprocess,
+        "run",
+        lambda args, **kwargs: subprocess.CompletedProcess(
+            args, 0, b'{"host":{"security":{"rootless":false}}}', b""
+        ),
+    )
+    assert api.select_runtime("auto") == "/bin/docker"

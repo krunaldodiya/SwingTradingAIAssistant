@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import shutil
@@ -9,7 +10,20 @@ import subprocess
 import sys
 
 
-def select_runtime(requested: str | None = None) -> str:
+def _admitted_podman(info: dict, allow_job_engine: bool) -> bool:
+    host = info.get("host")
+    security = host.get("security") if isinstance(host, dict) else None
+    rootless = security.get("rootless") if isinstance(security, dict) else None
+    return rootless is True or (
+        rootless is False
+        and allow_job_engine
+        and os.environ.get("CONTAINER_HOST") == "unix:///ci/podman.sock"
+    )
+
+
+def select_runtime(
+    requested: str | None = None, *, allow_job_engine: bool = False
+) -> str:
     choice = (
         os.environ.get("SWING_CONTAINER_RUNTIME", "auto")
         if requested is None
@@ -29,8 +43,12 @@ def select_runtime(requested: str | None = None) -> str:
                 timeout=10,
                 check=False,
             )
-            if probe.returncode == 0 and isinstance(json.loads(probe.stdout), dict):
-                return executable
+            if probe.returncode == 0:
+                info = json.loads(probe.stdout)
+                if isinstance(info, dict) and (
+                    name == "docker" or _admitted_podman(info, allow_job_engine)
+                ):
+                    return executable
         except (OSError, subprocess.TimeoutExpired, ValueError):
             continue
     if choice != "auto":
@@ -43,8 +61,11 @@ def select_runtime(requested: str | None = None) -> str:
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--job-engine", action="store_true")
+    args = parser.parse_args()
     try:
-        print(select_runtime())
+        print(select_runtime(allow_job_engine=args.job_engine))
     except (ValueError, RuntimeError) as error:
         print(str(error), file=sys.stderr)
         return 2

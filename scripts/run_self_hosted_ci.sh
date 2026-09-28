@@ -2,7 +2,7 @@
 # Host-only controller. Never run this inside a CI job or mount its state in one.
 set -euo pipefail
 umask 077
-for tool in gh python3 flock; do command -v "$tool" >/dev/null; done
+for tool in gh python3 flock timeout; do command -v "$tool" >/dev/null; done
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 runtime=$(python3 "$script_dir/container_runtime.py")
 runtime_name=${runtime##*/}
@@ -34,31 +34,34 @@ engine=$name-engine
 runner=$name-runner
 job_dir=$state/jobs/$name
 mkdir "$job_dir"
-"$runtime" version --format '{{json .}}' > "$job_dir/runtime-version.json"
+timeout --kill-after=2s 10s "$runtime" version --format '{{json .}}' > "$job_dir/runtime-version.json"
 python3 -c 'import json,sys; from pathlib import Path; Path(sys.argv[1]).write_text(json.dumps({"runtime":sys.argv[2],"executable":sys.argv[3],"version":json.loads(Path(sys.argv[4]).read_text())})+"\n")' "$job_dir/runtime.json" "$runtime_name" "$runtime" "$job_dir/runtime-version.json"
 runner_id=''
+runner_attempted=false
 cleanup() {
     status=$?
     trap - EXIT
-    # Preserve receipts before removing only this job's disposable resources.
-    if "$runtime" container inspect "$runner" >/dev/null 2>&1; then
-        if ! "$runtime" cp "$runner:/ci/artifacts" "$job_dir/receipts"; then
-            echo 'Receipt copy failed; retaining job containers and volume for recovery' >&2
-            exit 1
-        fi
-        "$runtime" logs "$runner" > "$job_dir/runner.log" 2>&1 || true
-        "$runtime" rm -f "$runner" >/dev/null
-    fi
-    "$runtime" logs "$engine" > "$job_dir/engine.log" 2>&1 || true
-    "$runtime" rm -fv "$engine" >/dev/null 2>&1 || true
-    "$runtime" volume rm "$volume" >/dev/null 2>&1 || true
-    "$runtime" network rm "$network" >/dev/null 2>&1 || true
-    rm -f "$job_dir/jit" "$job_dir/registration.json"
+    trap '' INT TERM
+    # Every external cleanup call is bounded; worst-case total stays below 90s.
+    # Erase registration even when evidence must be retained or teardown fails.
+    rm -f "$job_dir/jit" "$job_dir/registration.json" || status=1
     if [[ -n $runner_id ]]; then
-        # Ephemeral runners normally unregister themselves after one job.
-        gh api --method DELETE "repos/$repo/actions/runners/$runner_id" \
+        timeout --kill-after=2s 5s gh api --method DELETE "repos/$repo/actions/runners/$runner_id" \
             > /dev/null 2> "$job_dir/unregister.log" || true
     fi
+    if [[ $runner_attempted == true ]]; then
+        if ! timeout --kill-after=2s 20s "$runtime" cp "$runner:/ci/artifacts" "$job_dir/receipts"; then
+            echo 'Receipt copy failed; retaining job containers and volume for recovery' >&2
+            printf '1\n' > "$job_dir/controller-exit"
+            exit 1
+        fi
+        timeout --kill-after=2s 3s "$runtime" logs "$runner" > "$job_dir/runner.log" 2>&1 || true
+        timeout --kill-after=2s 5s "$runtime" rm -f "$runner" >/dev/null || status=1
+    fi
+    timeout --kill-after=2s 3s "$runtime" logs "$engine" > "$job_dir/engine.log" 2>&1 || true
+    timeout --kill-after=2s 5s "$runtime" rm -fv "$engine" >/dev/null 2>&1 || true
+    timeout --kill-after=2s 5s "$runtime" volume rm "$volume" >/dev/null 2>&1 || true
+    timeout --kill-after=2s 5s "$runtime" network rm "$network" >/dev/null 2>&1 || true
     printf '%s\n' "$status" > "$job_dir/controller-exit"
     exit "$status"
 }
@@ -111,6 +114,7 @@ gh api --method POST "repos/$repo/actions/runners/generate-jitconfig" \
 runner_id=$(python3 -c 'import json,sys; from pathlib import Path; d=json.loads(Path(sys.argv[1]).read_text()); Path(sys.argv[2]).write_text(d["encoded_jit_config"]); print(d["runner"]["id"])' "$job_dir/registration.json" "$job_dir/jit")
 rm "$job_dir/registration.json"
 printf 'Starting disposable runner %s (id %s)\n' "$name" "$runner_id"
+runner_attempted=true
 "$runtime" run --name "$runner" "${userns[@]}" --user 1000:1000 "${job_env[@]}" --init --network "$network" --memory 8g --cpus 4 \
     --mount "type=volume,src=$volume,dst=/ci" \
     --mount "type=bind,src=$job_dir/jit,dst=/run/runner-jit,readonly" \
