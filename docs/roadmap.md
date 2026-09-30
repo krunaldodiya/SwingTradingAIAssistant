@@ -1,5 +1,26 @@
 # Initial Roadmap
 
+## Sprint 27 — accepted September 30, 2026
+
+The owner accepted [#230](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/230):
+one retained-only stock-versus-reference-stock Relative Strength fact under
+[Plan 41](plans/41-stock-reference-relative-strength.md). The question is whether
+each requested stock gained more or lost less than one explicit reference stock
+over the same 20 completed daily intervals. The first slice uses comparable
+retained Upstox RAW evidence, exact price-change differences and explicit missing
+evidence. It excludes official indexes, rankings, signals, new sources/captures,
+and agent-dossier or Volume integration. Sprint 27 is In Progress; implementation,
+independent reviews and final verification are not yet complete.
+
+Sprint 26 / [#226](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/226)
+and its CI prerequisite [#228](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/228)
+are closed, Project Done, and milestone 18 is closed. PRs #227 and #229 are merged;
+main `92cf3d029db69bb297c92c087486c04f68759389` passed admission run36445272816.
+Sprint 25 is also closed. This live-tracker reconciliation supersedes earlier
+active/pending lifecycle wording below and in frozen implementation checkpoints;
+those dated records retain their original evidence and do not approve new scope.
+
+
 ## September 22 planning decision
 
 Parent #172 and all five slices are closed. The next product priority is a
