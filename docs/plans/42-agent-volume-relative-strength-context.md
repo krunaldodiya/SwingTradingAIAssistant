@@ -105,6 +105,10 @@ is added. Each producer retains its existing lease and exact final evidence rech
 These are separate observations,
 not a new atomic cross-producer snapshot or evidence-at-emission attestation.
 No new lock protocol, receipt system, acquisition, retry, repair or persistence.
+A held root is terminal when an invocation attempts required lease admission or
+reading. A legitimate later lease acquired after completed producer observations
+does not retroactively invalidate them; final checks bind root identity and
+liveness, not continuous exclusive ownership through stdout emission.
 
 Closed producer absence/unsupported reasons stay local and explicit. Missing RS
 reference withholds comparisons but not Volume or independent price facts.
