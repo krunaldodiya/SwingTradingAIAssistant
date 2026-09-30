@@ -142,4 +142,81 @@ All V4 output remains owner-private, including aggregate counts, Industry names,
 status and provenance. It is not authorized for hosted AI disclosure or
 redistribution. V3's event limitation still applies: no matching notice means
 only no match in that snapshot, not no event risk or source completeness.
-Relative Strength, rankings, trading signals and orders are outside this command.
+Relative Strength is outside V1–V4. Rankings, trading signals and orders remain outside this command.
+
+
+## Optional retained Volume and Relative Strength (V5)
+
+V5 preserves V4 and adds the delivered Volume and explicit-reference Relative
+Strength facts. Keep the existing comparison-cohort options and supply an
+absolute owner-private Plan-41 request file:
+
+```sh
+market-data research-run-current \
+  --contract-version v5 \
+  --symbol PNB \
+  --context-symbol PNB --context-symbol TCS \
+  --context-purpose "My explicit comparison group" \
+  --analysis-input-file /absolute/private/relative-strength-request.json \
+  --storage-root "$HOME/SwingTradingAIAssistantData/agent-research" \
+  --output json
+```
+
+The storage root must already exist with owner-private mode `0700`, as required
+by V4. `--context-mappings-file` remains optional under V4's rules. The analysis
+file is exactly `current-relative-strength-request@v1`, documented in
+[Plan 41](../plans/41-stock-reference-relative-strength.md). It supplies
+the official schedule identity, selection time, admission deadline, 1–10 ordered
+canonical targets and one distinct canonical reference. Its target symbols must
+match every `--symbol` in exactly the same order. The reference is an explicitly
+selected equity; it is neither inferred from the comparison cohort nor an
+assumed official index. The file is limited to 64 KiB, has no public permissions
+or links, and rejects unknown/duplicate fields and invalid values before work.
+V1–V4 reject `--analysis-input-file`.
+
+The original request's bounded current observation window covers the entire
+V5 run, including V4. It is not renewed for each producer. Supply a valid current
+request and an already retained official schedule; the command does not generate
+or refresh that analysis request. V4 retains its existing acquisition behavior.
+The additional Volume/Relative Strength stages only read retained evidence:
+they make no provider calls, repair attempts or new market-evidence writes.
+
+`analysis_context.volume` and `analysis_context.relative_strength` contain the
+complete bounded producer results, exact arithmetic, own latest 21 completed
+sessions, source/basis, original evidence cutoff and knowledge times, and
+request/runtime/result/source identities. `analysis_context.observations` labels
+each producer's start and completion separately. Every stock adds
+`volume_context` and `relative_strength_context`, with its own outcome and a
+pointer and identity for the corresponding batch result.
+
+Canonical ISIN, exchange and effective symbol must match. An admitted dossier
+uses `CANONICAL_IDENTITY_MATCH`; this does not establish common dates or price
+basis. If price research has no canonical identity, independent admitted
+analysis remains visible as `DOSSIER_IDENTITY_UNAVAILABLE`, without claiming that
+price research was admitted. A conflicting non-null identity aborts the report.
+Price fallback dates never overwrite analysis session dates or cutoffs.
+
+Missing target, reference, schedule, mapping or screening evidence stays explicit.
+A missing reference withholds RS comparisons while independent Volume and price
+facts survive. A zero Volume baseline remains `ZERO_BASELINE`, and an observed
+exactly equal relation remains `EQUAL`. The report's inherited
+`jointly_comparable` has scope `PRICE_FEATURES_ONLY`; analysis always states
+`jointly_comparable_with_stock_dossiers=false`. Inspect the separate analysis
+`readiness` and member states. Exit 0/1 still describes price availability only.
+
+Bad inputs return sanitized exit 2. Corrupt evidence, identity substitution,
+unsafe/replaced root, failed required lease admission, clock regression or
+expired deadline abort with no partial JSON. Interruption propagates; an explicit
+retry revalidates evidence under the existing immutable V4 rules. Each producer
+finishes its own evidence recheck; these are separate observations, not an atomic
+cross-producer snapshot or evidence-at-emission attestation. A subsequent writer
+lease alone does not invalidate a completed observation. Root identity and
+liveness are checked again before final output. Canonical output is bounded to
+4 MiB; `result_identity_sha256` hashes the canonical report excluding that field.
+
+All V5 output remains owner-private, including NSE-derived context and provenance.
+No raw bar arrays, endpoint prices, paths, source bodies or private diagnostics
+are added. This creates no hosted disclosure permission, trading signal, ranking,
+risk rule, portfolio decision or historical effectiveness claim. Returning to
+V1–V4 requires only choosing the older version; the existing stores remain usable.
+See [Plan 42](../plans/42-agent-volume-relative-strength-context.md).
