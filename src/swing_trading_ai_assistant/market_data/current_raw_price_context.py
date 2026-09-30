@@ -366,6 +366,8 @@ _ADMITTED: dict[
         tuple[object, ...],
         tuple[tuple[int, ...] | None, ...],
         bytes,
+        tuple[tuple[Decimal, Decimal] | None, ...],
+        bytes,
     ],
 ] = {}
 
@@ -375,6 +377,7 @@ def _mint(
     receipts: tuple[object, ...],
     root_identity: tuple[int, int],
     volumes: tuple[tuple[int, ...] | None, ...],
+    endpoints: tuple[tuple[Decimal, Decimal] | None, ...],
 ) -> AdmittedCurrentRawContextV1:
     value = object.__new__(AdmittedCurrentRawContextV1)
     seal = object()
@@ -395,6 +398,8 @@ def _mint(
         receipts,
         volumes,
         _canonical(volumes),
+        endpoints,
+        _canonical(endpoints),
     )
     return value
 
@@ -429,6 +434,18 @@ def admitted_current_raw_volumes_v1(
     if len(volumes) != len(projection.members) or _canonical(volumes) != entry[7]:
         raise ValueError("current raw volume binding invalid")
     return volumes
+
+
+def admitted_current_raw_endpoints_v1(
+    value: AdmittedCurrentRawContextV1,
+) -> tuple[tuple[Decimal, Decimal] | None, ...]:
+    """Read exact S0/S20 closes only from the same producer admission."""
+    projection = validate_admitted_current_raw_context_v1(value)
+    entry = _ADMITTED[id(value)]
+    endpoints = entry[8]
+    if len(endpoints) != len(projection.members) or _canonical(endpoints) != entry[9]:
+        raise ValueError("current raw endpoint binding invalid")
+    return endpoints
 
 
 def validate_admitted_current_raw_context_v1(
@@ -497,6 +514,7 @@ def read_retained_current_raw_context_v1(  # noqa: C901
         return _outcome("UNSUPPORTED", "RAW_WINDOW_LIMIT_EXCEEDED")
 
     volumes: dict[int, tuple[int, ...]] = {}
+    endpoints: dict[int, tuple[Decimal, Decimal]] = {}
     members: list[CurrentRawMemberProjectionV1] = []
     receipts: list[object] = [schedule_result.canonical_bytes]
     try:
@@ -625,6 +643,7 @@ def read_retained_current_raw_context_v1(  # noqa: C901
                         )
                     )
                     volumes[position] = tuple(bar.volume for bar in bars)
+                    endpoints[position] = (bars[0].close, bars[-1].close)
                     receipts.extend((resolved, checksums, screen))
                 except InstrumentSnapshotNotFoundError:
                     members.append(
@@ -711,6 +730,7 @@ def read_retained_current_raw_context_v1(  # noqa: C901
             tuple(receipts),
             root_identity,
             tuple(volumes.get(index) for index in range(len(members))),
+            tuple(endpoints.get(index) for index in range(len(members))),
         ),
     )
 
@@ -933,11 +953,13 @@ def recheck_retained_current_raw_context_v1(
     if fresh.admitted is None:
         raise StorageRootLeaseError("retained raw source authority changed")
     refreshed = validate_admitted_current_raw_context_v1(fresh.admitted)
-    if _canonical(refreshed) != _canonical(
-        projection
-    ) or admitted_current_raw_volumes_v1(
-        fresh.admitted
-    ) != admitted_current_raw_volumes_v1(value):
+    if (
+        _canonical(refreshed) != _canonical(projection)
+        or admitted_current_raw_volumes_v1(fresh.admitted)
+        != admitted_current_raw_volumes_v1(value)
+        or admitted_current_raw_endpoints_v1(fresh.admitted)
+        != admitted_current_raw_endpoints_v1(value)
+    ):
         raise StorageRootLeaseError("retained raw source authority changed")
     control.ensure_live()
 
