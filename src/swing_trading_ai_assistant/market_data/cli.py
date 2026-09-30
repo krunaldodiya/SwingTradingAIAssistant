@@ -25,6 +25,13 @@ from swing_trading_ai_assistant.market_regime.current_supplied_cohort import (
     current_supplied_cohort_market_regime_runtime_code_identity_v1,
     evaluate_current_supplied_cohort_market_regime_v1,
 )
+from swing_trading_ai_assistant.relative_strength import (
+    relative_strength_request_from_json,
+    research_current_relative_strength,
+)
+from swing_trading_ai_assistant.relative_strength.request import (
+    canonical_bytes as relative_strength_json,
+)
 from swing_trading_ai_assistant.research_packet.current_price_context import (
     current_price_context_request_from_canonical_json_bytes_v1,
     research_current_price_context_v1,
@@ -499,6 +506,13 @@ def build_parser() -> argparse.ArgumentParser:
     volume_context.add_argument("--input-file", type=Path, required=True)
     volume_context.add_argument("--storage-root", type=Path, required=True)
     volume_context.add_argument("--output", choices=("json",), required=True)
+    relative_strength = commands.add_parser(
+        "relative-strength-current",
+        help="compare retained completed-session price change with an explicit reference stock",
+    )
+    relative_strength.add_argument("--input-file", type=Path, required=True)
+    relative_strength.add_argument("--storage-root", type=Path, required=True)
+    relative_strength.add_argument("--output", choices=("json",), required=True)
     price_context_current = commands.add_parser(
         "price-context-current",
         help="return independent retained raw current-price context",
@@ -702,6 +716,8 @@ def main(  # noqa: C901 - command dispatch remains explicit.
             )
         if args.command == "volume-context-current":
             return _run_volume_command(args, trusted_clock or _SystemClock())
+        if args.command == "relative-strength-current":
+            return _run_relative_strength_command(args, trusted_clock or _SystemClock())
         if args.command in {"regime-current", "price-context-current"}:
             return _run_current_packet_command(args, trusted_clock or _SystemClock())
         if args.command == "historical-ohlcv-upstox-raw":
@@ -1228,6 +1244,27 @@ def _run_volume_command(args: argparse.Namespace, clock: _ClockV1) -> int:
     result = research_current_volume(request, args.storage_root, clock=control.now)
     output = volume_json(result).decode("ascii")
     # Preserve clock continuity through serialization and the first output write.
+    control.ensure_live()
+    sys.stdout.write(output)
+    return 0 if result["state"] == "OBSERVED" else 1
+
+
+def _run_relative_strength_command(args: argparse.Namespace, clock: _ClockV1) -> int:
+    try:
+        request = relative_strength_request_from_json(
+            _read_current_regime_input(args.input_file)
+        )
+    except ValueError:
+        raise _RequestInvalid from None
+    control = CurrentRawInvocationControlV1(
+        clock,
+        selection=request.data_selection_time,
+        deadline=request.admission_deadline,
+    )
+    result = research_current_relative_strength(
+        request, args.storage_root, clock=control.now
+    )
+    output = relative_strength_json(result).decode("ascii")
     control.ensure_live()
     sys.stdout.write(output)
     return 0 if result["state"] == "OBSERVED" else 1

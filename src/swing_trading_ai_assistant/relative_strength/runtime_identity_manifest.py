@@ -1,8 +1,8 @@
-"""Reviewed fixed-point source map for Issue #188 runtime behavior."""
+"""Reviewed source-at-rest map for the Plan 41 Relative Strength boundary."""
 
 from typing import Final
 
-CURRENT_PRICE_CONTEXT_RUNTIME_SOURCE_SHA256_V1: Final[dict[str, str]] = {
+RELATIVE_STRENGTH_RUNTIME_SOURCE_SHA256_V1: Final[dict[str, str]] = {
     "src/swing_trading_ai_assistant/historical_evaluation/capability_validation.py": "bd14e060717965ba8ab78faae404fdf0df207a5eecfe7994b23e5a44c199531e",
     "src/swing_trading_ai_assistant/market_data/__init__.py": "1893ac52a1c59b5f91c3fd3d73489adcc86ac4fc5f6cd47d8bfeb62b72b7a4bf",
     "src/swing_trading_ai_assistant/market_data/account_rate_limit.py": "655e233e28f14934efd4133fb873acc23efa44e4efa5b88b3b1cb574a0bb4752",
@@ -85,8 +85,8 @@ CURRENT_PRICE_CONTEXT_RUNTIME_SOURCE_SHA256_V1: Final[dict[str, str]] = {
     "src/swing_trading_ai_assistant/research_packet/current_supplied_cohort_v5.py": "4dc0acce7c6f75a25b09d206b7245000e3545c42ab1d0eef0bc4a96c4bedced2",
     "src/swing_trading_ai_assistant/sector_analysis/current_industry_participation_v4.py": "4e86510158c7d26c94c7a888af29a7b282cd6fa464a886fe4408d220f6fe53e5",
     "src/swing_trading_ai_assistant/sector_analysis/current_raw_industry_participation.py": "0bd8fc7e2e7830e1fbf45c5b256fec1bd4c83d630f0273be7fde67e43636a3aa",
-    "src/swing_trading_ai_assistant/volume_analysis/__init__.py": "89cce37fb8cc6c1b9b12b0959cf4a2edb5103e13dcf93ce1b969092af3f147c3",
-    "src/swing_trading_ai_assistant/volume_analysis/current.py": "e55e854e4a1629be4e2bf522dc1dcaf2cd9ae763784ac557b6b201591a6c8618",
-    "src/swing_trading_ai_assistant/volume_analysis/request.py": "241fa165aa3e684037499a187d18779f835997ce9c064a6a32a2c542dc6ecc97",
-    "src/swing_trading_ai_assistant/volume_analysis/service.py": "3c23777c5825f2b4c46c6b5ff9de184826c25910688ef2ec432dfc86da096893",
+    "src/swing_trading_ai_assistant/relative_strength/__init__.py": "56862f99a74eda7163cace7a1cbc91c09e64f7ec13fb9e46f9ca5828e208d43a",
+    "src/swing_trading_ai_assistant/relative_strength/current.py": "63720e4d6bd48b1f173cc120307668a2b10a161e69165324cfc72c1c62621b43",
+    "src/swing_trading_ai_assistant/relative_strength/request.py": "46e85ad41c788186eb380bedc2bd58fe65755ccbbc2bf2fddb060e267cd7aa06",
+    "src/swing_trading_ai_assistant/relative_strength/service.py": "81c3374a9b81cdc7e42af3289e157fda57bceb5f68aba8be5d1e2d16ce1b7194",
 }
