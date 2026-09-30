@@ -94,14 +94,14 @@ never catches these failures. Execute both analysis services even if the first
 returns missing evidence, so missing Volume cannot hide RS evidence corruption.
 
 After complete input, liveness and runtime validation, use V4's existing root
-admission helper to admit/create the invocation root, capture its identity while
-that lease is held, then release the lease before entering unchanged V4. Do not
-adopt an unidentified root after V4 returns: an initially absent path otherwise
-permits replacement between V4's final guard and the outer capture. This reorders
-the existing V4 root creation/lock-file effect; it adds no storage format or lock
-protocol. Preserve V4's internal guards. Across V4, subsequent read-only analysis
-stages and final emission the pinned root authority must remain unchanged.
-Each producer retains its existing lease and exact final evidence recheck.
+admission helper to admit the existing owner-private invocation root, capture
+its identity while that lease is held, then release the lease before entering
+unchanged V4. Missing roots remain terminal as in real V4; the helper does not
+create a root. It may initialize the existing lease file in an admitted empty
+root. Do not adopt a different root after V4 returns. Preserve V4's internal
+guards. Across V4, subsequent read-only analysis stages and final emission the
+pinned root authority must remain unchanged. No storage format or lock protocol
+is added. Each producer retains its existing lease and exact final evidence recheck.
 These are separate observations,
 not a new atomic cross-producer snapshot or evidence-at-emission attestation.
 No new lock protocol, receipt system, acquisition, retry, repair or persistence.
