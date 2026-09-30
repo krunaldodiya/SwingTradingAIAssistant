@@ -7,6 +7,7 @@ import re
 import runpy
 import tomllib
 from collections.abc import Callable
+from fnmatch import fnmatchcase
 from pathlib import Path
 
 import pytest
@@ -34,7 +35,17 @@ _RELEASE_BUILD = "uv build --no-build-isolation --python .venv/bin/python"
 _CI_ROOT_HEADERS = ("name: CI", "on:", "permissions:", "concurrency:", "jobs:")
 _CI_STATIC_BLOCKS = {
     "name: CI": ("name: CI",),
-    "on:": ("on:", "  pull_request:", "  push:", "    branches:", "      - main"),
+    "on:": (
+        "on:",
+        "  pull_request:",
+        "    paths-ignore:",
+        "      - '**.md'",
+        "  push:",
+        "    branches:",
+        "      - main",
+        "    paths-ignore:",
+        "      - '**.md'",
+    ),
     "permissions:": ("permissions:", "  contents: read"),
     "concurrency:": (
         "concurrency:",
@@ -285,6 +296,9 @@ def test_ci_structural_contract_rejects_privilege_pin_activity_and_gate_regressi
         f"{workflow}\npermissions:\n  contents: write\n",
         f"{workflow}\njobs:\n  provider_probe:\n    runs-on: ubuntu-latest\n",
         workflow.replace("pull_request:", "pull_request:\n  workflow_dispatch:"),
+        workflow.replace("    paths-ignore:\n      - '**.md'\n", "", 1),
+        workflow.replace("      - '**.md'", "      - 'docs/**'"),
+        workflow.replace("      - '**.md'", "      - '*.md'"),
         workflow.replace("      - main", "      - main\n      - release"),
         workflow.replace(
             "        if: >-\n"
@@ -296,6 +310,61 @@ def test_ci_structural_contract_rejects_privilege_pin_activity_and_gate_regressi
     )
     for fixture in fixtures:
         _assert_rejected(validate_ci_workflow, fixture)
+
+
+@pytest.mark.parametrize("event", ("pull_request", "push"))
+@pytest.mark.parametrize(
+    ("changed_paths", "expected_run"),
+    (
+        (("README.md",), False),
+        (("docs/plans/41-stock-reference-relative-strength.md",), False),
+        (("AGENTS.md", "docs/roadmap.md"), False),
+        (("README.md", "src/swing_trading_ai_assistant/cli.py"), True),
+        (("README.md", "tests/test_ci_admission.py"), True),
+        (("README.md", ".github/workflows/ci.yml"), True),
+        (("README.md", "pyproject.toml", "uv.lock"), True),
+        (("docs/example.py",), True),
+        (("docs/fixture.json",), True),
+        (("README.MD",), True),
+        (("docs/deleted.md",), False),
+        (("src/deleted.py",), True),
+        (("docs/old.md", "docs/new.md"), False),
+        (("src/old.py", "docs/new.md"), True),
+        (("docs/old.md", "src/new.py"), True),
+    ),
+)
+def test_native_ci_path_filters_select_only_non_markdown_changes(
+    event: str, changed_paths: tuple[str, ...], expected_run: bool
+) -> None:
+    # Read the actual trigger, not the classifier inside an already-started job.
+    # This deliberately models only the approved **.md glob (fnmatch's * spans
+    # slashes). It is not a GitHub diff generator or a general Actions emulator.
+    # Deletion/rename cases are supplied changed paths, including both rename
+    # sides; they do not prove which paths GitHub supplies for a hosted event.
+    trigger = "\n".join(_root_blocks(CI_PATH.read_text())["on:"])
+    block = re.search(rf"^  {event}:\n((?:    .*\n?)+)", trigger, re.MULTILINE)
+    assert block is not None
+    filters = re.findall(r"^      - '([^']+)'$", block[1], re.MULTILINE)
+    assert filters == ["**.md"], "Exclude only Markdown at the native event boundary"
+    selected = any(
+        not any(fnmatchcase(path, pattern) for pattern in filters)
+        for path in changed_paths
+    )
+    assert selected is expected_run
+
+
+def test_docs_skip_has_no_independent_automatic_distribution_trigger() -> None:
+    publication = (ROOT / ".github/workflows/publish-oci.yml").read_text()
+    windows = (ROOT / ".github/workflows/windows-distribution.yml").read_text()
+    assert publication.split("on:\n", 1)[1].split("\npermissions:", 1)[0].strip() == (
+        "workflow_run:\n    workflows: [CI]\n    types: [completed]"
+    )
+    assert "github.event.workflow_run.event == 'push'" in publication
+    assert "github.event.workflow_run.conclusion == 'success'" in publication
+    assert "github.event.workflow_run.head_branch == 'main'" in publication
+    assert windows.split("on:\n", 1)[1].split("\npermissions:", 1)[0].strip() == (
+        "workflow_dispatch:"
+    )
 
 
 def test_private_source_marker_is_closed_to_exact_owner_private_cases() -> None:
