@@ -678,3 +678,136 @@ def test_evidence_changed_during_result_identity_is_terminal(tmp_path, monkeypat
         research_current_relative_strength(
             request, root, clock=lambda: request.data_selection_time
         )
+
+
+@pytest.mark.parametrize("boundary", ["sdk", "cli"])
+@pytest.mark.parametrize(
+    "late_change",
+    [
+        "screen_with_missing_bars",
+        "catalog_with_missing_bars",
+        "calendar_removed_with_missing_bars",
+        "catalog_with_missing_calendar",
+    ],
+)
+def test_late_nonready_evidence_change_is_terminal(
+    tmp_path, monkeypatch, capsys, boundary, late_change
+):
+    reference, target = members(2)[::-1]
+    seeded = raw_request(members=(reference, target))
+    root = tmp_path / "root"
+    seed_root(root, retained_action=True, request_value=seeded)
+    selected_schedule = (
+        "0" * 64
+        if late_change == "catalog_with_missing_calendar"
+        else seeded.schedule_identity_sha256
+    )
+    request = RelativeStrengthRequest(
+        seeded.data_selection_time,
+        seeded.admission_deadline,
+        selected_schedule,
+        reference,
+        (target,),
+    )
+    original = service.identity
+    changed = False
+
+    def alter_after_result(value):
+        nonlocal changed
+        if (
+            not changed
+            and isinstance(value, dict)
+            and value.get("contract_version") == "current-relative-strength@v1"
+        ):
+            changed = True
+            if late_change == "calendar_removed_with_missing_bars":
+                next(root.rglob(f"{selected_schedule}.json")).unlink()
+            else:
+                path = (
+                    next(root.rglob("snapshot.json"))
+                    if late_change == "screen_with_missing_bars"
+                    else root / "catalog.duckdb"
+                )
+                path.chmod(0o600)
+                path.write_bytes(b"corrupt")
+        return original(value)
+
+    monkeypatch.setattr(service, "identity", alter_after_result)
+    if boundary == "sdk":
+        with pytest.raises((ValueError, RuntimeError)):
+            research_current_relative_strength(
+                request, root, clock=lambda: request.data_selection_time
+            )
+    else:
+        path = tmp_path / "request.json"
+        path.write_bytes(request.canonical_bytes)
+        path.chmod(0o600)
+
+        class Clock:
+            def now(self):
+                return request.data_selection_time
+
+        assert (
+            main(
+                [
+                    "relative-strength-current",
+                    "--input-file",
+                    str(path),
+                    "--storage-root",
+                    str(root),
+                    "--output",
+                    "json",
+                ],
+                trusted_clock=Clock(),
+            )
+            == 2
+        )
+        captured = capsys.readouterr()
+        assert captured.out == "" and captured.err == "internal_error\n"
+    assert changed
+
+
+def test_late_shared_raw_outcome_receipt_change_is_terminal(tmp_path, monkeypatch):
+    reference, target = members(2)[::-1]
+    selection = schedule().sessions[19].close_at + timedelta(hours=1)
+    seeded = raw_request(selection=selection, members=(reference, target))
+    root = tmp_path / "root"
+    seed_root(root, retained_action=True, request_value=seeded)
+    request = RelativeStrengthRequest(
+        seeded.data_selection_time,
+        seeded.admission_deadline,
+        seeded.schedule_identity_sha256,
+        reference,
+        (target,),
+    )
+    ordinary = research_current_relative_strength(
+        request, root, clock=lambda: selection
+    )
+    assert ordinary["reference"]["reason"] == "CALENDAR_FUTURE_KNOWN"
+    original_identity = service.identity
+    original_read = service.read_retained_current_raw_context_v1
+    late = False
+
+    def mark_late(value):
+        nonlocal late
+        if (
+            isinstance(value, dict)
+            and value.get("contract_version") == "current-relative-strength@v1"
+        ):
+            late = True
+        return original_identity(value)
+
+    def changed_read(*args, **kwargs):
+        outcome = original_read(*args, **kwargs)
+        assert outcome.admitted is None
+        return (
+            replace(outcome, selected_session_count=outcome.selected_session_count + 1)
+            if late
+            else outcome
+        )
+
+    monkeypatch.setattr(service, "identity", mark_late)
+    monkeypatch.setattr(service, "read_retained_current_raw_context_v1", changed_read)
+    with pytest.raises(RuntimeError, match="retained authority changed"):
+        research_current_relative_strength(request, root, clock=lambda: selection)
+    assert late

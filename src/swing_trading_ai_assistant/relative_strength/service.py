@@ -82,6 +82,14 @@ class _Clock:
         return self.sample()
 
 
+@dataclass(frozen=True)
+class _RetainedReceipt:
+    screens: tuple[object, ...] | None
+    schedule_bytes: bytes | None
+    schedule_absent: bool
+    raw_nonadmitted: tuple[str, tuple[str, ...], int] | None
+
+
 def relative_strength_runtime_identity() -> str:
     root = Path(__file__).parent.parent
     observed: dict[str, str] = {}
@@ -179,11 +187,20 @@ def _screen_integrity(
     # retained store before reduction, and bind the same receipts afterwards.
     with lease.read_operation(root) as operation:
         try:
-            os.stat(
+            entry = os.stat(
                 "catalog.duckdb", dir_fd=operation.descriptor, follow_symlinks=False
             )
         except FileNotFoundError:
             return None
+        catalog_identity = (
+            entry.st_dev,
+            entry.st_ino,
+            entry.st_size,
+            entry.st_mtime_ns,
+            entry.st_ctime_ns,
+            entry.st_uid,
+            entry.st_mode,
+        )
     cutoff = control.retain_evidence_cutoff()
     receipts: list[object] = []
     with DuckDBCatalog(root, read_only=True, lease=lease) as catalog:
@@ -198,7 +215,26 @@ def _screen_integrity(
             except (CorporateActionMissingError, CorporateActionStaleError) as error:
                 receipts.append(type(error).__name__)
         catalog.ensure_read_identity()
-    return tuple(receipts)
+    return (catalog_identity, *receipts)
+
+
+def _check_shared_receipt(
+    receipt: _RetainedReceipt,
+    request: RelativeStrengthRequest,
+    root: Path,
+    lease: StorageRootLease,
+    control: CurrentRawInvocationControlV1,
+) -> None:
+    if _screen_integrity(request, root, lease, control) != receipt.screens:
+        raise StorageRootLeaseError("relative strength screen authority changed")
+    schedule, absent = ScheduleEvidenceStore(root, lease)._resolve_raw_history(  # pyright: ignore[reportPrivateUsage]
+        request.schedule_identity_sha256, deadline=control
+    )
+    if (
+        absent != receipt.schedule_absent
+        or schedule.canonical_bytes != receipt.schedule_bytes
+    ):
+        raise StorageRootLeaseError("relative strength calendar authority changed")
 
 
 def _read_members(
@@ -212,12 +248,14 @@ def _read_members(
     str | None,
     tuple[tuple[Decimal, Decimal] | None, ...],
     AdmittedCurrentRawContextV1 | None,
+    _RetainedReceipt,
 ]:
     screens = _screen_integrity(request, root, lease, control)
     store = ScheduleEvidenceStore(root, lease)
     schedule, absent = store._resolve_raw_history(  # pyright: ignore[reportPrivateUsage]
         request.schedule_identity_sha256, deadline=control
     )
+    raw_nonadmitted = None
     if schedule.schedule is None:
         if not absent:
             raise StorageRootLeaseError("relative strength calendar integrity failed")
@@ -235,18 +273,15 @@ def _read_members(
             endpoints = (None,) * len(members)
             admitted = None
         else:
-            members, sessions, endpoints, admitted = _project(
+            members, sessions, endpoints, admitted, raw_nonadmitted = _project(
                 request, root, lease, control
             )
         schedule_as_of = instant(schedule.schedule.as_of)
-    if _screen_integrity(request, root, lease, control) != screens:
-        raise StorageRootLeaseError("relative strength screen authority changed")
-    final, final_absent = store._resolve_raw_history(  # pyright: ignore[reportPrivateUsage]
-        request.schedule_identity_sha256, deadline=control
+    receipt = _RetainedReceipt(
+        screens, schedule.canonical_bytes, absent, raw_nonadmitted
     )
-    if final_absent != absent or final.canonical_bytes != schedule.canonical_bytes:
-        raise StorageRootLeaseError("relative strength calendar authority changed")
-    return members, sessions, schedule_as_of, endpoints, admitted
+    _check_shared_receipt(receipt, request, root, lease, control)
+    return members, sessions, schedule_as_of, endpoints, admitted, receipt
 
 
 def _project(  # noqa: C901 -- ordered integrity, comparability and math admission
@@ -259,6 +294,7 @@ def _project(  # noqa: C901 -- ordered integrity, comparability and math admissi
     list[dict[str, object]],
     tuple[tuple[Decimal, Decimal] | None, ...],
     AdmittedCurrentRawContextV1 | None,
+    tuple[str, tuple[str, ...], int] | None,
 ]:
     raw = read_retained_current_raw_context_v1(
         root,
@@ -280,7 +316,13 @@ def _project(  # noqa: C901 -- ordered integrity, comparability and math admissi
         if repeated != raw:
             raise StorageRootLeaseError("relative strength retained authority changed")
         withheld = _withheld(request, raw.state, raw.reasons[0])
-        return withheld, [], (None,) * len(withheld), None
+        return (
+            withheld,
+            [],
+            (None,) * len(withheld),
+            None,
+            (raw.state, raw.reasons, raw.selected_session_count),
+        )
     projection, root_identity = admitted_current_raw_context_binding_v1(raw.admitted)
     expected = request.raw_input()
     if (
@@ -366,7 +408,7 @@ def _project(  # noqa: C901 -- ordered integrity, comparability and math admissi
                 "source": _source(member),
             }
         )
-    return members, sessions, endpoints, raw.admitted
+    return members, sessions, endpoints, raw.admitted, None
 
 
 def _comparisons(
@@ -450,9 +492,10 @@ def research_current_relative_strength(
                 members
             )
             admitted = None
+            receipt = None
         else:
-            members, sessions, schedule_as_of, endpoints, admitted = _read_members(
-                validated, storage_root, lease, control
+            members, sessions, schedule_as_of, endpoints, admitted, receipt = (
+                _read_members(validated, storage_root, lease, control)
             )
         control.ensure_live()
         cutoff = control.evidence_cutoff
@@ -497,15 +540,37 @@ def research_current_relative_strength(
         result["result_identity_sha256"] = identity(result)
         if len(canonical_bytes(result)) > 1024 * 1024:
             raise ValueError("relative strength result exceeds limit")
-        if admitted is not None:
-            if lease is None:
-                raise StorageRootLeaseError("relative strength lease unavailable")
-            recheck_retained_current_raw_context_v1(
-                admitted,
-                storage_root,
-                lease=lease,
-                control=control,
-                distinguish_missing_partitions=True,
-            )
+        if lease is not None:
+            if receipt is None:
+                raise StorageRootLeaseError("relative strength receipt unavailable")
+            if admitted is None:
+                (
+                    final_members,
+                    final_sessions,
+                    final_as_of,
+                    final_endpoints,
+                    final_admitted,
+                    final_receipt,
+                ) = _read_members(validated, storage_root, lease, control)
+                if (
+                    final_admitted is not None
+                    or final_receipt != receipt
+                    or final_members != members
+                    or final_sessions != sessions
+                    or final_as_of != schedule_as_of
+                    or final_endpoints != endpoints
+                ):
+                    raise StorageRootLeaseError(
+                        "relative strength retained authority changed"
+                    )
+            else:
+                recheck_retained_current_raw_context_v1(
+                    admitted,
+                    storage_root,
+                    lease=lease,
+                    control=control,
+                    distinguish_missing_partitions=True,
+                )
+                _check_shared_receipt(receipt, validated, storage_root, lease, control)
     control.ensure_live()
     return result
