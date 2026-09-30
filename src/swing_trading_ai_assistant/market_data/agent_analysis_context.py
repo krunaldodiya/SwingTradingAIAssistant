@@ -6,6 +6,7 @@ alignment, the overall invocation deadline, root continuity and report bounds.
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
 from dataclasses import asdict
 from datetime import UTC, datetime
@@ -16,6 +17,7 @@ from swing_trading_ai_assistant.relative_strength import (
     RelativeStrengthRequest,
     research_current_relative_strength,
 )
+from swing_trading_ai_assistant.relative_strength import service as relative_service
 from swing_trading_ai_assistant.relative_strength.request import (
     canonical_bytes,
     identity,
@@ -27,6 +29,7 @@ from swing_trading_ai_assistant.volume_analysis import (
     VolumeRequest,
     research_current_volume,
 )
+from swing_trading_ai_assistant.volume_analysis import service as volume_service
 
 from . import agent_cohort_context as cohort
 from .agent_cohort_request import (
@@ -45,7 +48,7 @@ from .current_stock_research import (
     CurrentStockResearchInputError,
     _acquire_root,  # pyright: ignore[reportPrivateUsage]
 )
-from .storage_root_lease import StorageRootLease, StorageRootLeaseError
+from .storage_root_lease import RootAuthorityV1, StorageRootLease, StorageRootLeaseError
 
 MAX_REPORT_BYTES = 4 * 1024 * 1024
 
@@ -256,11 +259,21 @@ def _prepare_agent_analysis_research_current(
     )
     control.ensure_live()
     runtime = _runtime_identity()
+    # Verify both complete producer scopes before root initialization or V4
+    # acquisition. Their unchanged services also recheck at their own stages.
+    volume_service.volume_runtime_identity()
+    relative_service.relative_strength_runtime_identity()
+    control.ensure_live()
     authority_lease = _acquire_root(storage_root)
     if authority_lease is None:
         raise StorageRootLeaseError("analysis storage unavailable")
     try:
-        authority = StorageRootLease.capture_root_authority(storage_root)
+        # Derive the authority from the leased root, not another pathname open
+        # that could silently adopt a replacement after lease acquisition.
+        with authority_lease.read_operation(storage_root) as operation:
+            metadata = os.fstat(operation.descriptor)
+            authority = RootAuthorityV1("PRESENT", (metadata.st_dev, metadata.st_ino))
+            operation.ensure_live()
     finally:
         authority_lease.close()
 

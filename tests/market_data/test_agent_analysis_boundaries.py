@@ -12,6 +12,7 @@ from current_raw_acquisition_fixtures import remove_action_metadata, seed_root
 from test_relative_strength_boundaries import synthetic_isin
 
 import swing_trading_ai_assistant.relative_strength.service as rs_service
+import swing_trading_ai_assistant.volume_analysis.service as volume_service
 from swing_trading_ai_assistant.market_data import agent_analysis_context as api
 from swing_trading_ai_assistant.market_data import cli
 from swing_trading_ai_assistant.market_data.agent_cohort_request import (
@@ -736,3 +737,136 @@ def test_oversized_v5_cli_has_no_partial_output(
     )
     output = capsys.readouterr()
     assert output.out == "" and output.err == "internal_error\n"
+
+
+@pytest.mark.parametrize("boundary", ["sdk", "cli"])
+@pytest.mark.parametrize(
+    "producer,module",
+    [
+        ("relative_strength", "swing_trading_ai_assistant.relative_strength.service"),
+        ("relative_strength", "swing_trading_ai_assistant.relative_strength.current"),
+        ("volume", "swing_trading_ai_assistant.market_data.current_raw_price_context"),
+    ],
+)
+def test_producer_runtime_failure_precedes_root_and_v4_effects(
+    tmp_path, selected_request, monkeypatch, capsys, boundary, producer, module
+):
+    root = tmp_path / "root"
+    root.mkdir(mode=0o700)
+    service = rs_service if producer == "relative_strength" else volume_service
+    original = service.runtime_source_sha256
+    events = []
+
+    def bad_source(name, *args):
+        if name == module:
+            events.append("runtime_rejected")
+            return "0" * 64
+        return original(name, *args)
+
+    monkeypatch.setattr(service, "runtime_source_sha256", bad_source)
+    research = fixture.unavailable_research(selected_request)
+
+    def observe(*args, **kwargs):
+        events.append("research_effect")
+        return research(*args, **kwargs)
+
+    if boundary == "sdk":
+        with pytest.raises(ValueError, match="runtime identity invalid"):
+            run(selected_request, root, research=observe)
+    else:
+
+        class Clock:
+            def now(self):
+                return selected_request.data_selection_time
+
+        assert (
+            cli.main(
+                fixture.arguments(tmp_path, selected_request),
+                trusted_clock=Clock(),
+                current_stock_research_v2=observe,
+            )
+            == 2
+        )
+        captured = capsys.readouterr()
+        assert captured.out == "" and captured.err == "internal_error\n"
+    assert events == ["runtime_rejected"]
+    assert list(root.iterdir()) == []
+
+
+@pytest.mark.parametrize("boundary", ["sdk", "cli"])
+def test_root_replaced_after_lease_acquisition_fails_before_v4(
+    tmp_path, selected_request, monkeypatch, capsys, boundary
+):
+    root = tmp_path / "root"
+    root.mkdir(mode=0o700)
+    original = api._acquire_root
+
+    def replace_after_acquire(path):
+        lease = original(path)
+        assert lease is not None
+        path.rename(tmp_path / "admitted-root")
+        path.mkdir(mode=0o700)
+        return lease
+
+    monkeypatch.setattr(api, "_acquire_root", replace_after_acquire)
+    events = []
+    research = fixture.unavailable_research(selected_request)
+
+    def observe(*args, **kwargs):
+        events.append("research_effect")
+        return research(*args, **kwargs)
+
+    if boundary == "sdk":
+        with pytest.raises(RuntimeError, match="authority"):
+            run(selected_request, root, research=observe)
+    else:
+
+        class Clock:
+            def now(self):
+                return selected_request.data_selection_time
+
+        assert (
+            cli.main(
+                fixture.arguments(tmp_path, selected_request),
+                trusted_clock=Clock(),
+                current_stock_research_v2=observe,
+            )
+            == 2
+        )
+        captured = capsys.readouterr()
+        assert captured.out == "" and captured.err == "internal_error\n"
+    assert events == [] and list(root.iterdir()) == []
+    # The original invocation's lease is released on failure, allowing retry.
+    retried = StorageRootLease.try_acquire_existing(tmp_path / "admitted-root")
+    assert retried.lease is not None
+    retried.lease.close()
+
+
+@pytest.mark.parametrize("producer", ["volume", "relative_strength"])
+def test_producer_stage_runtime_check_remains_after_preflight(
+    tmp_path, selected_request, monkeypatch, producer
+):
+    root = tmp_path / "root"
+    root.mkdir(mode=0o700)
+    service = volume_service if producer == "volume" else rs_service
+    verifier_name = f"{producer}_runtime_identity"
+    original = getattr(service, verifier_name)
+    events = []
+
+    def verify():
+        if "research_effect" in events:
+            events.append("stage_rejected")
+            raise ValueError("runtime identity invalid")
+        events.append("preflight_passed")
+        return original()
+
+    monkeypatch.setattr(service, verifier_name, verify)
+    research = fixture.unavailable_research(selected_request)
+
+    def observe(*args, **kwargs):
+        events.append("research_effect")
+        return research(*args, **kwargs)
+
+    with pytest.raises(ValueError, match="runtime identity invalid"):
+        run(selected_request, root, research=observe)
+    assert events == ["preflight_passed", "research_effect", "stage_rejected"]
