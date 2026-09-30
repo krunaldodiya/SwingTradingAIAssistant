@@ -2740,3 +2740,28 @@ class _CompleteService:
             members=(CurrentCohortMemberFactV1(member, fact),),
             reasons=(),
         )
+
+
+@pytest.mark.parametrize("mutation", ["missing", "changed"])
+def test_runtime_inventory_binds_agent_analysis_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation: str
+) -> None:
+    baseline = current_cohort_runtime_code_identity_v1()
+    source_root = Path(cohort_module.__file__).parent
+    module_root = tmp_path / "market_data"
+    module_root.mkdir()
+    _copy_runtime_inventory(source_root, module_root)
+    monkeypatch.setattr(
+        cohort_module, "_verify_loaded_runtime_modules", lambda *_: None
+    )
+    monkeypatch.setattr(
+        cohort_module, "__file__", str(module_root / "current_cohort.py")
+    )
+    assert current_cohort_runtime_code_identity_v1() == baseline
+    source = module_root / "agent_analysis_context.py"
+    if mutation == "missing":
+        source.unlink()
+    else:
+        source.write_bytes(source.read_bytes() + b"\n")
+    with pytest.raises(ValueError, match="runtime code identity unavailable"):
+        current_cohort_runtime_code_identity_v1()

@@ -1,5 +1,21 @@
 # Upcoming Sprints Overview
 
+## Sprint 28 — accepted September 30, 2026
+
+The owner accepted [#235](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/235):
+integrate delivered Volume and explicit-reference Relative Strength into the
+agent research report under [Plan 42](plans/42-agent-volume-relative-strength-context.md).
+Opt-in V5 reuses the retained producers, preserves V1–V4 and shows independent
+source/date/identity and missing-context states. No strategy, signal, risk rule,
+new provider acquisition or historical effectiveness claim is approved. Sprint 28
+is In Progress in milestone 20; implementation, reviews and final gates are pending.
+
+Live state checked September 30: Sprint 27 issue #230 and milestone 19 are closed,
+Project Done; PR #231 merged at `ff872671d2ce52dd41bd45a6eef73d7f4133b7ea`.
+PR #233 remains open and its documentation/CI changes are not active on main.
+This checkpoint supersedes older active-Sprint-27 wording without rewriting its
+original planning evidence. Memory reconciliation remains separately governed by #234.
+
 ## Sprint 27 — accepted September 30, 2026
 
 The owner accepted [#230](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/230):
