@@ -6,6 +6,17 @@ Status: accepted documentation of planning direction; implementation contracts,
 numbered sprints, dates and GitHub milestone assignments are not yet approved
 or created by this record.
 
+**Later checkpoint — 2026-10-01.** Scheduling, delivery and restore instructions
+below are September 22 history. Later accepted Plans and live GitHub govern:
+[Plan 42](../plans/42-agent-volume-relative-strength-context.md) / closed
+[#235](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/235) delivered
+Volume and Relative Strength agent context; [Plan 43](../plans/43-single-stock-loss-scenario.md)
+/ closed [#237](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/237)
+delivered bounded caller-supplied loss-scenario arithmetic. Neither establishes
+a validated strategy or full risk assessment. The Linux Hindsight restore step
+is historical, not a current installation prerequisite; selected recovered
+knowledge is being reconciled under [#234](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/234).
+
 ## Decision and context
 
 After closing parent #172, the owner asked what would make the product a usable
@@ -23,6 +34,23 @@ necessary-only feature admission, source authorization or delivery gates.
 ## First priority after migration
 
 **Single-stock, evidence-backed research through an external AI assistant.**
+
+**Accepted broad direction, clarified 2026-09-23.** The first consumer was a
+local coding assistant using the existing CLI. The broader product is primarily
+consumed by an AI harness; manual use is secondary. Question-specific single-
+stock and bounded-list factual workflows are intermediate capabilities, not the
+final research experience. Eventual candidate and BUY, HOLD, EXIT or NO_TRADE
+reasoning belongs to the consuming AI over supplied evidence. Strategy labels,
+eligibility/risk rules, ranking, portfolio state, source authority and historical
+and out-of-sample validation need separately accepted contracts before actionable
+claims. The [architecture boundary](../architecture-freeze-v1.md#external-consumer-ai-agent-harness)
+still assigns deterministic facts and calculations to the tool and excludes
+broker orders. This clarification does not approve a signal, provider or sprint.
+
+Provenance: recovered project-context records
+`codex-20260922-swing-single-stock-planning` (2026-09-22) and
+`codex-20260923-product-endstate-nifty100-agent-signals` (2026-09-23), reconciled
+under #234 against the current architecture and accepted Plans on 2026-10-01.
 
 Start with one supported stock and completed daily sessions. Reuse the existing
 CLI/SDK and deterministic calculations. Select the smallest agent-facing
@@ -110,6 +138,35 @@ promise to execute all six in its row order.
   files, credentials or every migration dependency are safe to erase. Preserve
   any still-local work and securely migrate/re-establish credentials before
   formatting. macOS Keychain contents do not travel in the data archive.
+
+## Recovered operating distinction — reconciled 2026-10-01
+
+**Status: accepted discussion rationale, scoped to routine authorized capture.**
+On September 15 the owner distinguished execution of an already reviewed CLI
+for a bounded, authorized capture from feature development. Routine operation
+does not need a new independent code review each day; direct built-in
+exact-read, reparse and reuse verification plus truthful bounded evidence remain
+required. Anomalies and code, configuration, process, provider or schema changes
+retain their applicable review and authority gates. This record grants no new
+provider, credential, recurring-capture or scheduler authority and does not
+waive review of a changed implementation.
+
+Provenance: original user correction of 2026-09-15 in recovered document
+`pi-session:98d17070f2f9c631`, decision memory
+`7988c98e-4245-44b9-98e4-0300d05b337d`; current
+[canonical delivery controls](../mandatory-agent-instructions.md#delivery-and-evidence-controls)
+continue to govern changes.
+
+**Accepted operating preference, clarified 2026-09-18.** The owner directed
+normal current-day BharatStock capture at or after 20:00 IST. A separately
+authorized request for an already completed past session does not inherit a
+wait until today's 20:00. Keep the historical target date and actual acquisition
+and knowledge times; later retrieval cannot prove earlier availability. This
+preference is compatible with the [roadmap's source-availability guidance](../roadmap.md):
+it is no provider publication guarantee, new executable timing gate, recurring
+schedule or present acquisition authorization. Provenance: original user
+correction in `pi-session:19cc17c2a4fc52f0` (2026-09-18), decision memory
+`733c60a7-9c5b-4df4-b3a1-3b8148d2e707`.
 
 ## Resume on Linux
 

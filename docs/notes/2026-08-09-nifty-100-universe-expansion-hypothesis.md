@@ -4,6 +4,15 @@ Date: 2026-08-09
 Status: open research hypothesis; not an approved product, architecture, Sprint,
 strategy, data, or implementation change
 
+**Later disposition — 2026-10-01 (superseded scope, open research).** The
+Nifty-50-only boundary below predates owner-approved
+[#130](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/130).
+The [current architecture](../architecture-freeze-v1.md#owner-decision-listed-equity-feature-boundary)
+now makes point-in-time Nifty 100 the default product focus. This does not prove
+the proposed study's performance hypothesis, approve a strategy, or waive stock
+eligibility and evidence gates. Preserve the August study proposal as history;
+its promotion conditions do not reverse the later product-scope decision.
+
 ## Context and current boundary
 
 The production architecture, data contracts, and research scope remain limited

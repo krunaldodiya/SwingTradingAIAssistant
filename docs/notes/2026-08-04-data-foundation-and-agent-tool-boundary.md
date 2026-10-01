@@ -3,6 +3,15 @@
 Date: 2026-08-04
 Status: superseded in part; current boundary recorded on 2026-08-07
 
+**Later scope clarification — 2026-10-01 (superseded in part).** The Nifty
+50-only statements below record the early-August boundary. Later owner-approved
+[#130](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/130) and the
+[current architecture](../architecture-freeze-v1.md#owner-decision-listed-equity-feature-boundary)
+set point-in-time Nifty 100 as the default research focus and separate stock
+selection from reusable feature eligibility. Explicit supported stocks outside
+that cohort still need canonical identity and every capability-specific gate.
+Historical exact-50 V1 contracts and evidence retain their original meaning.
+
 ## Context
 
 The project was reframed from a conventional Python trading script into a
