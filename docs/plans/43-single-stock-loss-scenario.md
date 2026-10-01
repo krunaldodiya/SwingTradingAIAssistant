@@ -124,3 +124,36 @@ portfolio rules, risk pass/fail, automatic stops, ranking, advice, orders,
 historical effectiveness or broader memory reconciliation. Preserve #232/PR233,
 #234 and all recovery material. Final closeout binds exact review, CI, PR merge,
 main admission and existing private distribution receipt where configured.
+
+## October 1 delivery-prerequisite correction
+
+The configured private OCI publication is required by this sprint's closeout.
+Read-only inspection of prior main publication run 36704656639, job109851943987,
+shows successful Podman push followed by `manifest unknown` when pulling the
+locally selected RepoDigest. Local image metadata can retain a pre-push digest;
+it is not proof of the registry's uploaded manifest. The failed log is retained
+privately in the Sprint29 evidence directory. No previous publication pass is
+claimed and no unrelated old release is retried.
+
+This is a concrete delivery-integrity blocker. The smallest correction stays
+inside the existing disposable publication job: preserve exact tag collision
+refusal, then remove only the verified current local and remote image aliases,
+without force or prune, require the old image ID to be absent, pull the exact
+commit-qualified remote tag afresh and recheck the expected image ID and bound
+source/wheel/requirements labels. Select the registry digest using the unchanged
+strict unique-repository parser, then retain the existing digest pull, smoke,
+private visibility and receipt checks. Unexpected extra aliases or changed
+remote bytes fail closed; no tag overwrite, identity relaxation, new credential,
+new dependency or broad cleanup is allowed. This applies to both existing Docker
+and Podman support. No general release subsystem is introduced.
+
+A separate executor may own only `.github/workflows/publish-oci.yml` and a focused
+publication regression test, serialized commits with the product executor.
+Require a discriminating execution test against the actual extracted workflow
+shell with controlled engine responses: stale local digest fails before repair;
+fresh registry identity succeeds after repair; collision, extra alias/resident
+image, changed pulled identity/labels and failed pulls cannot pass. This fake
+engine challenges control flow, not real registry availability. Actual final
+Sprint29 publication and retained receipt remain the external acceptance gate.
+Both independent reviewers cover the complete combined candidate, including this
+R3 release-trust correction. Coordinator owns this amendment and tracking.
