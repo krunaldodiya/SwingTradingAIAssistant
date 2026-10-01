@@ -1,6 +1,10 @@
 # Plan 41: stock-versus-reference-stock Relative Strength
 
-Status: accepted direction and frozen first implementation contract; not delivered.
+Status: delivered September 30, 2026 through [PR #231](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/231).
+Issue #230 and Sprint 27 milestone 19 are closed; the Delivery Project item is Done.
+Main merge `ff872671d2ce52dd41bd45a6eef73d7f4133b7ea` preserves the independently
+reviewed and tested tree; [main admission 36668719053](https://github.com/krunaldodiya/SwingTradingAIAssistant/actions/runs/36668719053) passed.
+The frozen contract and its non-goals below remain unchanged.
 Owner and risk owner: Krunal Dodiya. Risk R3 (financial-research facts, source integrity,
 private retained evidence and public CLI/SDK contract). Sprint 27 / [#230](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/230).
 Authority: owner selected the recommended stock/reference-stock comparison in this

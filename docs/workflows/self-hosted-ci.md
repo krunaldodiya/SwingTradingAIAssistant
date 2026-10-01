@@ -8,6 +8,39 @@ Windows or Docker Desktop. Issue #228 adds native Linux Podman support; the owne
 current Ubuntu host already has rootless Podman. Docker remains supported on
 hosts where it is available; installing Docker is not required for Podman CI.
 
+## Documentation-only event selection
+
+Issue #232 excludes changes consisting entirely of lowercase `.md` paths from
+both the `pull_request` and main `push` events with native `paths-ignore:
+['**.md']`. Root and nested Markdown paths are excluded. A non-Markdown path,
+including a file under `docs/`, keeps the event eligible; mixed source, test,
+workflow and dependency changes retain the existing gates. Owner/source checks,
+runner restrictions, job permissions and exact-tree admission are unchanged.
+The existing in-job classifier remains a fallback for events GitHub does start;
+it is not the mechanism that prevents a Markdown-only workflow from starting.
+
+OCI publication has only a completed-CI `workflow_run` trigger and requires a
+successful main push. A skipped CI event therefore creates no new publication
+run for that event. Previously queued runs are not cancelled by these filters.
+Windows qualification remains explicitly manual.
+
+This selection uses [GitHub's native path-filter and diff semantics](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#git-diff-comparisons).
+Pull requests use three-dot comparisons and existing-branch pushes use two-dot
+comparisons. GitHub limits the files considered; a large diff can hide a relevant
+nonignored path. Large commit counts or diff-generation timeouts can instead
+cause the workflow to run regardless of the filters. Native filters are not an
+unlimited fail-closed detector, and local configuration regressions do not prove
+a hosted event was skipped or how GitHub represents a rename. Inspect the complete
+change list before delivery and treat an oversized or indeterminate comparison
+as a limit requiring a scoped decision, not evidence of successful CI selection.
+
+GitHub may leave a required check pending when its workflow is path-filtered;
+do not bypass a required gate to merge. GitGuardian is a separate GitHub App,
+so Actions path filters do not suppress its checks. Issue #232 changes no App,
+branch-protection or ruleset settings. Pure documentation verification remains
+exactly `git diff --check` under the canonical agent instructions; surface any
+external required-check or App conflict before publishing that change.
+
 ## Execution and trust
 
 `scripts/run_self_hosted_ci.sh` is a host-only, one-job controller. A systemd user
@@ -139,5 +172,6 @@ one authoritative full candidate gate on the self-hosted runner; do not duplicat
 that same complete gate manually on the host. Reuse the PR result only through
 verified main admission. OCI publication rebuilds for the actual main commit label
 and independently verifies that new image; it does not rerun the whole pytest suite.
-Pure Markdown changes keep the existing diff-only classification. No review or
-result is transferred across a materially changed candidate by assumption.
+Pure Markdown changes use the native event exclusions above and local diff-only
+verification. No review or result is transferred across a materially changed
+candidate by assumption.

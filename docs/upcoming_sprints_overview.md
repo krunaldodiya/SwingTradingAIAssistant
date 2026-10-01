@@ -46,8 +46,14 @@ each requested stock gained more or lost less than one explicit reference stock
 over the same 20 completed daily intervals. The first slice uses comparable
 retained Upstox RAW evidence, exact price-change differences and explicit missing
 evidence. It excludes official indexes, rankings, signals, new sources/captures,
-and agent-dossier or Volume integration. Sprint 27 is In Progress; implementation,
-independent reviews and final verification are not yet complete.
+and agent-dossier or Volume integration. Sprint 27 is complete. [PR #231](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/231)
+is merged; issue #230 and milestone 19 are closed, and the Delivery Project item
+is Done. Both independent reviews passed on candidate `3d5f2e6`; the full
+self-hosted gate passed 5,826 tests with 87.42% coverage, plus build, installed-wheel
+and Linux/Podman distribution checks. Main `ff872671d2ce52dd41bd45a6eef73d7f4133b7ea`
+preserves the exact reviewed tree and passed
+[admission run 36668719053](https://github.com/krunaldodiya/SwingTradingAIAssistant/actions/runs/36668719053).
+This closes the retained-only CLI/SDK slice, without expanding its non-goals.
 
 Sprint 26 / [#226](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/226)
 and its CI prerequisite [#228](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/228)
