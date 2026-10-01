@@ -41,16 +41,18 @@ update those documents as well as the note.
 **Status: selected-source reconciliation in progress, 2026-10-01.**
 [#234](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/234) retains
 private source-integrity, disposition and conflict evidence for the September 25
-backup. Prior passes report full-text reads of 145 of 1,327 documents, 956 of
+backup. Completed passes report full-text reads of 145 of 1,327 documents, 1,276 of
 14,208 memory units and all eight current mental models. These are read-coverage
-counts, not proof that every claim is reconciled: one large document still has
-a pending claim crosswalk. Follow-up of the first decision pass's 13 unresolved
+counts, not proof that every claim is reconciled. The large conversation's
+46-family crosswalk is complete for its selected durable claims, with recurring
+capture activation left open; it reuses the prior full-source reading and does
+not add to those counts. Follow-up of the first decision pass's 13 unresolved
 rows resolved nine historical findings, retained two duplicate rows as one open
 SDK exception-boundary question and kept historical #198 tracker lineage open;
 the capture-timing correction was verified without granting current operational
 authority. These are evidence dispositions, not fresh runtime test results.
 The remaining 1,182 documents and
-13,252 memory units have no complete semantic disposition; inventory, hashes
+12,932 memory units have no complete semantic disposition; inventory, hashes
 and keyword screening cannot supply one. History and graph records have no
 blanket semantic-review claim. No complete migration or independence from the
 unreviewed recovery source is claimed.

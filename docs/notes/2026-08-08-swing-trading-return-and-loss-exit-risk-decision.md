@@ -134,7 +134,7 @@ not a request to collect or process those data in the current product.
 ## Recovered research rationale — reconciled 2026-10-01
 
 **Status: deferred research and rejected defaults; no strategy approval.** The
-August 20 discussion retained these alternatives for later specification:
+August 24 discussion retained these alternatives for later specification:
 
 - A fixed-percentage trailing exit may be researched later. The proposed small
   comparison is structural invalidation plus a time stop versus one
@@ -152,12 +152,14 @@ August 20 discussion retained these alternatives for later specification:
   unexplained return is not automatically alpha. This adds no input factor or
   implementation item under [Plan 34](../plans/34-swing-research-feature-map.md).
 
-Provenance: recovered document `01a01d42-f289-7000-9d9a-c9025138589d`, August 20
+Provenance: recovered document `01a01d42-f289-7000-9d9a-c9025138589d`, August 24
 research discussion (trailing exits, portfolio concentration and factor
 interpretation), with decision memories `eccb11d6-c442-4b52-9230-e8592783435c`,
 `f1665182-b623-4417-a3fe-d496b548de23` and
 `ac56eff7-c407-46f7-b69c-13da5b45e3d1`. These are retained discussion rationale,
 not independent validation of the cited research or permission to implement.
+The date comes from the embedded conversation turns; the document's August 20
+creation metadata is not the date of this discussion.
 
 ## Consequences and next steps
 

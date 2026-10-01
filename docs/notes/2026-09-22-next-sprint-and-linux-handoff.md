@@ -168,6 +168,57 @@ schedule or present acquisition authorization. Provenance: original user
 correction in `pi-session:19cc17c2a4fc52f0` (2026-09-18), decision memory
 `733c60a7-9c5b-4df4-b3a1-3b8148d2e707`.
 
+## Additional recovered proposals and operating context — 2026-10-01
+
+**Proposed: explicitly gap-aware summaries.** The September 9 discussion
+considered describing observed data when a requested window is incomplete.
+Twenty observed sessions in a 21-session window must remain labelled incomplete;
+an endpoint return or mean of observed values would need its own accepted
+definition. This proposal does not approve those calculations, filling gaps,
+substituting older bars, or treating partial coverage as confidence. Existing
+[Plan 30](../plans/30-capture-forward-adjusted-ohlcv-evidence-contract.md)
+feature-specific evidence requirements remain unchanged. Source: recovered
+document `01a01d42-f289-7000-9d9a-c9025138589d`, September 9 owner/assistant
+turns 1614–1615 in the private crosswalk.
+
+**Proposed: separately qualified BharatStock-only generation.** The September
+10–11 discussion considered an exact coverage inventory, acquisition budget,
+new dataset generation and validation before switching consumers. Preserve
+original Yahoo and earlier BharatStock evidence and actual knowledge times;
+one provider does not by itself establish equivalent adjustment semantics.
+Bulk regeneration was excluded from that evening's capture scope. This is no
+completed migration or present download authorization. Source: the same recovered
+document, September 10–11 turns 1738 and 1922–1923.
+
+**Open: recurring capture activation.** September 11 intent favored a visible
+existing coordinator over a hidden headless process. Useful proposed operating
+requirements include the actual exchange calendar, duplicate prevention and
+explicit interrupted or missed outcomes; a weekday-only schedule cannot cover
+exceptional sessions. Present activation, retry and catch-up bounds remain
+unverified. This historical intent does not install a scheduler, authorize new
+provider effects or mandate the old harness. Source: the same recovered document,
+September 11 turns 1908 and 1922–1932; current authority remains the canonical
+adapter and the separately scoped operating request.
+
+**Accepted historical preference: self-hosted research routing.** On September
+11 the owner corrected use of Firecrawl Cloud: the intended route was the
+existing self-hosted deployment. Prior Cloud-sourced research must retain that
+provenance. Do not infer Cloud login or fallback permission from that request.
+Old host variables and endpoints do not prove current Linux availability or
+create a universal harness requirement. Source: the same recovered document,
+owner turns at 18:25:07 and 18:31:02 UTC, corroborated by recovered records
+`0a577cce-d990-4521-aba0-73c894f18ae7` and
+`d8a94c61-3e5c-4002-9fdb-711cf0da90b1`.
+
+**Accepted historical preference: handbook synchronization.** The August 28
+owner request favored retaining handbook changes in GitHub; the adjacent
+discussion proposed coherent reviewed PR batches. This is cross-repository
+context, not a second handbook policy or authority to edit that repository here.
+The canonical adapter reserves those changes to the handbook's own governed
+workflow. Source: the same recovered document, owner turn at 03:57:59 UTC and
+its adjacent response; the document's August 20 creation date is not the date
+of that discussion.
+
 ## Resume on Linux
 
 1. Read this decision, then the current canonical project instructions and
