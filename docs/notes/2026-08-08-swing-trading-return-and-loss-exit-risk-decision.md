@@ -4,6 +4,13 @@ Date: 2026-08-08
 Status: proposed/open inputs, rejected approaches, and an accepted direction
 pending a strategy specification
 
+**Later scope clarification — 2026-10-01.** Nifty 50 references below preserve
+the August scope. [The current architecture](../architecture-freeze-v1.md#owner-decision-listed-equity-feature-boundary)
+sets point-in-time Nifty 100 as the default focus; historical membership and
+all capability-specific evidence gates remain necessary. [Plan 43](../plans/43-single-stock-loss-scenario.md)
+now specifies caller-supplied loss-scenario arithmetic and expressly prohibits
+maximum-loss, safe-size or trade-eligibility claims. It does not accept a strategy.
+
 ## Context
 
 The owner is evaluating a future Nifty 50 delivery-equity swing strategy. The
@@ -123,6 +130,52 @@ such as timestamped order and trade audit trails, order modifications and
 cancellations, market-wide order-book and liquidity context, contract details,
 and the relevant exchange or regulatory record. This is an evidence boundary,
 not a request to collect or process those data in the current product.
+
+## Recovered research rationale — reconciled 2026-10-01
+
+**Status: deferred research and rejected defaults; no strategy approval.** The
+August 24 discussion retained these alternatives for later specification:
+
+- A fixed-percentage trailing exit may be researched later. The proposed small
+  comparison is structural invalidation plus a time stop versus one
+  preregistered fixed-percentage trail, with gap/slippage treatment. ATR,
+  SuperTrend and moving-average trailing exits were rejected as defaults:
+  extra parameters introduce tuning risk, and the discussion did not validate
+  any exit family.
+- Five positions, equal 20% weights and a one-in-one-out rule were rejected as
+  diversification defaults. Shared Industry, market and event exposure can
+  leave the basket concentrated. Those numbers are research candidates only;
+  a nominal 1:3 target is not evidence of profitability. The net-expectancy and
+  concentration requirements above remain the evaluation basis.
+- A generic factor/alpha signal module was rejected. Factor attribution remains
+  a possible later evaluation metric with explicit benchmark/model definitions;
+  unexplained return is not automatically alpha. This adds no input factor or
+  implementation item under [Plan 34](../plans/34-swing-research-feature-map.md).
+- The proposed preregistration shortlist was one N-day breakout, one
+  point-in-time Relative Strength definition, one conservative liquidity
+  sufficiency rule, and the exit comparison above. The owner requested retaining
+  the discussion; that did not approve implementing this shortlist. Each
+  calculation still needs a concrete research question and accepted contract.
+- The discussion cautioned against transferring findings between different
+  markets, horizons and instruments: months-long gross long–short momentum
+  research does not establish a one-week Indian long-only ranking rule, and
+  multi-year reversal or option-straddle findings do not validate an equity
+  swing strategy. These are retained applicability questions, not a fresh
+  verification of the referenced studies or their reported performance.
+- ETF discussion raised premium/discount, creation/redemption and market-making,
+  underlying-market timing and liquidity, tracking error and index concentration
+  as distinct research questions. It did not establish that an ETF is inherently
+  safer or that this stock-research system can be reused unchanged. No ETF
+  ingestion, strategy or scope expansion is approved by retaining that rationale.
+
+Provenance: recovered document `01a01d42-f289-7000-9d9a-c9025138589d`, August 24
+research discussion (trailing exits, portfolio concentration and factor
+interpretation), with decision memories `eccb11d6-c442-4b52-9230-e8592783435c`,
+`f1665182-b623-4417-a3fe-d496b548de23` and
+`ac56eff7-c407-46f7-b69c-13da5b45e3d1`. These are retained discussion rationale,
+not independent validation of the cited research or permission to implement.
+The date comes from the embedded conversation turns; the document's August 20
+creation metadata is not the date of this discussion.
 
 ## Consequences and next steps
 

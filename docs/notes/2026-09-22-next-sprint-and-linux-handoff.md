@@ -6,6 +6,28 @@ Status: accepted documentation of planning direction; implementation contracts,
 numbered sprints, dates and GitHub milestone assignments are not yet approved
 or created by this record.
 
+**Later checkpoint — 2026-10-01.** Scheduling, delivery and restore instructions
+below are September 22 history. Later accepted Plans and live GitHub govern:
+[Plan 42](../plans/42-agent-volume-relative-strength-context.md) / closed
+[#235](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/235) delivered
+Volume and Relative Strength agent context; [Plan 43](../plans/43-single-stock-loss-scenario.md)
+/ closed [#237](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/237)
+delivered bounded caller-supplied loss-scenario arithmetic. Neither establishes
+a validated strategy or full risk assessment. The Linux Hindsight restore step
+is historical, not a current installation prerequisite; selected recovered
+knowledge is being reconciled under [#234](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/234).
+
+**Historical acceptance limit — Sprint 20, September 23.**
+[#210's closeout](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/210#issuecomment-5792142241)
+accepted a documented one-time assistant-context disclosure deviation. The
+security/privacy review withdrew its clean privacy PASS because an earlier
+inspection exposed derived details beyond the approved projection; the original
+privacy acceptance item remained unchecked. Final artifact verification and
+functional acceptance did not erase that incident. Closed status therefore does
+not imply a clean privacy pass, and future observations retain the narrow
+derived-fact disclosure boundary. This is historical acceptance provenance, not
+a broader disclosure exception.
+
 ## Decision and context
 
 After closing parent #172, the owner asked what would make the product a usable
@@ -23,6 +45,23 @@ necessary-only feature admission, source authorization or delivery gates.
 ## First priority after migration
 
 **Single-stock, evidence-backed research through an external AI assistant.**
+
+**Accepted broad direction, clarified 2026-09-23.** The first consumer was a
+local coding assistant using the existing CLI. The broader product is primarily
+consumed by an AI harness; manual use is secondary. Question-specific single-
+stock and bounded-list factual workflows are intermediate capabilities, not the
+final research experience. Eventual candidate and BUY, HOLD, EXIT or NO_TRADE
+reasoning belongs to the consuming AI over supplied evidence. Strategy labels,
+eligibility/risk rules, ranking, portfolio state, source authority and historical
+and out-of-sample validation need separately accepted contracts before actionable
+claims. The [architecture boundary](../architecture-freeze-v1.md#external-consumer-ai-agent-harness)
+still assigns deterministic facts and calculations to the tool and excludes
+broker orders. This clarification does not approve a signal, provider or sprint.
+
+Provenance: recovered project-context records
+`codex-20260922-swing-single-stock-planning` (2026-09-22) and
+`codex-20260923-product-endstate-nifty100-agent-signals` (2026-09-23), reconciled
+under #234 against the current architecture and accepted Plans on 2026-10-01.
 
 Start with one supported stock and completed daily sessions. Reuse the existing
 CLI/SDK and deterministic calculations. Select the smallest agent-facing
@@ -110,6 +149,170 @@ promise to execute all six in its row order.
   files, credentials or every migration dependency are safe to erase. Preserve
   any still-local work and securely migrate/re-establish credentials before
   formatting. macOS Keychain contents do not travel in the data archive.
+
+## Recovered operating distinction — reconciled 2026-10-01
+
+**Status: accepted discussion rationale, scoped to routine authorized capture.**
+On September 15 the owner distinguished execution of an already reviewed CLI
+for a bounded, authorized capture from feature development. Routine operation
+does not need a new independent code review each day; direct built-in
+exact-read, reparse and reuse verification plus truthful bounded evidence remain
+required. Anomalies and code, configuration, process, provider or schema changes
+retain their applicable review and authority gates. This record grants no new
+provider, credential, recurring-capture or scheduler authority and does not
+waive review of a changed implementation.
+
+Provenance: original user correction of 2026-09-15 in recovered document
+`pi-session:98d17070f2f9c631`, decision memory
+`7988c98e-4245-44b9-98e4-0300d05b337d`; current
+[canonical delivery controls](../mandatory-agent-instructions.md#delivery-and-evidence-controls)
+continue to govern changes.
+
+**Accepted operating preference, clarified 2026-09-18.** The owner directed
+normal current-day BharatStock capture at or after 20:00 IST. A separately
+authorized request for an already completed past session does not inherit a
+wait until today's 20:00. Keep the historical target date and actual acquisition
+and knowledge times; later retrieval cannot prove earlier availability. This
+preference is compatible with the [roadmap's source-availability guidance](../roadmap.md):
+it is no provider publication guarantee, new executable timing gate, recurring
+schedule or present acquisition authorization. Provenance: original user
+correction in `pi-session:19cc17c2a4fc52f0` (2026-09-18), decision memory
+`733c60a7-9c5b-4df4-b3a1-3b8148d2e707`.
+
+## Additional recovered proposals and operating context — 2026-10-01
+
+**Proposed: explicitly gap-aware summaries.** The September 9 discussion
+considered describing observed data when a requested window is incomplete.
+Twenty observed sessions in a 21-session window must remain labelled incomplete;
+an endpoint return or mean of observed values would need its own accepted
+definition. This proposal does not approve those calculations, filling gaps,
+substituting older bars, or treating partial coverage as confidence. Existing
+[Plan 30](../plans/30-capture-forward-adjusted-ohlcv-evidence-contract.md)
+feature-specific evidence requirements remain unchanged. Source: recovered
+document `01a01d42-f289-7000-9d9a-c9025138589d`, September 9 owner/assistant
+turns 1614–1615 in the private crosswalk.
+
+**Proposed: separately qualified BharatStock-only generation.** The September
+10–11 discussion considered an exact coverage inventory, acquisition budget,
+new dataset generation and validation before switching consumers. Preserve
+original Yahoo and earlier BharatStock evidence and actual knowledge times;
+one provider does not by itself establish equivalent adjustment semantics.
+Bulk regeneration was excluded from that evening's capture scope. This is no
+completed migration or present download authorization. Source: the same recovered
+document, September 10–11 turns 1738 and 1922–1923.
+
+**Open: recurring capture activation.** September 11 intent favored a visible
+existing coordinator over a hidden headless process. Useful proposed operating
+requirements include the actual exchange calendar, duplicate prevention and
+explicit interrupted or missed outcomes. The owner requested skipping weekends
+and holidays; the recorded operating proposal excluded exceptional weekend
+sessions unless separately authorized. Missing or conflicting calendar evidence
+would stop capture, and missing provider data would not establish a holiday.
+Present activation, retry and catch-up bounds remain
+unverified. This historical intent does not install a scheduler, authorize new
+provider effects or mandate the old harness. Source: the same recovered document,
+September 11 turns 1908 and 1922–1932; current authority remains the canonical
+adapter and the separately scoped operating request.
+
+**Accepted historical preference: self-hosted research routing.** On September
+11 the owner corrected use of Firecrawl Cloud: the intended route was the
+existing self-hosted deployment. Prior Cloud-sourced research must retain that
+provenance. Do not infer Cloud login or fallback permission from that request.
+Old host variables and endpoints do not prove current Linux availability or
+create a universal harness requirement. Source: the same recovered document,
+owner turns at 18:25:07 and 18:31:02 UTC, corroborated by recovered records
+`0a577cce-d990-4521-aba0-73c894f18ae7` and
+`d8a94c61-3e5c-4002-9fdb-711cf0da90b1`.
+
+**Accepted historical preference: handbook synchronization.** The August 28
+owner request favored retaining handbook changes in GitHub; the adjacent
+discussion proposed coherent reviewed PR batches. This is cross-repository
+context, not a second handbook policy or authority to edit that repository here.
+The canonical adapter reserves those changes to the handbook's own governed
+workflow. Source: the same recovered document, owner turn at 03:57:59 UTC and
+its adjacent response; the document's August 20 creation date is not the date
+of that discussion.
+
+**Historical privacy boundary, September 3.** The handbook publication record
+kept earlier repository history in a separate private archive because it
+contained sensitive operational material. Preserve that archive and its
+historical branches and pull-request references as private; a synchronization
+preference does not authorize publishing those older refs. This note makes no
+claim about the archive's present availability or backup verification. Source:
+recovered record `c6256d8e-7ff5-4a3c-97db-4db4b505b916` and the September 3
+00:48 UTC publication report in `01a01d42-f289-7000-9d9a-c9025138589d`.
+
+**Open historical design: explicit correction attempts.** A September 16
+assignment referred to Issue #198 and proposed a distinct attempt for an exact
+incomplete 100-stock, one-session capture: zero observed, 100 insufficient,
+zero unattempted and no shared failure. Ordinary reuse would remain effect-free.
+A correction would pin the admitted parent, ordered cohort, selection, schedule
+and configuration, use the actual later cutoff, and reserve a separate private
+attempt before credentials or provider calls. Duplicate, concurrent or
+interrupted attempts would not silently replay effects. Bounded retained
+responses and a provider-free verification path would preserve lineage and
+actual counts; unchanged material content would produce an unchanged-attempt
+receipt rather than an invented new revision. All earlier evidence would survive.
+
+The owner explicitly paused this work on September 16 at 19:18:45 UTC. The
+handoff reported uncommitted changes and tests that preceded later edits; it
+did not establish a verified final implementation. Present tracker lineage and
+delivery remain unverified. Retaining this proposal neither resumes it nor
+establishes general retry, scheduling or acquisition authority. Source:
+`pi-session:af10bcc3e6ea0ff6`, initial assignment at 18:57:20 UTC and the pause
+and handoff at 19:18:45–19:18:50 UTC; corroborating pause record
+`pi-explicit:2759581e312a82d5:db5b9e8ec8981e29`.
+
+**Open historical retention gap: fundamental screening criteria.** A September 8
+record says the owner had previously discussed a small set of important
+fundamental facts for selection, but the exact agreed criteria had not been
+recovered. The owner prioritized daily capture over that audit. Broad #178
+context does not reconstruct those missing criteria; this reconciliation found
+no accepted list to substitute. Preserve the question without inventing filters
+or treating the remembered agreement as implementation approval. Source:
+`7354d7bc-e1f0-4f9f-9936-44396e67d1f3`, corroborating memory
+`5e78395d-b027-4e38-849f-0ca69bc501a7`.
+
+## Recovered maintenance lessons — 2026-10-01
+
+**Status: historical operating rationale, not new runtime requirements.** These
+August–September incidents explain precautions useful during later governed
+maintenance. They are not fresh defect reproductions or permission to alter an
+accepted environment, evidence boundary or release process.
+
+- Copied virtual environments may retain interpreter paths pointing to another
+  checkout. Establish the actual interpreter and source identity; historical
+  platform/version choices do not replace the currently admitted matrix.
+- Strict installed-wheel checks distinguish physical paths from symlink aliases.
+  A path alias is not evidence that the intended checkout or installed artifact
+  was exercised.
+- Coverage output can dirty an exact review candidate, and concurrent cleanup
+  can race source-distribution enumeration. Keep generated output outside a
+  frozen candidate where supported and serialize operations that share it.
+- An injected-failure test should demonstrate that execution reached its intended
+  seam. An earlier stale-manifest rejection returning the same generic error
+  cannot prove the injected failure was handled correctly.
+- A command's working directory does not necessarily control a separate file
+  editing tool. Resolve the intended checkout explicitly; preserve unrelated
+  edits and repair only the affected changes after a mistaken write.
+- Negating a GitHub closing phrase in prose did not prevent an unwanted issue
+  closure in a September 8 incident. Avoid closing syntax for excluded issues
+  and read back actual tracker state after delivery.
+- A provider's latest snapshot date and date-bounded history are different
+  diagnostic observations. Their internal agreement does not establish price
+  adjustment semantics or the first time data became available.
+
+Provenance: recovered short records `ad0faada-fedb-4716-8e50-70a96418959c` and
+`2a008ae1-588b-424f-86d4-5771797acafe` (environment paths),
+`f9886f0c-bf0d-4d9a-8a5d-9b9ec0dfaf3c` (physical paths),
+`399685e8-88b4-4505-9948-5c97202d4d0a` and
+`87946a83-44c1-4969-b299-2b4baa51c8ca` (coverage/build concurrency),
+`1680d0ec-efb6-4429-860b-fb2274271189` (injected seam),
+`80a41dba-eefb-4d04-840a-909d649997d0` (checkout paths),
+`f98b6726-b53f-47d7-9ff7-cc3ddaac7996` (closing syntax) and
+`aa32e098-5571-4158-b713-7927f856f9f6` (snapshot/history diagnostics).
+Their August 25–September 10 retention dates do not independently establish
+incident timing; only explicit incident dates are stated above.
 
 ## Resume on Linux
 
