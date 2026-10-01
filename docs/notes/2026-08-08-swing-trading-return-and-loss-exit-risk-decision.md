@@ -151,6 +151,22 @@ August 24 discussion retained these alternatives for later specification:
   a possible later evaluation metric with explicit benchmark/model definitions;
   unexplained return is not automatically alpha. This adds no input factor or
   implementation item under [Plan 34](../plans/34-swing-research-feature-map.md).
+- The proposed preregistration shortlist was one N-day breakout, one
+  point-in-time Relative Strength definition, one conservative liquidity
+  sufficiency rule, and the exit comparison above. The owner requested retaining
+  the discussion; that did not approve implementing this shortlist. Each
+  calculation still needs a concrete research question and accepted contract.
+- The discussion cautioned against transferring findings between different
+  markets, horizons and instruments: months-long gross long–short momentum
+  research does not establish a one-week Indian long-only ranking rule, and
+  multi-year reversal or option-straddle findings do not validate an equity
+  swing strategy. These are retained applicability questions, not a fresh
+  verification of the referenced studies or their reported performance.
+- ETF discussion raised premium/discount, creation/redemption and market-making,
+  underlying-market timing and liquidity, tracking error and index concentration
+  as distinct research questions. It did not establish that an ETF is inherently
+  safer or that this stock-research system can be reused unchanged. No ETF
+  ingestion, strategy or scope expansion is approved by retaining that rationale.
 
 Provenance: recovered document `01a01d42-f289-7000-9d9a-c9025138589d`, August 24
 research discussion (trailing exits, portfolio concentration and factor
