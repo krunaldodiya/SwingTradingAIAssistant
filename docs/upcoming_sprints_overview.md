@@ -1,5 +1,26 @@
 # Upcoming Sprints Overview
 
+## Sprint 29 — accepted October 1, 2026
+
+[Sprint 29 / #237](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/237)
+delivers the bounded caller-assumed single-stock loss scenario in
+[Plan 43](plans/43-single-stock-loss-scenario.md): supplied entry, stop and
+whole-share quantity produce exact gross amounts with explicit excluded costs
+and unassessed risk eligibility. This is hypothetical arithmetic, not a market
+evidence admission, stop recommendation or maximum-loss guarantee. The owner
+authorized implementation and PR/Issue/sprint closure after required gates.
+Implementation and review are pending at this planning checkpoint; live #237
+owns subsequent lifecycle and exact delivery evidence.
+
+Sprint 28 is closed: #235 is Project Done, milestone 20 closed, and PR #236
+merged as `67fe9b70ffa5058f38290817703097eaa941a8ad`, preserving reviewed tree
+`64a39197cfbc06fa14bc829d031d9c049815c49c`. Main admission run 36704617592
+passed. This supersedes older active-Sprint-28 wording below. Screening #211
+is already delivered; a new screen is not a prerequisite. Full risk policy,
+provider adoption, public release, and separate #232/PR #233 and #234 remain
+outside Sprint 29.
+
+
 ## Sprint 28 — accepted September 30, 2026
 
 The owner accepted [#235](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/235):

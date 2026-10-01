@@ -29,6 +29,8 @@ remediation are in
 
 ## Index
 
+- [Sprint 29 — Single-stock loss scenario](sprint-29.md) — governed by [#237](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/237); live Issue owns delivery state.
+
 - [Sprint 0 — Foundation](sprint-0.md) — closed by [PR #1](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/1), merged to `main` as `0a518813ec26d32945ce49d1f27999e8618f64cc`.
 - [Sprint 1 — Resumable one-minute storage](sprint-1.md) — delivery closed at
   21/21 by [PR #23](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/23),
