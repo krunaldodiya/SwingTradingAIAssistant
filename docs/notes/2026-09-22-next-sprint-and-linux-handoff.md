@@ -219,6 +219,15 @@ workflow. Source: the same recovered document, owner turn at 03:57:59 UTC and
 its adjacent response; the document's August 20 creation date is not the date
 of that discussion.
 
+**Historical privacy boundary, September 3.** The handbook publication record
+kept earlier repository history in a separate private archive because it
+contained sensitive operational material. Preserve that archive and its
+historical branches and pull-request references as private; a synchronization
+preference does not authorize publishing those older refs. This note makes no
+claim about the archive's present availability or backup verification. Source:
+recovered record `c6256d8e-7ff5-4a3c-97db-4db4b505b916` and the September 3
+00:48 UTC publication report in `01a01d42-f289-7000-9d9a-c9025138589d`.
+
 **Open historical design: explicit correction attempts.** A September 16
 assignment referred to Issue #198 and proposed a distinct attempt for an exact
 incomplete 100-stock, one-session capture: zero observed, 100 insufficient,
