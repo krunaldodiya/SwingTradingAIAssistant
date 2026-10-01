@@ -263,6 +263,47 @@ establishes general retry, scheduling or acquisition authority. Source:
 and handoff at 19:18:45–19:18:50 UTC; corroborating pause record
 `pi-explicit:2759581e312a82d5:db5b9e8ec8981e29`.
 
+## Recovered maintenance lessons — 2026-10-01
+
+**Status: historical operating rationale, not new runtime requirements.** These
+August–September incidents explain precautions useful during later governed
+maintenance. They are not fresh defect reproductions or permission to alter an
+accepted environment, evidence boundary or release process.
+
+- Copied virtual environments may retain interpreter paths pointing to another
+  checkout. Establish the actual interpreter and source identity; historical
+  platform/version choices do not replace the currently admitted matrix.
+- Strict installed-wheel checks distinguish physical paths from symlink aliases.
+  A path alias is not evidence that the intended checkout or installed artifact
+  was exercised.
+- Coverage output can dirty an exact review candidate, and concurrent cleanup
+  can race source-distribution enumeration. Keep generated output outside a
+  frozen candidate where supported and serialize operations that share it.
+- An injected-failure test should demonstrate that execution reached its intended
+  seam. An earlier stale-manifest rejection returning the same generic error
+  cannot prove the injected failure was handled correctly.
+- A command's working directory does not necessarily control a separate file
+  editing tool. Resolve the intended checkout explicitly; preserve unrelated
+  edits and repair only the affected changes after a mistaken write.
+- Negating a GitHub closing phrase in prose did not prevent an unwanted issue
+  closure in a September 8 incident. Avoid closing syntax for excluded issues
+  and read back actual tracker state after delivery.
+- A provider's latest snapshot date and date-bounded history are different
+  diagnostic observations. Their internal agreement does not establish price
+  adjustment semantics or the first time data became available.
+
+Provenance: recovered short records `ad0faada-fedb-4716-8e50-70a96418959c` and
+`2a008ae1-588b-424f-86d4-5771797acafe` (environment paths),
+`f9886f0c-bf0d-4d9a-8a5d-9b9ec0dfaf3c` (physical paths),
+`399685e8-88b4-4505-9948-5c97202d4d0a` and
+`87946a83-44c1-4969-b299-2b4baa51c8ca` (coverage/build concurrency),
+`1680d0ec-efb6-4429-860b-fb2274271189` (injected seam),
+`80a41dba-eefb-4d04-840a-909d649997d0` (checkout paths),
+`f98b6726-b53f-47d7-9ff7-cc3ddaac7996` (closing syntax) and
+`aa32e098-5571-4158-b713-7927f856f9f6` (snapshot/history diagnostics).
+Their August 25–September 10 retention dates do not independently establish
+incident timing; only explicit incident dates are stated above.
+
 ## Resume on Linux
 
 1. Read this decision, then the current canonical project instructions and
