@@ -152,6 +152,12 @@ from .intraday_views import (
     OpenMonthDerivedIntradayQueryServiceV1,
     RetainedOpenMonthScheduleResolverV1,
 )
+from .loss_scenario import (
+    LossScenarioInputError,
+    calculate_loss_scenario,
+    loss_scenario_request_from_json,
+    loss_scenario_result_bytes,
+)
 from .nifty50_read_workflow import (
     BoundedNifty50ReadRequestV1,
     BoundedPointInTimeNifty50ReadServiceV1,
@@ -401,6 +407,10 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     commands = parser.add_subparsers(dest="command", required=True)
+    loss = commands.add_parser(
+        "loss-scenario", help="calculate hypothetical loss from caller assumptions"
+    )
+    loss.add_argument("--input-file", type=Path, required=True)
     download = commands.add_parser(
         "download",
         help="persist one or many point-in-time Nifty 50 one-minute downloads",
@@ -702,6 +712,8 @@ def main(  # noqa: C901 - command dispatch remains explicit.
             sys.stderr.write("invalid regime-current request\n")
             return 2
         args = _parse_cli_args(argv)
+        if args.command == "loss-scenario":
+            return _run_loss_scenario_command(args)
         if args.command == "probe-upstox":
             return _run_probe(args)
         if args.command == "cohort-current":
@@ -1315,6 +1327,18 @@ def _run_relative_strength_command(args: argparse.Namespace, clock: _ClockV1) ->
     control.ensure_live()
     sys.stdout.write(output)
     return 0 if result["state"] == "OBSERVED" else 1
+
+
+def _run_loss_scenario_command(args: argparse.Namespace) -> int:
+    try:
+        raw = _read_current_regime_input(args.input_file)
+        request = loss_scenario_request_from_json(raw)
+    except (LossScenarioInputError, OSError):
+        raise _RequestInvalid from None
+    result = calculate_loss_scenario(request)
+    output = loss_scenario_result_bytes(result).decode("utf-8")
+    sys.stdout.write(output)
+    return 0
 
 
 def _read_current_regime_input(path: Path) -> bytes:
