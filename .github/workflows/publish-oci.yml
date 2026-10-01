@@ -117,13 +117,27 @@ jobs:
             "$runtime" push "$remote_tag"
             published_id="$local_id"
           fi
+          for alias in "$local_tag" "$remote_tag"; do
+            test "$("$runtime" image inspect "$alias" --format '{{.Id}}')" = "$local_id"
+          done
+          "$runtime" image rm --no-prune "$local_tag" "$remote_tag"
+          if "$runtime" image inspect "$local_id" > /dev/null 2>&1; then
+            echo 'Verified image remains in local storage; refusing stale digest metadata.' >&2
+            exit 1
+          fi
+          "$runtime" pull --platform linux/amd64 "$remote_tag"
+          test "$("$runtime" image inspect "$remote_tag" --format '{{.Id}}')" = "$local_id"
+          test "$("$runtime" image inspect "$remote_tag" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$ADMITTED_SHA"
+          test "$("$runtime" image inspect "$remote_tag" --format '{{index .Config.Labels "org.opencontainers.image.source"}}')" = "https://github.com/${GITHUB_REPOSITORY}"
+          test "$("$runtime" image inspect "$remote_tag" --format '{{index .Config.Labels "org.swingtradingaiassistant.wheel.sha256"}}')" = "$wheel_sha"
+          test "$("$runtime" image inspect "$remote_tag" --format '{{index .Config.Labels "org.swingtradingaiassistant.requirements.sha256"}}')" = "$requirements_sha"
           digest="$("$runtime" image inspect "$remote_tag" --format '{{json .RepoDigests}}' |
             python3 .github/scripts/registry_digest.py "$image")"
           case "$digest" in
             "$image"@sha256:*) ;;
             *) echo 'No registry digest was returned.' >&2; exit 1 ;;
           esac
-          "$runtime" image rm "$remote_tag"
+          "$runtime" image rm --no-prune "$remote_tag"
           "$runtime" pull --platform linux/amd64 "$digest"
           test "$("$runtime" image inspect "$digest" --format '{{.Id}}')" = "$published_id"
           test "$("$runtime" image inspect "$digest" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$ADMITTED_SHA"

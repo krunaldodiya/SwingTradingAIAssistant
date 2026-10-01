@@ -9,7 +9,7 @@ AGENT_RESEARCH_RUN_RUNTIME_SOURCE_SHA256_V1: Final[dict[str, str]] = {
     "src/swing_trading_ai_assistant/market_data/agent_cohort_request.py": "dbf2de40af4cce777e50fc70cc13cd125bab01d3e4cde49374d8c8c5be0f460b",
     "src/swing_trading_ai_assistant/market_data/agent_event_context.py": "6bf86acf779ae2a7f9d35246ee174937da91b211faa5b2a5e336a145db802d52",
     "src/swing_trading_ai_assistant/market_data/agent_research_run.py": "1271f1e01a35f00c66f348f96b02ad9ddd4943b595f079bf617fb2fdc2fd514f",
-    "src/swing_trading_ai_assistant/market_data/cli.py": "82e7a8dc1f80a653a4aa744a8ca4d0a40713ba4dfe34c15ed58f6766ca5988d0",
+    "src/swing_trading_ai_assistant/market_data/cli.py": "f5fea2c0af9eade0b15b33a95c36f79f7c8f19ed94ae52cd203d8c64c3716a79",
     "src/swing_trading_ai_assistant/market_data/runtime_source_verifier.py": "834fb3261a269b35e582d91b7c497be276bd102078bb9d71816fe2f77a4c721a",
     "src/swing_trading_ai_assistant/volume_analysis/__init__.py": "89cce37fb8cc6c1b9b12b0959cf4a2edb5103e13dcf93ce1b969092af3f147c3",
     "src/swing_trading_ai_assistant/volume_analysis/current.py": "e55e854e4a1629be4e2bf522dc1dcaf2cd9ae763784ac557b6b201591a6c8618",
