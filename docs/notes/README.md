@@ -38,24 +38,37 @@ update those documents as well as the note.
 
 ## Recovered-context reconciliation
 
-**Status: selected-source reconciliation in progress, 2026-10-01.**
-[#234](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/234) retains
-private source-integrity, disposition and conflict evidence for the September 25
-backup. Completed passes report full-text reads of 145 of 1,327 documents, 1,276 of
-14,208 memory units and all eight current mental models. These are read-coverage
-counts, not proof that every claim is reconciled. The large conversation's
-46-family crosswalk is complete for its selected durable claims, with recurring
-capture activation left open; it reuses the prior full-source reading and does
-not add to those counts. Follow-up of the first decision pass's 13 unresolved
-rows resolved nine historical findings, retained two duplicate rows as one open
-SDK exception-boundary question and kept historical #198 tracker lineage open;
-the capture-timing correction was verified without granting current operational
-authority. These are evidence dispositions, not fresh runtime test results.
-The remaining 1,182 documents and
-12,932 memory units have no complete semantic disposition; inventory, hashes
-and keyword screening cannot supply one. History and graph records have no
-blanket semantic-review claim. No complete migration or independence from the
-unreviewed recovery source is claimed.
+**Status: recovered-knowledge reconciliation prepared, 2026-10-01; delivery
+tracked in [#234](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/234).**
+Private source-integrity and per-record disposition evidence covers semantic
+reading of all 14,208 recovered memory units and all eight current mental models.
+There are attributed complete reads of 164 of 1,327 original source documents,
+plus selected excerpts used to corroborate consequential claims. Sensitive
+values were excluded from relevant reading displays and from these notes.
+
+Useful missing rationale is retained below; other records are already covered
+by current or version-scoped contracts, superseded, historical, or transient.
+“Covered” includes explicitly documented proposals and open questions; it does
+not mean implemented, newly validated or resolved. The large conversation's
+46-family crosswalk and later corrections preserve actual discussion dates and
+owner-retention versus implementation-approval distinctions. Earlier review
+findings were checked against later accepted contracts and delivery evidence;
+old test counts and approvals are not transferred to current code.
+
+The remaining 1,163 original documents have no attributed whole-document read.
+Memory-unit reading does not establish every original conversation's recovery;
+history and graph records have no blanket semantic-review claim. Preserve the
+backup and private audit evidence. Routine planning should use current project
+docs and GitHub, without requiring a Hindsight installation, while historical
+source-recovery questions remain bounded by this coverage limit.
+
+One recovered reference to a separate `live_gate` cleanup finding lacks its
+actual defect details or resolution. The private conflict register preserves
+that lineage question; current code alone proves neither a bug nor closure.
+The SDK question below, unrecovered exact fundamentals criteria, paused
+correction-attempt lineage and recurring-capture activation remain explicitly
+open. This reconciliation does not authorize implementing those items or claim
+complete independence from every unreviewed original source.
 
 The dated additions below retain selected missing rationale and supersession
 links. Recovered harness, model, tracker and provider instructions do not replace
