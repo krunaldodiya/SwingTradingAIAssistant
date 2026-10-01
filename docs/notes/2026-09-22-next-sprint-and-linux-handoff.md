@@ -204,8 +204,11 @@ document, September 10–11 turns 1738 and 1922–1923.
 **Open: recurring capture activation.** September 11 intent favored a visible
 existing coordinator over a hidden headless process. Useful proposed operating
 requirements include the actual exchange calendar, duplicate prevention and
-explicit interrupted or missed outcomes; a weekday-only schedule cannot cover
-exceptional sessions. Present activation, retry and catch-up bounds remain
+explicit interrupted or missed outcomes. The owner requested skipping weekends
+and holidays; the recorded operating proposal excluded exceptional weekend
+sessions unless separately authorized. Missing or conflicting calendar evidence
+would stop capture, and missing provider data would not establish a holiday.
+Present activation, retry and catch-up bounds remain
 unverified. This historical intent does not install a scheduler, authorize new
 provider effects or mandate the old harness. Source: the same recovered document,
 September 11 turns 1908 and 1922–1932; current authority remains the canonical
