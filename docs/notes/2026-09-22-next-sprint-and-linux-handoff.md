@@ -17,6 +17,17 @@ a validated strategy or full risk assessment. The Linux Hindsight restore step
 is historical, not a current installation prerequisite; selected recovered
 knowledge is being reconciled under [#234](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/234).
 
+**Historical acceptance limit — Sprint 20, September 23.**
+[#210's closeout](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/210#issuecomment-5792142241)
+accepted a documented one-time assistant-context disclosure deviation. The
+security/privacy review withdrew its clean privacy PASS because an earlier
+inspection exposed derived details beyond the approved projection; the original
+privacy acceptance item remained unchecked. Final artifact verification and
+functional acceptance did not erase that incident. Closed status therefore does
+not imply a clean privacy pass, and future observations retain the narrow
+derived-fact disclosure boundary. This is historical acceptance provenance, not
+a broader disclosure exception.
+
 ## Decision and context
 
 After closing parent #172, the owner asked what would make the product a usable
