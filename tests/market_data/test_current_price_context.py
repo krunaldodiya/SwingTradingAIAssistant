@@ -11,6 +11,7 @@ from collections.abc import Callable
 from dataclasses import FrozenInstanceError, replace
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
 import duckdb
@@ -379,7 +380,9 @@ def _public_request(
 
 
 def _retain_industry_for_raw(
-    root: Path, raw_request: CurrentRawPriceContextInputV1
+    root: Path,
+    raw_request: CurrentRawPriceContextInputV1,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> CurrentIndustryArchiveReferenceV1:
     admitted = StorageRootLease.try_admit_read_existing(root)
     assert admitted.lease is not None
@@ -424,10 +427,96 @@ def _retain_industry_for_raw(
         finally:
             writer.lease.close()
     assert isinstance(retained, classification.RetainedCurrentIndustrySnapshotV1)
+    # The writer above uses a historical synthetic clock. Give the reader the
+    # same filesystem clock without bypassing its timestamp comparison. Preserve
+    # subsequent metadata changes, so a touched/replaced marker still fails.
+    marker = (
+        root
+        / ".current-industry-classification-v1"
+        / (f"completion-{retained.snapshot_identity_sha256}.json")
+    )
+    original = marker.stat()
+    offset_ns = marker_ns - max(original.st_mtime_ns, original.st_ctime_ns)
+    real_stat = os.stat
+
+    def fixture_metadata(info: os.stat_result) -> os.stat_result:
+        if (info.st_dev, info.st_ino) != (original.st_dev, original.st_ino):
+            return info
+        fields = {
+            name: getattr(info, name) for name in dir(info) if name.startswith("st_")
+        }
+        fields["st_mtime_ns"] = info.st_mtime_ns + offset_ns
+        fields["st_ctime_ns"] = info.st_ctime_ns + offset_ns
+        return cast(os.stat_result, SimpleNamespace(**fields))
+
+    def fixture_stat(path: Any, *args: Any, **kwargs: Any) -> os.stat_result:
+        return fixture_metadata(real_stat(path, *args, **kwargs))
+
+    def fixture_fstat(descriptor: int) -> os.stat_result:
+        return fixture_metadata(os.fstat(descriptor))
+
+    reader_os = SimpleNamespace(**vars(os))
+    reader_os.stat = fixture_stat
+    reader_os.fstat = fixture_fstat
+    monkeypatch.setattr(reader_module, "os", reader_os)
     return CurrentIndustryArchiveReferenceV1(
         "current-industry-archive-reference@v1",
         retained.snapshot_identity_sha256,
         retained.retained_identity_sha256,
+    )
+
+
+@pytest.mark.parametrize(
+    ("mtime_delta", "ctime_delta", "accepted"),
+    ((-1, -1, True), (0, 0, True), (1, 0, False), (0, 1, False)),
+)
+def test_industry_marker_timestamp_boundary_is_nanosecond_exact(
+    monkeypatch: pytest.MonkeyPatch,
+    mtime_delta: int,
+    ctime_delta: int,
+    accepted: bool,
+) -> None:
+    known_at = datetime(2026, 9, 15, 9, 0, 0, 123456, tzinfo=UTC)
+    deadline_ns = 1_789_462_800_123_456_000
+    metadata = SimpleNamespace(
+        st_mtime_ns=deadline_ns + mtime_delta,
+        st_ctime_ns=deadline_ns + ctime_delta,
+    )
+    reader_os = SimpleNamespace(**vars(os))
+
+    def fixture_stat(*args: object, **kwargs: object) -> SimpleNamespace:
+        return metadata
+
+    reader_os.stat = fixture_stat
+    monkeypatch.setattr(reader_module, "os", reader_os)
+    assert (
+        reader_module._marker_mtime_at_or_before(  # pyright: ignore[reportPrivateUsage]
+            10, "completion-fixture.json", known_at
+        )
+        is accepted
+    )
+
+
+def test_synthetic_industry_archive_still_rejects_a_later_marker_touch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "retained"
+    raw_request = _acquire_retained_raw(root, monkeypatch)
+    reference = _retain_industry_for_raw(root, raw_request, monkeypatch)
+    assert isinstance(
+        _read_retained_industry(root, raw_request, reference),
+        AdmittedCurrentIndustryProjectionV1,
+    )
+    marker = next(
+        (root / ".current-industry-classification-v1").glob("completion-*.json")
+    )
+    before = marker.stat()
+    os.utime(marker, ns=(before.st_atime_ns, before.st_mtime_ns + 1_000_000_000))
+    result = _read_retained_industry(root, raw_request, reference)
+    assert isinstance(result, reader_module.CurrentIndustryReadFailureV1)
+    assert (result.state, result.reason) == (
+        "MALFORMED_EVIDENCE",
+        "CLASSIFICATION_ARCHIVE_MALFORMED",
     )
 
 
@@ -481,7 +570,7 @@ def test_retained_only_public_composes_real_raw_and_industry_artifacts(
         ).outcome
         == "ACQUISITION_COMPLETED"
     )
-    reference = _retain_industry_for_raw(root, raw_request)
+    reference = _retain_industry_for_raw(root, raw_request, monkeypatch)
     admitted = StorageRootLease.try_admit_read_existing(root)
     assert admitted.lease is not None
     with admitted.lease as lease:
@@ -579,7 +668,7 @@ def test_sdk_and_inprocess_cli_emit_identical_retained_public_facts(
 ) -> None:
     root = (tmp_path / "retained").resolve()
     raw_request = _acquire_retained_raw(root, monkeypatch)
-    reference = _retain_industry_for_raw(root, raw_request)
+    reference = _retain_industry_for_raw(root, raw_request, monkeypatch)
     request = _public_request(raw_request, reference)
     sdk = research_current_price_context_v1(
         request, root, clock=_Clock(raw_request.data_selection_time)
@@ -915,7 +1004,7 @@ def test_public_industry_failures_never_suppress_retained_raw_facts(
 ) -> None:
     root = tmp_path / "retained"
     raw_request = _acquire_retained_raw(root, monkeypatch)
-    reference = _retain_industry_for_raw(root, raw_request)
+    reference = _retain_industry_for_raw(root, raw_request, monkeypatch)
     request = _public_request(raw_request, reference)
     valid = research_current_price_context_v1(
         request, root, clock=_Clock(raw_request.data_selection_time)
@@ -966,7 +1055,7 @@ def test_slow_optional_industry_is_local_only_within_shared_deadline(
 ) -> None:
     root = tmp_path / "retained"
     raw_request = _acquire_retained_raw(root, monkeypatch)
-    reference = _retain_industry_for_raw(root, raw_request)
+    reference = _retain_industry_for_raw(root, raw_request, monkeypatch)
     request = _public_request(raw_request, reference)
     clock = _Clock(raw_request.data_selection_time)
     industry_reads = 0
@@ -1101,7 +1190,7 @@ def test_public_n50_success_and_n51_request_rejection_are_effect_bounded(
     )
     assert acquired.outcome == "ACQUISITION_COMPLETED"
     assert acquired.provider_calls == wire.attempts == 50
-    reference = _retain_industry_for_raw(root, raw_request)
+    reference = _retain_industry_for_raw(root, raw_request, monkeypatch)
     request = _public_request(raw_request, reference)
     provider_attempts = wire.attempts
     credential_calls = FixtureTokenProvider.calls
@@ -1376,7 +1465,7 @@ def test_industry_reader_closes_real_malformed_receipt_and_marker_bytes(
 ) -> None:
     root = tmp_path / "retained"
     raw_request = _acquire_retained_raw(root, monkeypatch)
-    reference = _retain_industry_for_raw(root, raw_request)
+    reference = _retain_industry_for_raw(root, raw_request, monkeypatch)
     archive = root / ".current-industry-classification-v1"
 
     target = next(archive.glob(pattern))
@@ -1417,7 +1506,7 @@ def test_industry_reader_closes_real_semantic_row_mutations_before_writer_helper
 ) -> None:
     root = tmp_path / "retained"
     raw_request = _acquire_retained_raw(root, monkeypatch)
-    reference = _retain_industry_for_raw(root, raw_request)
+    reference = _retain_industry_for_raw(root, raw_request, monkeypatch)
     archive = root / ".current-industry-classification-v1"
     source = next(
         archive.glob(
@@ -1513,7 +1602,7 @@ def test_industry_reader_rejects_substitution_after_initial_real_object_read(
 ) -> None:
     root = tmp_path / "retained"
     raw_request = _acquire_retained_raw(root, monkeypatch)
-    reference = _retain_industry_for_raw(root, raw_request)
+    reference = _retain_industry_for_raw(root, raw_request, monkeypatch)
     archive = root / ".current-industry-classification-v1"
     original_read = reader_module._read  # pyright: ignore[reportPrivateUsage]
     substituted = False
@@ -1660,7 +1749,7 @@ def test_public_mint_rereads_every_industry_artifact_after_raw_calculation(
 ) -> None:
     root = tmp_path / "retained"
     raw_request = _acquire_retained_raw(root, monkeypatch)
-    reference = _retain_industry_for_raw(root, raw_request)
+    reference = _retain_industry_for_raw(root, raw_request, monkeypatch)
     target = next((root / ".current-industry-classification-v1").glob(pattern))
     original_recheck = packet_module.recheck_retained_current_raw_context_v1
 
@@ -1704,7 +1793,7 @@ def test_industry_reader_propagates_injected_receipt_and_marker_faults(
 ) -> None:
     root = tmp_path / "retained"
     raw_request = _acquire_retained_raw(root, monkeypatch)
-    reference = _retain_industry_for_raw(root, raw_request)
+    reference = _retain_industry_for_raw(root, raw_request, monkeypatch)
 
     def unexpected(*_: object) -> object:
         raise error_type("injected decoder fault")
@@ -1811,7 +1900,7 @@ def test_reader_accepts_a_current_schema_archive_with_base_industry_runtime(
 ) -> None:
     root = tmp_path / "retained"
     raw_request = _acquire_retained_raw(root, monkeypatch)
-    reference = _retain_industry_for_raw(root, raw_request)
+    reference = _retain_industry_for_raw(root, raw_request, monkeypatch)
     assert classification._CLASSIFICATION_RUNTIME_IDENTITY == (  # pyright: ignore[reportPrivateUsage]
         "28495e33dedaff62629a76b4447b1757ff5bf427ebe85deff7a9292949ff2b8b"
     )
@@ -1824,7 +1913,7 @@ def test_industry_reader_cleanup_preserves_primary_and_propagates_standalone_fai
 ) -> None:
     root = tmp_path / "retained"
     raw_request = _acquire_retained_raw(root, monkeypatch)
-    reference = _retain_industry_for_raw(root, raw_request)
+    reference = _retain_industry_for_raw(root, raw_request, monkeypatch)
     archive_stat = (root / ".current-industry-classification-v1").stat()
     real_close = os.close
 
@@ -2083,7 +2172,7 @@ def test_public_result_decoder_rejects_rehashed_cross_field_and_nested_violation
 ) -> None:
     root = tmp_path / "retained"
     raw_request = _acquire_retained_raw(root, monkeypatch)
-    reference = _retain_industry_for_raw(root, raw_request)
+    reference = _retain_industry_for_raw(root, raw_request, monkeypatch)
     result = research_current_price_context_v1(
         _public_request(raw_request, reference),
         root,
