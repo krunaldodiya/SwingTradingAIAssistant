@@ -263,6 +263,16 @@ establishes general retry, scheduling or acquisition authority. Source:
 and handoff at 19:18:45–19:18:50 UTC; corroborating pause record
 `pi-explicit:2759581e312a82d5:db5b9e8ec8981e29`.
 
+**Open historical retention gap: fundamental screening criteria.** A September 8
+record says the owner had previously discussed a small set of important
+fundamental facts for selection, but the exact agreed criteria had not been
+recovered. The owner prioritized daily capture over that audit. Broad #178
+context does not reconstruct those missing criteria; this reconciliation found
+no accepted list to substitute. Preserve the question without inventing filters
+or treating the remembered agreement as implementation approval. Source:
+`7354d7bc-e1f0-4f9f-9936-44396e67d1f3`, corroborating memory
+`5e78395d-b027-4e38-849f-0ca69bc501a7`.
+
 ## Recovered maintenance lessons — 2026-10-01
 
 **Status: historical operating rationale, not new runtime requirements.** These
