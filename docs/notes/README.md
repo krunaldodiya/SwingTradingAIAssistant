@@ -64,6 +64,19 @@ live GitHub. In particular, old “Sprint 28 unapproved” audit text predates P
 42/43 and closed Issues #235/#237. Current delivery authority wins; the original
 source and historical notes remain unchanged except for explicit dated overlays.
 
+**Open diagnostic-boundary question.** Recovered records
+`35b85461-9a4e-4647-a97c-f13ab8309498` and
+`dcce8f4b-04a4-41b5-9cfa-9938f08c1517` describe the same V2 SDK callback
+exception concern. Current `_CancellationClockV2.now()` retains the callback
+exception as the cause of its fixed-message `ValueError`; this observation does
+not establish a CLI disclosure. The architecture requires caller/operator
+sanitization while allowing internal fault propagation, and Plan 36's public
+ledger/result privacy rules do not explicitly settle transitive SDK exception
+sanitization. Retain that precise contract question rather than asserting a
+confirmed Plan 36 violation or claiming the cause was removed. Any selected
+code follow-up needs its own governed scope and discriminating reproduction;
+the recovery notes authorize no repair or new disclosure exception.
+
 ## Notes index
 
 - [2026-09-28 — Project completion map and provisional effort](2026-09-28-project-completion-map.md) — historical estimate, not current delivery status.
