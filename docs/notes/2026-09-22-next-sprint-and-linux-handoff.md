@@ -219,6 +219,27 @@ workflow. Source: the same recovered document, owner turn at 03:57:59 UTC and
 its adjacent response; the document's August 20 creation date is not the date
 of that discussion.
 
+**Open historical design: explicit correction attempts.** A September 16
+assignment referred to Issue #198 and proposed a distinct attempt for an exact
+incomplete 100-stock, one-session capture: zero observed, 100 insufficient,
+zero unattempted and no shared failure. Ordinary reuse would remain effect-free.
+A correction would pin the admitted parent, ordered cohort, selection, schedule
+and configuration, use the actual later cutoff, and reserve a separate private
+attempt before credentials or provider calls. Duplicate, concurrent or
+interrupted attempts would not silently replay effects. Bounded retained
+responses and a provider-free verification path would preserve lineage and
+actual counts; unchanged material content would produce an unchanged-attempt
+receipt rather than an invented new revision. All earlier evidence would survive.
+
+The owner explicitly paused this work on September 16 at 19:18:45 UTC. The
+handoff reported uncommitted changes and tests that preceded later edits; it
+did not establish a verified final implementation. Present tracker lineage and
+delivery remain unverified. Retaining this proposal neither resumes it nor
+establishes general retry, scheduling or acquisition authority. Source:
+`pi-session:af10bcc3e6ea0ff6`, initial assignment at 18:57:20 UTC and the pause
+and handoff at 19:18:45–19:18:50 UTC; corroborating pause record
+`pi-explicit:2759581e312a82d5:db5b9e8ec8981e29`.
+
 ## Resume on Linux
 
 1. Read this decision, then the current canonical project instructions and
