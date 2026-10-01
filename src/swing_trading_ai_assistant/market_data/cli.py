@@ -48,6 +48,7 @@ from swing_trading_ai_assistant.volume_analysis.request import (
     canonical_bytes as volume_json,
 )
 
+from . import agent_analysis_context as analysis
 from .account_rate_limit import ThreadSafeAccountRateLimiterV1
 from .agent_cohort_context import run_agent_cohort_research_current
 from .agent_cohort_request import (
@@ -150,6 +151,12 @@ from .intraday_views import (
     DuckDBIntradayViewEngineV1,
     OpenMonthDerivedIntradayQueryServiceV1,
     RetainedOpenMonthScheduleResolverV1,
+)
+from .loss_scenario import (
+    LossScenarioInputError,
+    calculate_loss_scenario,
+    loss_scenario_request_from_json,
+    loss_scenario_result_bytes,
 )
 from .nifty50_read_workflow import (
     BoundedNifty50ReadRequestV1,
@@ -400,6 +407,10 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     commands = parser.add_subparsers(dest="command", required=True)
+    loss = commands.add_parser(
+        "loss-scenario", help="calculate hypothetical loss from caller assumptions"
+    )
+    loss.add_argument("--input-file", type=Path, required=True)
     download = commands.add_parser(
         "download",
         help="persist one or many point-in-time Nifty 50 one-minute downloads",
@@ -618,7 +629,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     agent_run.add_argument("--output", choices=("json",), required=True)
     agent_run.add_argument(
-        "--contract-version", choices=("v1", "v2", "v3", "v4"), default="v1"
+        "--contract-version", choices=("v1", "v2", "v3", "v4", "v5"), default="v1"
     )
     agent_run.add_argument(
         "--context-symbol",
@@ -637,6 +648,12 @@ def build_parser() -> argparse.ArgumentParser:
             "V4: private JSON declaring dated cohort mappings; omission leaves "
             "cohort context insufficient while stock research continues"
         ),
+    )
+    agent_run.add_argument(
+        "--analysis-input-file",
+        type=Path,
+        metavar="ABSOLUTE_PRIVATE_JSON",
+        help="V5: required private current-relative-strength-request@v1 JSON",
     )
     probe = commands.add_parser(
         "probe-upstox",
@@ -695,6 +712,8 @@ def main(  # noqa: C901 - command dispatch remains explicit.
             sys.stderr.write("invalid regime-current request\n")
             return 2
         args = _parse_cli_args(argv)
+        if args.command == "loss-scenario":
+            return _run_loss_scenario_command(args)
         if args.command == "probe-upstox":
             return _run_probe(args)
         if args.command == "cohort-current":
@@ -713,6 +732,7 @@ def main(  # noqa: C901 - command dispatch remains explicit.
                 current_stock_research_v2,
                 current_stock_research_confirm_v2,
                 current_stock_research_previous_v2,
+                trusted_clock or _SystemClock(),
             )
         if args.command == "volume-context-current":
             return _run_volume_command(args, trusted_clock or _SystemClock())
@@ -756,7 +776,7 @@ def _run_watchlist_screen_command(
     return 0 if all(row["status"] != "UNKNOWN" for row in members) else 1
 
 
-def _run_agent_research_command(
+def _run_agent_research_command(  # noqa: C901 - explicit version and effect boundaries.
     args: argparse.Namespace,
     service: CurrentStockResearchPortV2 | None,
     confirm_service: Callable[
@@ -767,20 +787,24 @@ def _run_agent_research_command(
         [str, Path, CurrentStockResearchResultV2], CurrentStockResearchResultV2
     ]
     | None,
+    clock: _ClockV1,
 ) -> int:
+    finish = None
     try:
+        if args.contract_version != "v5" and args.analysis_input_file is not None:
+            raise CurrentStockResearchInputError("analysis requires V5")
         context_options = (
             args.context_symbol,
             args.context_purpose,
             args.context_mappings_file,
         )
-        if args.contract_version != "v4" and any(
+        if args.contract_version not in {"v4", "v5"} and any(
             value is not None for value in context_options
         ):
             raise CurrentStockResearchInputError("context requires V4")
         mappings = None
         context_symbols = tuple(args.context_symbol or ())
-        if args.contract_version == "v4":
+        if args.contract_version in {"v4", "v5"}:
             validate_agent_cohort_request(
                 tuple(args.symbol),
                 args.storage_root,
@@ -795,7 +819,38 @@ def _run_agent_research_command(
                         "invalid cohort mappings file"
                     ) from None
                 mappings = parse_agent_cohort_mappings(raw, context_symbols)
-        if args.contract_version in {"v2", "v3", "v4"}:
+        if args.contract_version == "v5":
+            if args.analysis_input_file is None:
+                raise CurrentStockResearchInputError("analysis request required")
+            try:
+                analysis_request = relative_strength_request_from_json(
+                    _read_current_regime_input(args.analysis_input_file)
+                )
+            except (OSError, ValueError, _RequestInvalid):
+                raise CurrentStockResearchInputError(
+                    "invalid analysis request"
+                ) from None
+            report, finish = analysis._prepare_agent_analysis_research_current(  # pyright: ignore[reportPrivateUsage]
+                tuple(args.symbol),
+                args.storage_root,
+                analysis_request=analysis_request,
+                context_symbols=context_symbols,
+                context_purpose=args.context_purpose,
+                mappings=mappings,
+                research=(
+                    partial(research_current_stock_v2, terminal_missing_diagnostic=True)
+                    if service is None
+                    else service
+                ),
+                confirm_research=confirm_latest_completed_stock_v2
+                if confirm_service is None
+                else confirm_service,
+                previous_research=research_previous_completed_stock_v2
+                if previous_service is None
+                else previous_service,
+                clock=clock.now,
+            )
+        elif args.contract_version in {"v2", "v3", "v4"}:
             runner = run_agent_swing_research_current
             if args.contract_version == "v3":
                 runner = run_agent_event_research_current
@@ -835,8 +890,12 @@ def _run_agent_research_command(
         sys.stderr.write("request_invalid\n")
         return 2
     payload = (
-        json.dumps(report, sort_keys=True, separators=(",", ":")) + "\n"
-    ).encode()
+        analysis.bounded_analysis_json(report)
+        if finish is not None
+        else (json.dumps(report, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    )
+    if finish is not None:
+        finish()
     sys.stdout.buffer.write(payload)
     members = cast(list[dict[str, object]], report["members"])
     return (
@@ -1268,6 +1327,18 @@ def _run_relative_strength_command(args: argparse.Namespace, clock: _ClockV1) ->
     control.ensure_live()
     sys.stdout.write(output)
     return 0 if result["state"] == "OBSERVED" else 1
+
+
+def _run_loss_scenario_command(args: argparse.Namespace) -> int:
+    try:
+        raw = _read_current_regime_input(args.input_file)
+        request = loss_scenario_request_from_json(raw)
+    except (LossScenarioInputError, OSError):
+        raise _RequestInvalid from None
+    result = calculate_loss_scenario(request)
+    output = loss_scenario_result_bytes(result).decode("utf-8")
+    sys.stdout.write(output)
+    return 0
 
 
 def _read_current_regime_input(path: Path) -> bytes:
