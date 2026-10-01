@@ -44,7 +44,8 @@ Private source-integrity and per-record disposition evidence covers semantic
 reading of all 14,208 recovered memory units and all eight current mental models.
 There are attributed complete reads of 164 of 1,327 original source documents,
 plus selected excerpts used to corroborate consequential claims. Sensitive
-values were excluded from relevant reading displays and from these notes.
+values were redacted where identified; no credentials or raw private market
+values are included in these notes.
 
 Useful missing rationale is retained below; other records are already covered
 by current or version-scoped contracts, superseded, historical, or transient.
