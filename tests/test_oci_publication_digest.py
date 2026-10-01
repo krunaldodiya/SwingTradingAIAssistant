@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import runpy
@@ -136,18 +137,18 @@ def _gh(args, state):
 
 
 def _fake_command():
-    state_path = Path(os.environ["PUBLICATION_TEST_STATE"])
-    state = json.loads(state_path.read_text())
     executable = Path(os.environ["PUBLICATION_TEST_COMMAND"])
     name = executable.name
     args = sys.argv[1:]
-    if name == "python3":
-        if args[0] == "scripts/container_runtime.py":
-            print(executable.with_name(state["runtime"]))
-            return
+    if name == "python3" and args[0] != "scripts/container_runtime.py":
         assert args == [".github/scripts/registry_digest.py", IMAGE], args
         sys.argv = args
         runpy.run_path(str(ROOT / args[0]), run_name="__main__")
+        return
+    state_path = Path(os.environ["PUBLICATION_TEST_STATE"])
+    state = json.loads(state_path.read_text())
+    if name == "python3":
+        print(executable.with_name(state["runtime"]))
         return
     state["commands"].append([name, *args])
     code, stdout, stderr = _gh(args, state) if name == "gh" else _engine(args, state)
@@ -228,6 +229,25 @@ def _publication(tmp_path, runtime, scenario="success", *, exists=False):
         timeout=30,
     )
     return result, json.loads(state_path.read_text()), tmp_path / "artifacts/123-1"
+
+
+def test_registry_parser_pipeline_does_not_read_engine_state(
+    tmp_path, monkeypatch, capsys
+):
+    # The engine may be rewriting its log/state while the pipeline parser starts.
+    state_path = tmp_path / "state.json"
+    state_path.write_text("")
+    monkeypatch.setenv("PUBLICATION_TEST_STATE", str(state_path))
+    monkeypatch.setenv("PUBLICATION_TEST_COMMAND", str(tmp_path / "python3"))
+    monkeypatch.setattr(
+        sys, "argv", ["python3", ".github/scripts/registry_digest.py", IMAGE]
+    )
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps([REGISTRY_DIGEST])))
+    _fake_command()
+    captured = capsys.readouterr()
+    assert captured.out == REGISTRY_DIGEST + "\n"
+    assert captured.err == ""
+    assert state_path.read_text() == ""
 
 
 @pytest.mark.parametrize("runtime", ("podman", "docker"))
