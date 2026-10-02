@@ -1,5 +1,9 @@
 # Sprint records
 
+Current bounded delivery: [Sprint 32 — Loss Beyond the Stop Price](sprint-32.md),
+[Issue #244](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/244),
+[Plan 46](../plans/46-loss-scenario-assumed-exit.md). Earlier entries remain historical.
+
 GitHub Issues and the private
 [SwingTradingAIAssistant Delivery](https://github.com/users/krunaldodiya/projects/1)
 Project are the operational source of truth for new backlog, hierarchy, status,

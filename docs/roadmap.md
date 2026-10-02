@@ -1,5 +1,26 @@
 # Initial Roadmap
 
+## Sprint 32 — frozen scope, October 2, 2026
+
+[Sprint32 / #244](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/244),
+milestone24, is implementing [Plan46](plans/46-loss-scenario-assumed-exit.md):
+standalone calculatorV3 compares planned-stop loss with loss at one explicitly
+assumed worse exit, using the same caller-supplied aggregate costs. This answers
+a separate question deferred by Plan45. V1/V2 and researchV6 remain intact;
+no V7, fee schedule, sizing, eligibility, provider or execution forecast is added.
+Implementation/review/verification are pending; merge/release require separate
+owner approval. Older future issues remain Todo without sprint assignment.
+
+## Sprint 31 — verified closeout, October 2, 2026
+
+Issue242 is closed/completed, Project Done and milestone23 closed.
+[PR243](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/243) merged as
+`27a21094187a9f1e8ad987468cdb2cc020cd00c6`, reviewed tree
+`9191428f3555a9fc9b26f0332f7ae3c83b5b9834`. Full CI36995174740 passed6201 tests
+at87.52% branch coverage; main admission37002709158 and existing automatic
+private OCI publication37002745720 passed. Live Issue/PR own detailed evidence.
+The dated planning checkpoints below remain historical snapshots.
+
 ## Sprint 31 — planning complete, October 2, 2026
 
 [Sprint 31 / #242](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/242)

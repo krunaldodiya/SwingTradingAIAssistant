@@ -97,3 +97,36 @@ gross-only calculation; no stored data requires migration. Version selection
 never converts a request. Research V6 continues accepting only V1 scenarios
 and rejects V2 before research/storage effects. Fee schedules, slippage
 calculation and a later research dossier integration remain deferred.
+
+## Compare a worse assumed exit with V3
+
+Use `market-data loss-scenario --contract-version v3 --input-file /absolute/private/scenario.json`.
+Set the schema to `equity-loss-scenario-request@v3`; retain the V2 fields and add
+`"assumed_exit_price": "93.00"`. The price must be positive and strictly below
+the planned stop, with the same two-decimal grammar and upper bound as the other
+prices. Equal/better exits and zero are rejected by this bounded comparison.
+
+With entry100.00, planned stop95.00, quantity10 and aggregate costs12.34, V3
+returns planned gross loss50.00, assumed-exit gross loss70.00, planned loss
+including costs62.34, assumed-exit loss including costs82.34 and additional
+loss20.00 INR. Costs are the same whole-position round-trip assumption for both
+scenarios, added once to each. They cancel from the additional loss; execution
+price movement is separate from the cost input. No scenario-specific fee or tax
+schedule is calculated.
+
+The result names planned-stop and assumed-exit amounts separately. Labels include
+`assumed_exit_basis=CALLER_SUPPLIED_PRICE`, `comparison_costs=SAME_ASSUMED_AGGREGATE`
+and `execution_model=NOT_USED`, alongside the existing caller-assumption,
+unverified-cost, unverified-instrument and unassessed-risk labels. V3 omits the
+older slippage-excluded label because it includes a caller-assumed price movement.
+No empirical gap/slippage model is used. The exit price is not a forecast or
+maximum-loss bound; actual losses may exceed either scenario. No liquidity,
+event, gap, portfolio or trade suitability assessment is performed.
+
+SDK functions are `loss_scenario_request_v3_from_json(bytes)` and
+`calculate_loss_scenario_v3(request)`, with calculation version
+`integer-paise-long-loss-assumed-exit@v3`. Complete assumptions, verified runtime
+and canonical request/result identities are retained. Private-file requirements,
+64-KiB input/16-KiB output bounds, exact integer-paise arithmetic, sanitized errors
+and effect-free retry apply. Selecting V1/V2 retains their existing behavior;
+researchV6 continues accepting only V1. No V7 or market-data integration is added.
