@@ -1,5 +1,18 @@
 # Upcoming Sprints Overview
 
+## Sprint 31 — planning complete, October 2, 2026
+
+[Sprint 31 / #242](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/242),
+milestone23, implements [Plan 45](plans/45-loss-scenario-assumed-costs.md): one
+caller-assumed aggregate cost added to the existing hypothetical loss scenario
+through opt-in V2 CLI/SDK. Contract and adversarial matrix are frozen before
+implementation. Reviews and gates are pending; merge/release is not authorized.
+The five future items #178/#177/#144/#139/#126 remain unassigned.
+
+Sprint30 #240 is closed and Project Done; milestone22 is closed with zero open
+issues. PR241 merged at `07704641aff54f8b0d56cfa99d0f882dd93422ad`.
+This verified checkpoint supersedes earlier pending/local-only wording below.
+
 ## Sprint 30 — local implementation, October 2, 2026
 
 [Sprint 30 / #240](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/240)

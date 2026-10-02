@@ -1,5 +1,19 @@
 # Initial Roadmap
 
+## Sprint 31 — planning complete, October 2, 2026
+
+[Sprint 31 / #242](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/242)
+adds one explicit aggregate cost assumption to the hypothetical loss calculator
+under [Plan 45](plans/45-loss-scenario-assumed-costs.md). Opt-in V2 answers the
+bounded loss-including-assumed-costs question through the existing CLI/SDK.
+Implementation and verification are pending. Costs remain unverified assumptions;
+fee schedules, slippage, eligibility, signals and V7 integration are deferred.
+
+Sprint30 is closed: #240 Project Done, milestone22 closed, PR241 merged as
+`07704641aff54f8b0d56cfa99d0f882dd93422ad`. This live October2 checkpoint supersedes
+the earlier local-only lifecycle wording below without rewriting its history.
+Sprint31 merge/release authority remains separate.
+
 ## Sprint 30 — local implementation, October 2, 2026
 
 [Sprint 30 / #240](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/240)

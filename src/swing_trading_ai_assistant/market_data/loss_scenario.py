@@ -16,6 +16,7 @@ from .runtime_source_verifier import runtime_source_sha256
 MAX_INPUT_BYTES = 64 * 1024
 MAX_OUTPUT_BYTES = 16 * 1024
 CALCULATION_VERSION = "integer-paise-long-loss@v1"
+CALCULATION_VERSION_V2 = "integer-paise-long-loss-with-costs@v2"
 _FIELDS = {
     "schema",
     "instrument",
@@ -62,14 +63,14 @@ def _constant(value: str) -> NoReturn:
     _invalid()
 
 
-def _price(value: object) -> int:
+def _price(value: object, *, allow_zero: bool = False) -> int:
     if (
         type(value) is not str
         or re.fullmatch(r"(?:0|[1-9][0-9]{0,8})\.[0-9]{2}", value) is None
     ):
         _invalid()
     paise = int(value.replace(".", ""))
-    if paise == 0:
+    if paise == 0 and not allow_zero:
         _invalid()
     return paise
 
@@ -99,14 +100,14 @@ def _instrument(value: object) -> dict[str, str]:
     return {"isin": isin, "exchange": row["exchange"], "symbol": row["symbol"]}
 
 
-def _validate(value: object) -> dict[str, Any]:
+def _validate(value: object, *, with_costs: bool = False) -> dict[str, Any]:
     if type(value) is not dict:
         _invalid()
     row = cast(dict[str, Any], value).copy()
-    if set(row) != _FIELDS:
+    if set(row) != (_FIELDS | {"round_trip_costs"} if with_costs else _FIELDS):
         _invalid()
     expected = {
-        "schema": "equity-loss-scenario-request@v1",
+        "schema": f"equity-loss-scenario-request@{'v2' if with_costs else 'v1'}",
         "side": "LONG",
         "currency": "INR",
         "bar_frequency": "1d",
@@ -122,18 +123,29 @@ def _validate(value: object) -> dict[str, Any]:
     row["instrument"] = _instrument(row["instrument"])
     if _price(row["stop_price"]) >= _price(row["entry_price"]):
         _invalid()
+    if with_costs:
+        _price(row["round_trip_costs"], allow_zero=True)
     return row
 
 
 def loss_scenario_request_from_json(raw: bytes) -> dict[str, Any]:
     """Parse bounded closed JSON, rejecting duplicate keys at every depth."""
+    return _request_from_json(raw, with_costs=False)
+
+
+def loss_scenario_request_v2_from_json(raw: bytes) -> dict[str, Any]:
+    """Parse V2 with an explicit aggregate round-trip cost assumption."""
+    return _request_from_json(raw, with_costs=True)
+
+
+def _request_from_json(raw: bytes, *, with_costs: bool) -> dict[str, Any]:
     if type(raw) is not bytes or not 1 <= len(raw) <= MAX_INPUT_BYTES:
         _invalid()
     try:
         value = json.loads(
             raw.decode("utf-8"), object_pairs_hook=_object, parse_constant=_constant
         )
-        return _validate(value)
+        return _validate(value, with_costs=with_costs)
     except (ValueError, TypeError, RecursionError):
         raise LossScenarioInputError("invalid loss scenario") from None
 
@@ -157,20 +169,30 @@ def _amount(paise: int) -> str:
 
 def calculate_loss_scenario(request: object) -> dict[str, Any]:
     """Revalidate caller assumptions and compute exact, unrounded integer paise."""
-    assumptions = _validate(request)
+    return _calculate(request, with_costs=False)
+
+
+def calculate_loss_scenario_v2(request: object) -> dict[str, Any]:
+    """Add caller-assumed aggregate costs, without verifying their completeness."""
+    return _calculate(request, with_costs=True)
+
+
+def _calculate(request: object, *, with_costs: bool) -> dict[str, Any]:
+    assumptions = _validate(request, with_costs=with_costs)
     entry = _price(assumptions["entry_price"])
     stop = _price(assumptions["stop_price"])
     quantity: int = assumptions["quantity"]
     result: dict[str, Any] = {
-        "schema": "equity-loss-scenario@v1",
+        "schema": f"equity-loss-scenario@{'v2' if with_costs else 'v1'}",
         "assumptions": assumptions,
         "currency": "INR",
         "input_basis": "CALLER_SUPPLIED_ASSUMPTIONS",
         "instrument_verification": "NOT_PERFORMED",
         "market_evidence": "NOT_USED",
         "risk_eligibility": "NOT_ASSESSED",
-        "costs_and_slippage": "EXCLUDED",
-        "calculation_version": CALCULATION_VERSION,
+        "calculation_version": (
+            CALCULATION_VERSION_V2 if with_costs else CALCULATION_VERSION
+        ),
         "request_identity_sha256": _identity(assumptions),
         "runtime_code_identity_sha256": loss_scenario_runtime_identity(),
         "amounts": {
@@ -185,6 +207,26 @@ def calculate_loss_scenario(request: object) -> dict[str, Any]:
             "No liquidity, event, gap, portfolio or trade suitability assessment was performed.",
         ],
     }
+    if with_costs:
+        costs = _price(assumptions["round_trip_costs"], allow_zero=True)
+        result.update(
+            costs_basis="CALLER_SUPPLIED_AGGREGATE",
+            cost_completeness="NOT_VERIFIED",
+            slippage="EXCLUDED",
+        )
+        result["amounts"].update(
+            assumed_round_trip_costs=_amount(costs),
+            scenario_loss_including_assumed_costs=_amount(
+                (entry - stop) * quantity + costs
+            ),
+        )
+        result["limitations"][1:2] = [
+            "No fee or tax schedule was calculated or verified.",
+            "Costs are caller assumptions; their completeness is not verified.",
+            "Slippage is excluded.",
+        ]
+    else:
+        result["costs_and_slippage"] = "EXCLUDED"
     result["result_identity_sha256"] = _identity(result)
     loss_scenario_result_bytes(result)
     return result
