@@ -409,12 +409,17 @@ def test_real_retained_services_and_unavailable_stock(tmp_path, monkeypatch, cap
     assert retained.inventory(root) == before
 
 
-def test_v6_rejects_v2_scenario_before_any_research(tmp_path, monkeypatch, capsys):
+@pytest.mark.parametrize("version", ["v2", "v3"])
+def test_v6_rejects_new_scenario_before_any_research(
+    tmp_path, monkeypatch, capsys, version
+):
     request = fixture.request_value()
     supplied = scenario(request) | {
-        "schema": "equity-loss-scenario-request@v2",
+        "schema": f"equity-loss-scenario-request@{version}",
         "round_trip_costs": "12.34",
     }
+    if version == "v3":
+        supplied["assumed_exit_price"] = "93.00"
     monkeypatch.setattr(
         api.analysis, "_prepare_agent_analysis_research_current", fixture.forbidden
     )

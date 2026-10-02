@@ -36,18 +36,18 @@ def test_demo_runs_actual_cli_and_reports_tool_computed_change() -> None:
     assert value["status"] == "COMPARABLE"
     assert value["question"] == "PRICE_BEHAVIOR"
     # Observations bind the current research runtime, including market-data CLI
-    # bytes. Plan 45 updates that identity; the comparison binds both observations.
+    # bytes. Plan 46 updates that identity; the comparison binds both observations.
     assert (
         value["result_identity_sha256"]
-        == "5c62cf0f10f7216ac117c76d3172ed30fb4b1caeb5ec883e343432606f743702"
+        == "74d66a16892d1cd6ecd9c4aa8cdd3d5f368027ef050a8e78e2e2a8418bbe4942"
     )
     assert (
         value["previous_observation_identity_sha256"]
-        == "1444ee25b5a44da7c83744a1c4b604be27bd20ffbc396c21f19b371d1a27a18c"
+        == "75ef568546061f349dc8e10370f4d9c4fe13c9eb650a3ee1bc59596b74e1ae85"
     )
     assert (
         value["current_observation_identity_sha256"]
-        == "3012278d930d6f00ad0e2495bc8533e29de6011ea1eff51614119cd2c1f68ef9"
+        == "e2c0c1acff436876f2da4df93aaf1346a9b3ab92430c96b5972f3fb99a65c196"
     )
     body = next(
         item for item in value["facts"] if item["path"] == "CANDLE_GEOMETRY.body_size"

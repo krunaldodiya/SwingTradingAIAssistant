@@ -17,6 +17,7 @@ MAX_INPUT_BYTES = 64 * 1024
 MAX_OUTPUT_BYTES = 16 * 1024
 CALCULATION_VERSION = "integer-paise-long-loss@v1"
 CALCULATION_VERSION_V2 = "integer-paise-long-loss-with-costs@v2"
+CALCULATION_VERSION_V3 = "integer-paise-long-loss-assumed-exit@v3"
 _FIELDS = {
     "schema",
     "instrument",
@@ -100,14 +101,27 @@ def _instrument(value: object) -> dict[str, str]:
     return {"isin": isin, "exchange": row["exchange"], "symbol": row["symbol"]}
 
 
-def _validate(value: object, *, with_costs: bool = False) -> dict[str, Any]:
+def _request_shape(with_costs: bool, with_assumed_exit: bool) -> tuple[set[str], str]:
+    fields = _FIELDS.copy()
+    if with_costs:
+        fields.add("round_trip_costs")
+    if with_assumed_exit:
+        fields.add("assumed_exit_price")
+    version = "v3" if with_assumed_exit else "v2" if with_costs else "v1"
+    return fields, version
+
+
+def _validate(
+    value: object, *, with_costs: bool = False, with_assumed_exit: bool = False
+) -> dict[str, Any]:
     if type(value) is not dict:
         _invalid()
     row = cast(dict[str, Any], value).copy()
-    if set(row) != (_FIELDS | {"round_trip_costs"} if with_costs else _FIELDS):
+    fields, version = _request_shape(with_costs, with_assumed_exit)
+    if set(row) != fields:
         _invalid()
     expected = {
-        "schema": f"equity-loss-scenario-request@{'v2' if with_costs else 'v1'}",
+        "schema": f"equity-loss-scenario-request@{version}",
         "side": "LONG",
         "currency": "INR",
         "bar_frequency": "1d",
@@ -125,6 +139,10 @@ def _validate(value: object, *, with_costs: bool = False) -> dict[str, Any]:
         _invalid()
     if with_costs:
         _price(row["round_trip_costs"], allow_zero=True)
+    if with_assumed_exit and _price(row["assumed_exit_price"]) >= _price(
+        row["stop_price"]
+    ):
+        _invalid()
     return row
 
 
@@ -138,14 +156,23 @@ def loss_scenario_request_v2_from_json(raw: bytes) -> dict[str, Any]:
     return _request_from_json(raw, with_costs=True)
 
 
-def _request_from_json(raw: bytes, *, with_costs: bool) -> dict[str, Any]:
+def loss_scenario_request_v3_from_json(raw: bytes) -> dict[str, Any]:
+    """Parse V3 with an explicitly assumed exit strictly below the planned stop."""
+    return _request_from_json(raw, with_costs=True, with_assumed_exit=True)
+
+
+def _request_from_json(
+    raw: bytes, *, with_costs: bool, with_assumed_exit: bool = False
+) -> dict[str, Any]:
     if type(raw) is not bytes or not 1 <= len(raw) <= MAX_INPUT_BYTES:
         _invalid()
     try:
         value = json.loads(
             raw.decode("utf-8"), object_pairs_hook=_object, parse_constant=_constant
         )
-        return _validate(value, with_costs=with_costs)
+        return _validate(
+            value, with_costs=with_costs, with_assumed_exit=with_assumed_exit
+        )
     except (ValueError, TypeError, RecursionError):
         raise LossScenarioInputError("invalid loss scenario") from None
 
@@ -227,6 +254,62 @@ def _calculate(request: object, *, with_costs: bool) -> dict[str, Any]:
         ]
     else:
         result["costs_and_slippage"] = "EXCLUDED"
+    result["result_identity_sha256"] = _identity(result)
+    loss_scenario_result_bytes(result)
+    return result
+
+
+def calculate_loss_scenario_v3(request: object) -> dict[str, Any]:
+    """Compare planned-stop and worse assumed-exit loss with identical costs."""
+    assumptions = _validate(request, with_costs=True, with_assumed_exit=True)
+    entry = _price(assumptions["entry_price"])
+    stop = _price(assumptions["stop_price"])
+    assumed_exit = _price(assumptions["assumed_exit_price"])
+    costs = _price(assumptions["round_trip_costs"], allow_zero=True)
+    quantity: int = assumptions["quantity"]
+    planned_gross = (entry - stop) * quantity
+    assumed_gross = (entry - assumed_exit) * quantity
+    result: dict[str, Any] = {
+        "schema": "equity-loss-scenario@v3",
+        "assumptions": assumptions,
+        "currency": "INR",
+        "input_basis": "CALLER_SUPPLIED_ASSUMPTIONS",
+        "instrument_verification": "NOT_PERFORMED",
+        "market_evidence": "NOT_USED",
+        "risk_eligibility": "NOT_ASSESSED",
+        "costs_basis": "CALLER_SUPPLIED_AGGREGATE",
+        "cost_completeness": "NOT_VERIFIED",
+        "comparison_costs": "SAME_ASSUMED_AGGREGATE",
+        "assumed_exit_basis": "CALLER_SUPPLIED_PRICE",
+        "execution_model": "NOT_USED",
+        "calculation_version": CALCULATION_VERSION_V3,
+        "request_identity_sha256": _identity(assumptions),
+        "runtime_code_identity_sha256": loss_scenario_runtime_identity(),
+        "amounts": {
+            "entry_notional": _amount(entry * quantity),
+            "planned_stop_proceeds": _amount(stop * quantity),
+            "planned_loss_per_share": _amount(entry - stop),
+            "planned_gross_loss": _amount(planned_gross),
+            "assumed_exit_proceeds": _amount(assumed_exit * quantity),
+            "assumed_exit_loss_per_share": _amount(entry - assumed_exit),
+            "assumed_exit_gross_loss": _amount(assumed_gross),
+            "assumed_round_trip_costs": _amount(costs),
+            "planned_loss_including_assumed_costs": _amount(planned_gross + costs),
+            "assumed_exit_loss_including_assumed_costs": _amount(assumed_gross + costs),
+            "additional_loss_from_assumed_exit": _amount(
+                (stop - assumed_exit) * quantity
+            ),
+        },
+        "limitations": [
+            "Stop execution is not guaranteed; actual losses may exceed either scenario.",
+            "The assumed exit price is a caller assumption, not a forecast or maximum-loss bound.",
+            "No fee or tax schedule was calculated or verified.",
+            "Costs are caller assumptions; their completeness is not verified.",
+            "The same aggregate whole-position costs are assumed for both scenarios; execution-price movement is separate from costs.",
+            "No empirical gap or slippage model was used.",
+            "No liquidity, event, gap, portfolio or trade suitability assessment was performed.",
+        ],
+    }
     result["result_identity_sha256"] = _identity(result)
     loss_scenario_result_bytes(result)
     return result

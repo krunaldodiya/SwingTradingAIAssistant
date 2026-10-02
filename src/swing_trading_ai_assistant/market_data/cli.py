@@ -157,8 +157,10 @@ from .loss_scenario import (
     LossScenarioInputError,
     calculate_loss_scenario,
     calculate_loss_scenario_v2,
+    calculate_loss_scenario_v3,
     loss_scenario_request_from_json,
     loss_scenario_request_v2_from_json,
+    loss_scenario_request_v3_from_json,
     loss_scenario_result_bytes,
 )
 from .nifty50_read_workflow import (
@@ -414,7 +416,7 @@ def build_parser() -> argparse.ArgumentParser:
         "loss-scenario", help="calculate hypothetical loss from caller assumptions"
     )
     loss.add_argument("--input-file", type=Path, required=True)
-    loss.add_argument("--contract-version", choices=("v1", "v2"), default="v1")
+    loss.add_argument("--contract-version", choices=("v1", "v2", "v3"), default="v1")
     download = commands.add_parser(
         "download",
         help="persist one or many point-in-time Nifty 50 one-minute downloads",
@@ -1361,20 +1363,22 @@ def _run_relative_strength_command(args: argparse.Namespace, clock: _ClockV1) ->
 
 
 def _run_loss_scenario_command(args: argparse.Namespace) -> int:
+    parsers = {
+        "v1": loss_scenario_request_from_json,
+        "v2": loss_scenario_request_v2_from_json,
+        "v3": loss_scenario_request_v3_from_json,
+    }
+    calculators = {
+        "v1": calculate_loss_scenario,
+        "v2": calculate_loss_scenario_v2,
+        "v3": calculate_loss_scenario_v3,
+    }
     try:
         raw = _read_current_regime_input(args.input_file)
-        request = (
-            loss_scenario_request_v2_from_json(raw)
-            if args.contract_version == "v2"
-            else loss_scenario_request_from_json(raw)
-        )
+        request = parsers[args.contract_version](raw)
     except (LossScenarioInputError, OSError):
         raise _RequestInvalid from None
-    result = (
-        calculate_loss_scenario_v2(request)
-        if args.contract_version == "v2"
-        else calculate_loss_scenario(request)
-    )
+    result = calculators[args.contract_version](request)
     output = loss_scenario_result_bytes(result).decode("utf-8")
     sys.stdout.write(output)
     return 0
