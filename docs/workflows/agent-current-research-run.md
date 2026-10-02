@@ -220,3 +220,46 @@ are added. This creates no hosted disclosure permission, trading signal, ranking
 risk rule, portfolio decision or historical effectiveness claim. Returning to
 V1–V4 requires only choosing the older version; the existing stores remain usable.
 See [Plan 42](../plans/42-agent-volume-relative-strength-context.md).
+
+## Hypothetical loss assumptions beside research (V6)
+
+V6 preserves the complete V5 report and adds one explicitly supplied loss
+scenario for exactly one requested research target. Supply all V5 arguments,
+select `--contract-version v6`, and add:
+
+```text
+--loss-scenario-input-file /absolute/private/scenario.json
+```
+
+The file is exactly the [Plan 43 loss-scenario request](loss-scenario.md), with
+no inferred fields. Its ISIN, NSE exchange and symbol must match one target in
+`--analysis-input-file`, even when research evidence for that target is missing.
+A reference-only stock, unknown target or identity mismatch is rejected before
+research or storage effects. One scenario can accompany a V5 batch of 1–10
+stocks; all other dossiers explicitly report scenario `NOT_REQUESTED`.
+V1–V5 reject the new option. Input files retain the existing 64-KiB, regular,
+owner-private, no-symlink/no-hardlink restrictions.
+
+`loss_scenario_context.result` contains the real calculator's complete result
+and identities. For supplied entry 100.00, stop 95.00 and quantity 10, it reports
+50.00 INR gross scenario loss. Inputs remain caller assumptions; the instrument
+is not independently verified, market evidence is not used by the calculation,
+costs/slippage are excluded, and risk eligibility is not assessed. Stops are not
+guaranteed and actual losses may exceed the scenario. Matching a dossier's
+identity does not validate the assumed prices, stop or quantity.
+
+The report explicitly marks the scenario as not jointly comparable with market
+evidence. It invents no observation date for assumptions. Existing independent
+facts, missing-context outcomes and stock research readiness are preserved; the
+scenario cannot make an unavailable research result ready. Exit codes retain
+V5 semantics. V6 binds its complete canonical report to a new result identity
+and retains `source_v5_result_identity_sha256` for the unextended source report.
+The total output remains bounded to 4 MiB, with no partial success output.
+
+The SDK entry point is
+`market_data.agent_loss_context.run_agent_loss_research_current`, with V5's
+arguments plus `loss_scenario_request`. It validates the request again and calls
+the same V5 research and Plan 43 calculator used by the CLI. No new provider,
+capture, archive, strategy rule, position-sizing rule or disclosure permission
+is introduced. Existing V5 provider/source authorization remains necessary for
+actual use; development fixtures do not establish live qualification.
