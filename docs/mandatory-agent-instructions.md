@@ -384,6 +384,17 @@ history as part of this withdrawal.
 - Built packages require both sdist and wheel plus a clean installed-wheel import/runtime smoke when package or runtime identity behavior changes.
 - Failures, skipped checks, unavailable windows, and residual boundaries remain explicit. Never inflate narrower evidence into a broader pass.
 - Cleanup follows successful behavioral proof: remove generated artifacts and obsolete scaffolding without deleting unrelated owner work.
+- Persistent tooling MUST use an owner-approved, reproducible environment outside
+  disposable worktrees. Do not copy virtual environments with embedded paths.
+  New installations and hidden directories retain their explicit authority gates.
+- At post-merge closeout, fetch remote `main` and fast-forward local `main` only
+  after proving ancestry, preserving the active checkout and owner changes.
+  Before removing a completed worktree, prove it is merged and clean, inventory
+  unique tracked, untracked and ignored data, and check active processes,
+  sessions, environments and scripts for dependencies on its path. Retain
+  necessary evidence, obtain exact deletion authorization, and use non-forced
+  worktree removal or the host's managed archive. Preserve canonical, unmerged,
+  active or uncertain worktrees. See the closeout procedure in `agent-workflow.md`.
 
 ## Temporal and real-evidence gates
 
