@@ -234,6 +234,26 @@ Issue/PR and its normal review; do not create an extra delivery track for them.
 8. Record local completion, review, hosted checks, PR, merge, and tracker closeout
    as distinct states. Release and risk acceptance retain their authority gates.
 
+### Environment and worktree closeout
+
+Use the canonical adapter's environment and cleanup controls. Record the approved
+tooling root, existing interpreter, frozen dependency inputs and installation
+receipt. Recreate environments from those inputs rather than copying embedded
+paths; verify interpreter, entrypoint and import paths before retiring a worktree
+that previously supplied tooling.
+
+After merge, fetch remote `main`, verify that local `main` is its ancestor and
+that updating it will not disturb another checked-out worktree, then advance it
+without resetting or switching the active checkout. Record both resulting refs.
+
+For each proposed worktree removal, record merge ancestry and clean status,
+inventory tracked changes and untracked/ignored files, and inspect active
+processes, sessions, environment paths and script references. Preserve unique
+data and durable evidence outside the disposable checkout. Obtain authorization
+for the exact path, then use non-forced removal or managed archive and verify
+registration afterward. An unresolved dependency or unknown lifecycle state
+keeps that worktree retained; canonical and active checkouts remain protected.
+
 Useful read-only identity commands:
 
 ```sh

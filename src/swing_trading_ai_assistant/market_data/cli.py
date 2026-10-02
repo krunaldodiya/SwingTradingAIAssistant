@@ -49,6 +49,7 @@ from swing_trading_ai_assistant.volume_analysis.request import (
 )
 
 from . import agent_analysis_context as analysis
+from . import agent_loss_context as loss_context
 from .account_rate_limit import ThreadSafeAccountRateLimiterV1
 from .agent_cohort_context import run_agent_cohort_research_current
 from .agent_cohort_request import (
@@ -629,7 +630,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     agent_run.add_argument("--output", choices=("json",), required=True)
     agent_run.add_argument(
-        "--contract-version", choices=("v1", "v2", "v3", "v4", "v5"), default="v1"
+        "--contract-version", choices=("v1", "v2", "v3", "v4", "v5", "v6"), default="v1"
     )
     agent_run.add_argument(
         "--context-symbol",
@@ -654,6 +655,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         metavar="ABSOLUTE_PRIVATE_JSON",
         help="V5: required private current-relative-strength-request@v1 JSON",
+    )
+    agent_run.add_argument(
+        "--loss-scenario-input-file",
+        type=Path,
+        metavar="ABSOLUTE_PRIVATE_JSON",
+        help="V6: required private equity-loss-scenario-request@v1 JSON",
     )
     probe = commands.add_parser(
         "probe-upstox",
@@ -791,20 +798,25 @@ def _run_agent_research_command(  # noqa: C901 - explicit version and effect bou
 ) -> int:
     finish = None
     try:
-        if args.contract_version != "v5" and args.analysis_input_file is not None:
-            raise CurrentStockResearchInputError("analysis requires V5")
+        if (
+            args.contract_version not in {"v5", "v6"}
+            and args.analysis_input_file is not None
+        ):
+            raise CurrentStockResearchInputError("analysis requires V5 or V6")
+        if args.contract_version != "v6" and args.loss_scenario_input_file is not None:
+            raise CurrentStockResearchInputError("loss scenario requires V6")
         context_options = (
             args.context_symbol,
             args.context_purpose,
             args.context_mappings_file,
         )
-        if args.contract_version not in {"v4", "v5"} and any(
+        if args.contract_version not in {"v4", "v5", "v6"} and any(
             value is not None for value in context_options
         ):
             raise CurrentStockResearchInputError("context requires V4")
         mappings = None
         context_symbols = tuple(args.context_symbol or ())
-        if args.contract_version in {"v4", "v5"}:
+        if args.contract_version in {"v4", "v5", "v6"}:
             validate_agent_cohort_request(
                 tuple(args.symbol),
                 args.storage_root,
@@ -819,7 +831,7 @@ def _run_agent_research_command(  # noqa: C901 - explicit version and effect bou
                         "invalid cohort mappings file"
                     ) from None
                 mappings = parse_agent_cohort_mappings(raw, context_symbols)
-        if args.contract_version == "v5":
+        if args.contract_version in {"v5", "v6"}:
             if args.analysis_input_file is None:
                 raise CurrentStockResearchInputError("analysis request required")
             try:
@@ -830,7 +842,23 @@ def _run_agent_research_command(  # noqa: C901 - explicit version and effect bou
                 raise CurrentStockResearchInputError(
                     "invalid analysis request"
                 ) from None
-            report, finish = analysis._prepare_agent_analysis_research_current(  # pyright: ignore[reportPrivateUsage]
+            prepare = analysis._prepare_agent_analysis_research_current  # pyright: ignore[reportPrivateUsage]
+            if args.contract_version == "v6":
+                if args.loss_scenario_input_file is None:
+                    raise CurrentStockResearchInputError("loss scenario required")
+                try:
+                    loss_request = loss_scenario_request_from_json(
+                        _read_current_regime_input(args.loss_scenario_input_file)
+                    )
+                except (OSError, ValueError, _RequestInvalid):
+                    raise CurrentStockResearchInputError(
+                        "invalid loss scenario"
+                    ) from None
+                prepare = partial(
+                    loss_context._prepare_agent_loss_research_current,  # pyright: ignore[reportPrivateUsage]
+                    loss_scenario_request=loss_request,
+                )
+            report, finish = prepare(
                 tuple(args.symbol),
                 args.storage_root,
                 analysis_request=analysis_request,

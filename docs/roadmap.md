@@ -1,5 +1,20 @@
 # Initial Roadmap
 
+## Sprint 30 — local implementation, October 2, 2026
+
+[Sprint 30 / #240](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/240)
+adds one caller-supplied hypothetical loss scenario to opt-in V6 agent research
+under [Plan 44](plans/44-agent-loss-scenario-context.md). Existing calculations,
+research readiness and source boundaries remain authoritative. Implementation,
+independent review and required gates are separate; no release is authorized.
+
+Current main was verified as `ade1ea4989a922e013c00f1d67c67878878482de`:
+Sprint 29 #237/PR238, CI filter #232/PR233 and reconciliation #234/PR239 are
+complete. This supersedes earlier pending lifecycle wording below while
+preserving those dated checkpoints. Hindsight import, installation, backup
+cleanup and key changes remain outside Sprint 30.
+
+
 ## Sprint 29 — accepted October 1, 2026
 
 [Sprint 29 / #237](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/237)

@@ -1,5 +1,9 @@
 # Swing Trading Research Tool for AI Assistants
 
+Opt-in agent research V6 adds one explicitly supplied hypothetical loss scenario
+beside V5 facts. See the [agent workflow](docs/workflows/agent-current-research-run.md#hypothetical-loss-assumptions-beside-research-v6)
+for inputs and assumption limits.
+
 This repository is building a trustworthy, deterministic research and analysis
 tool for listed-equity swing trading. Product research, qualification, and
 default workflows focus on the point-in-time Nifty 50 plus Nifty Next 50 (the
