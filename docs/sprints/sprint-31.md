@@ -48,3 +48,36 @@ credentials, source adoption, new installations and hidden directories remain
 outside this assignment. Any PR stays draft until separately authorized.
 Implementation, independent review, full gates, hosted gates and release remain
 distinct pending states; no completion is claimed from planning alone.
+
+## Goal activation correction — October 2, 2026
+
+The owner reiterated the standing Goal requirement after implementation started.
+The coordinator had delegated activation to the executor without verifying it;
+the executor identified the tool as chat-scoped and left it inactive to avoid
+taking coordinator ownership. A coordinator `get_goal` read confirmed null.
+The coordinator then created the persistent Sprint31 goal and received `active`
+for this chat. It covers implementation, both independent reviews and applicable
+verification under Plan45; merge/release authority is unchanged. The coordinator
+owns goal lifecycle and the existing executor retains sole implementation-file
+ownership. The executor was notified to continue and not alter the chat goal.
+This is an execution correction, not a contract or scope change.
+
+## Implementation checkpoint — October 2, 2026
+
+The bounded implementation is committed at
+`a917a6188fd26ac74d46776f3e6f7ac389b38add`. The actual V2 CLI first failed with
+exit 2 before implementation and then returned the required exact amounts.
+Focused evidence records 212 passing tests plus one separately executed retained
+V6 compatibility test, also passing. An intermediate matrix run recorded a wrong
+test expectation for unsupported-version exception handling; the failed attempt
+is retained and the test was corrected to the existing CLI contract. Ruff,
+Pyright (zero errors/warnings), Vulture80 and all 15 refreshed active manifests
+passed focused checks. These are not full-suite or installed-wheel claims.
+
+Evidence lives in the visible owner-host directory
+`/home/krunaldodiya/Documents/Codex/2026-10-02/sprint31-evidence`.
+Coordinator will freeze the combined candidate, including this checkpoint,
+after the executor releases mutation ownership. Both independent reviews and
+the authoritative self-hosted full acceptance gate remain pending. The existing
+distribution verifier does not exercise the new V2 command; a targeted clean
+installed-wheel V2 smoke remains required. No merge/release is authorized.
