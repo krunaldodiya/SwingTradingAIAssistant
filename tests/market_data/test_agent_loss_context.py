@@ -407,3 +407,24 @@ def test_real_retained_services_and_unavailable_stock(tmp_path, monkeypatch, cap
     emitted = json.loads(capsys.readouterr().out)
     assert emitted["loss_scenario_context"]["result"] == result
     assert retained.inventory(root) == before
+
+
+def test_v6_rejects_v2_scenario_before_any_research(tmp_path, monkeypatch, capsys):
+    request = fixture.request_value()
+    supplied = scenario(request) | {
+        "schema": "equity-loss-scenario-request@v2",
+        "round_trip_costs": "12.34",
+    }
+    monkeypatch.setattr(
+        api.analysis, "_prepare_agent_analysis_research_current", fixture.forbidden
+    )
+    root = tmp_path / "root"
+    with pytest.raises(CurrentStockResearchInputError):
+        run(request, root, supplied)
+    assert not root.exists()
+    args = arguments(tmp_path, request)
+    (tmp_path / "scenario.json").write_text(json.dumps(supplied))
+    assert cli.main(args) == 2
+    output = capsys.readouterr()
+    assert output.out == "" and output.err == "request_invalid\n"
+    assert not root.exists()

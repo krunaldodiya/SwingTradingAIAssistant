@@ -6,6 +6,7 @@ import os
 import socket
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from decimal import ROUND_DOWN, localcontext
 from pathlib import Path
 from unittest.mock import Mock
@@ -16,9 +17,9 @@ from swing_trading_ai_assistant.market_data import cli
 from swing_trading_ai_assistant.market_data import loss_scenario as loss
 
 
-def request():
-    return {
-        "schema": "equity-loss-scenario-request@v1",
+def request(version="v1"):
+    value = {
+        "schema": f"equity-loss-scenario-request@{version}",
         "instrument": {"isin": "INE002A01018", "exchange": "NSE", "symbol": "EXAMPLE"},
         "side": "LONG",
         "currency": "INR",
@@ -28,6 +29,9 @@ def request():
         "stop_price": "95.00",
         "quantity": 10,
     }
+    if version == "v2":
+        value["round_trip_costs"] = "12.34"
+    return value
 
 
 def test_actual_cli_first_working_slice(tmp_path: Path):
@@ -58,8 +62,60 @@ def test_actual_cli_first_working_slice(tmp_path: Path):
     assert value["risk_eligibility"] == "NOT_ASSESSED"
 
 
-def calculate(value=None):
-    return loss.calculate_loss_scenario(request() if value is None else value)
+def calculate(value=None, version="v1"):
+    calculator = (
+        loss.calculate_loss_scenario_v2
+        if version == "v2"
+        else loss.calculate_loss_scenario
+    )
+    return calculator(request(version) if value is None else value)
+
+
+def parse(raw, version):
+    parser = (
+        loss.loss_scenario_request_v2_from_json
+        if version == "v2"
+        else loss.loss_scenario_request_from_json
+    )
+    return parser(raw)
+
+
+def command(path, version):
+    return ["loss-scenario", "--contract-version", version, "--input-file", str(path)]
+
+
+def test_actual_cli_v2_first_working_slice(tmp_path):
+    data = request() | {
+        "schema": "equity-loss-scenario-request@v2",
+        "round_trip_costs": "12.34",
+    }
+    path = private_input(tmp_path, json.dumps(data).encode())
+    result = subprocess.run(  # noqa: S603
+        [
+            sys.executable,
+            "-c",
+            "from swing_trading_ai_assistant.market_data.cli import main; raise SystemExit(main())",
+            "loss-scenario",
+            "--contract-version",
+            "v2",
+            "--input-file",
+            str(path),
+        ],
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stderr == b""
+    value = json.loads(result.stdout)
+    assert value["schema"] == "equity-loss-scenario@v2"
+    assert value["amounts"] == {
+        "entry_notional": "1000.00",
+        "stop_proceeds": "950.00",
+        "loss_per_share": "5.00",
+        "gross_scenario_loss": "50.00",
+        "assumed_round_trip_costs": "12.34",
+        "scenario_loss_including_assumed_costs": "62.34",
+    }
 
 
 @pytest.mark.parametrize(
@@ -133,13 +189,14 @@ def test_independent_amounts_and_decimal_context(entry, stop, quantity, expected
         ),
     ],
 )
-def test_invalid_field_matrix(key, values):
+@pytest.mark.parametrize("version", ["v1", "v2"])
+def test_invalid_field_matrix(key, values, version):
     for value in values:
-        data = request() | {key: value}
+        data = request(version) | {key: value}
         with pytest.raises(loss.LossScenarioInputError):
-            calculate(data)
+            calculate(data, version)
         with pytest.raises(loss.LossScenarioInputError):
-            loss.loss_scenario_request_from_json(json.dumps(data).encode())
+            parse(json.dumps(data).encode(), version)
 
 
 @pytest.mark.parametrize(
@@ -160,18 +217,20 @@ def test_invalid_field_matrix(key, values):
         ("symbol", {}),
     ],
 )
-def test_invalid_instrument(key, value):
-    data = request()
+@pytest.mark.parametrize("version", ["v1", "v2"])
+def test_invalid_instrument(key, value, version):
+    data = request(version)
     data["instrument"][key] = value
     with pytest.raises(loss.LossScenarioInputError):
-        calculate(data)
+        calculate(data, version)
 
 
 @pytest.mark.parametrize("quantity,holding", [(1, 2), (1000000, 20)])
-def test_inclusive_bounds(quantity, holding):
-    data = request() | {"quantity": quantity, "holding_sessions": holding}
+@pytest.mark.parametrize("version", ["v1", "v2"])
+def test_inclusive_bounds(quantity, holding, version):
+    data = request(version) | {"quantity": quantity, "holding_sessions": holding}
     data["instrument"]["symbol"] = "A" * 32
-    assert calculate(data)["assumptions"] == data
+    assert calculate(data, version)["assumptions"] == data
 
 
 @pytest.mark.parametrize(
@@ -194,35 +253,39 @@ def test_inclusive_bounds(quantity, holding):
         b"[" * 1500 + b"]" * 1500,
     ],
 )
-def test_malformed_json(raw):
+@pytest.mark.parametrize("version", ["v1", "v2"])
+def test_malformed_json(raw, version):
     with pytest.raises(loss.LossScenarioInputError):
-        loss.loss_scenario_request_from_json(raw)
+        parse(raw, version)
 
 
-def test_closed_schema_and_sdk_revalidation():
-    for key in request():
-        data = request()
+@pytest.mark.parametrize("version", ["v1", "v2"])
+def test_closed_schema_and_sdk_revalidation(version):
+    for key in request(version):
+        data = request(version)
         del data[key]
         with pytest.raises(loss.LossScenarioInputError):
-            calculate(data)
-    for value in [[], None, 1, request() | {"extra": 1}]:
+            calculate(data, version)
+    for value in [[], None, 1, request(version) | {"extra": 1}]:
         with pytest.raises(loss.LossScenarioInputError):
-            loss.calculate_loss_scenario(value)
-    data = request()
+            (
+                loss.calculate_loss_scenario_v2
+                if version == "v2"
+                else loss.calculate_loss_scenario
+            )(value)
+    data = request(version)
     data["instrument"]["extra"] = "ignored?"
     with pytest.raises(loss.LossScenarioInputError):
-        calculate(data)
-    parsed = loss.loss_scenario_request_from_json(json.dumps(request()).encode())
+        calculate(data, version)
+    parsed = parse(json.dumps(request(version)).encode(), version)
     parsed["quantity"] = True
     with pytest.raises(loss.LossScenarioInputError):
-        calculate(parsed)
-    assert (
-        loss.loss_scenario_request_from_json(
-            json.dumps(request()).encode()
-            + b" " * (65536 - len(json.dumps(request()).encode()))
-        )
-        == request()
-    )
+        calculate(parsed, version)
+    assert parse(
+        json.dumps(request(version)).encode()
+        + b" " * (65536 - len(json.dumps(request(version)).encode())),
+        version,
+    ) == request(version)
 
 
 def test_identity_complete_result_and_assumptions():
@@ -283,8 +346,9 @@ def private_input(tmp_path, raw=None):
         "utf8",
     ],
 )
-def test_private_cli_rejection_without_effects(tmp_path, capsys, mode):  # noqa: C901 - explicit file adversaries
-    path = private_input(tmp_path)
+@pytest.mark.parametrize("version", ["v1", "v2"])
+def test_private_cli_rejection_without_effects(tmp_path, capsys, mode, version):  # noqa: C901 - explicit file adversaries
+    path = private_input(tmp_path, json.dumps(request(version)).encode())
     if mode == "missing":
         path.unlink()
     elif mode == "relative":
@@ -312,14 +376,16 @@ def test_private_cli_rejection_without_effects(tmp_path, capsys, mode):  # noqa:
         path.write_bytes(b'{"secret":"never reveal","quantity":false}')
     elif mode == "duplicate":
         path.write_bytes(
-            json.dumps(request()).replace('"LONG"', '"LONG", "side":"LONG"').encode()
+            json.dumps(request(version))
+            .replace('"LONG"', '"LONG", "side":"LONG"')
+            .encode()
         )
     elif mode == "utf8":
         path.write_bytes(b"\xff")
     service = Mock(side_effect=AssertionError("must not call service"))
     assert (
         cli.main(
-            ["loss-scenario", "--input-file", str(path)],
+            command(path, version),
             download_service=service,
             current_stock_research=service,
         )
@@ -331,11 +397,12 @@ def test_private_cli_rejection_without_effects(tmp_path, capsys, mode):  # noqa:
     service.assert_not_called()
 
 
-def test_runtime_substitution_is_sanitized(tmp_path, monkeypatch, capsys):
-    path = private_input(tmp_path)
+@pytest.mark.parametrize("version", ["v1", "v2"])
+def test_runtime_substitution_is_sanitized(tmp_path, monkeypatch, capsys, version):
+    path = private_input(tmp_path, json.dumps(request(version)).encode())
     before = path.read_bytes()
     monkeypatch.setattr(loss, "runtime_source_sha256", lambda *args: "0" * 64)
-    assert cli.main(["loss-scenario", "--input-file", str(path)]) == 2
+    assert cli.main(command(path, version)) == 2
     output = capsys.readouterr()
     assert output.out == ""
     assert output.err == "internal_error\n"
@@ -345,16 +412,21 @@ def test_runtime_substitution_is_sanitized(tmp_path, monkeypatch, capsys):
 @pytest.mark.parametrize(
     "error", [RuntimeError("SECRET /private/path"), KeyboardInterrupt()]
 )
+@pytest.mark.parametrize("version", ["v1", "v2"])
 def test_failure_or_interrupt_never_emits_partial_json(
-    tmp_path, monkeypatch, capsys, error
+    tmp_path, monkeypatch, capsys, error, version
 ):
-    path = private_input(tmp_path)
-    monkeypatch.setattr(cli, "calculate_loss_scenario", Mock(side_effect=error))
+    path = private_input(tmp_path, json.dumps(request(version)).encode())
+    monkeypatch.setattr(
+        cli,
+        "calculate_loss_scenario_v2" if version == "v2" else "calculate_loss_scenario",
+        Mock(side_effect=error),
+    )
     if isinstance(error, KeyboardInterrupt):
         with pytest.raises(KeyboardInterrupt):
-            cli.main(["loss-scenario", "--input-file", str(path)])
+            cli.main(command(path, version))
     else:
-        assert cli.main(["loss-scenario", "--input-file", str(path)]) == 2
+        assert cli.main(command(path, version)) == 2
     output = capsys.readouterr()
     assert output.out == ""
     assert output.err == (
@@ -362,19 +434,25 @@ def test_failure_or_interrupt_never_emits_partial_json(
     )
 
 
-def test_output_boundary_and_no_emission(tmp_path, monkeypatch, capsys):
+@pytest.mark.parametrize("version", ["v1", "v2"])
+def test_output_boundary_and_no_emission(tmp_path, monkeypatch, capsys, version):
     # A JSON string object adds 9 bytes: {"x":""} plus LF.
     assert len(loss.loss_scenario_result_bytes({"x": "a" * (16384 - 9)})) == 16384
     with pytest.raises(ValueError, match="output bound"):
         loss.loss_scenario_result_bytes({"x": "a" * (16384 - 8)})
-    path = private_input(tmp_path)
-    monkeypatch.setattr(cli, "calculate_loss_scenario", lambda _: {"x": "a" * 16384})
-    assert cli.main(["loss-scenario", "--input-file", str(path)]) == 2
+    path = private_input(tmp_path, json.dumps(request(version)).encode())
+    monkeypatch.setattr(
+        cli,
+        "calculate_loss_scenario_v2" if version == "v2" else "calculate_loss_scenario",
+        lambda _: {"x": "a" * 16384},
+    )
+    assert cli.main(command(path, version)) == 2
     assert capsys.readouterr().out == ""
 
 
-def test_retry_has_no_effects_or_credentials(tmp_path, monkeypatch, capsys):
-    path = private_input(tmp_path)
+@pytest.mark.parametrize("version", ["v1", "v2"])
+def test_retry_has_no_effects_or_credentials(tmp_path, monkeypatch, capsys, version):
+    path = private_input(tmp_path, json.dumps(request(version)).encode())
     before = path.read_bytes()
     # Reject unexpected filesystem writes and sockets across the actual command.
     original_open = os.open
@@ -390,38 +468,339 @@ def test_retry_has_no_effects_or_credentials(tmp_path, monkeypatch, capsys):
     )
     for name in ("UPSTOX_ACCESS_TOKEN", "UPSTOX_API_KEY"):
         monkeypatch.delenv(name, raising=False)
-    assert cli.main(["loss-scenario", "--input-file", str(path)]) == 0
+    assert cli.main(command(path, version)) == 0
     first = capsys.readouterr()
-    assert cli.main(["loss-scenario", "--input-file", str(path)]) == 0
+    assert cli.main(command(path, version)) == 0
     assert capsys.readouterr() == first
     assert path.read_bytes() == before
     assert sorted(p.name for p in tmp_path.iterdir()) == [path.name]
 
 
-def test_runtime_source_path_substitution(tmp_path, monkeypatch, capsys):
-    path = private_input(tmp_path)
+@pytest.mark.parametrize("version", ["v1", "v2"])
+def test_runtime_source_path_substitution(tmp_path, monkeypatch, capsys, version):
+    path = private_input(tmp_path, json.dumps(request(version)).encode())
     monkeypatch.setattr(loss, "__file__", str(tmp_path / "loss_scenario.py"))
-    assert cli.main(["loss-scenario", "--input-file", str(path)]) == 2
+    assert cli.main(command(path, version)) == 2
     output = capsys.readouterr()
     assert output.out == ""
     assert output.err == "internal_error\n"
 
 
 @pytest.mark.parametrize("raw", [None, "{}", bytearray(b"{}"), b'{"x":1e9999}'])
-def test_parser_nonbytes_and_nonfinite(raw):
+@pytest.mark.parametrize("version", ["v1", "v2"])
+def test_parser_nonbytes_and_nonfinite(raw, version):
     with pytest.raises(loss.LossScenarioInputError):
-        loss.loss_scenario_request_from_json(raw)
+        parse(raw, version)
 
 
-def test_nested_closed_identity_and_duplicate_keys():
+@pytest.mark.parametrize("version", ["v1", "v2"])
+def test_nested_closed_identity_and_duplicate_keys(version):
     for instrument in [
         None,
         [],
         {},
-        request()["instrument"] | {"provider": "invented"},
+        request(version)["instrument"] | {"provider": "invented"},
     ]:
         with pytest.raises(loss.LossScenarioInputError):
-            calculate(request() | {"instrument": instrument})
-    raw = json.dumps(request()).replace('"NSE"', '"NSE", "exchange": "NSE"').encode()
+            calculate(request(version) | {"instrument": instrument}, version)
+    raw = (
+        json.dumps(request(version))
+        .replace('"NSE"', '"NSE", "exchange": "NSE"')
+        .encode()
+    )
     with pytest.raises(loss.LossScenarioInputError):
-        loss.loss_scenario_request_from_json(raw)
+        parse(raw, version)
+
+
+@pytest.mark.parametrize(
+    "entry,stop,quantity,costs,expected",
+    [
+        (
+            "100.00",
+            "95.00",
+            10,
+            "0.00",
+            ["1000.00", "950.00", "5.00", "50.00", "0.00", "50.00"],
+        ),
+        ("0.02", "0.01", 1, "0.01", ["0.02", "0.01", "0.01", "0.01", "0.01", "0.02"]),
+        (
+            "10.01",
+            "9.99",
+            99,
+            "0.03",
+            ["990.99", "989.01", "0.02", "1.98", "0.03", "2.01"],
+        ),
+        (
+            "0.02",
+            "0.01",
+            1,
+            "999999999.99",
+            ["0.02", "0.01", "0.01", "0.01", "999999999.99", "1000000000.00"],
+        ),
+        (
+            "999999999.99",
+            "0.01",
+            1000000,
+            "999999999.99",
+            [
+                "999999999990000.00",
+                "10000.00",
+                "999999999.98",
+                "999999999980000.00",
+                "999999999.99",
+                "1000000999979999.99",
+            ],
+        ),
+    ],
+)
+def test_v2_exact_independent_amounts(entry, stop, quantity, costs, expected):
+    data = request("v2") | {
+        "entry_price": entry,
+        "stop_price": stop,
+        "quantity": quantity,
+        "round_trip_costs": costs,
+    }
+    original = loss.calculate_loss_scenario_v2(data)
+    with localcontext() as context:
+        context.prec = 1
+        context.rounding = ROUND_DOWN
+        assert loss.calculate_loss_scenario_v2(data) == original
+    assert list(original["amounts"].values()) == expected
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "-0.01",
+        "-0.00",
+        "+0.01",
+        "1000000000.00",
+        "1e2",
+        "1e999999",
+        "01.00",
+        "00.00",
+        " 0.00",
+        "0.00\n",
+        "0",
+        "0.0",
+        "0.001",
+        "NaN",
+        "Infinity",
+        "9" * 10000,
+        0,
+        0.0,
+        True,
+        False,
+        None,
+        {},
+        [],
+    ],
+)
+def test_v2_invalid_costs_sdk_parser_and_cli(tmp_path, capsys, value):
+    data = request("v2") | {"round_trip_costs": value}
+    with pytest.raises(loss.LossScenarioInputError):
+        loss.calculate_loss_scenario_v2(data)
+    with pytest.raises(loss.LossScenarioInputError):
+        loss.loss_scenario_request_v2_from_json(json.dumps(data).encode())
+    path = private_input(tmp_path, json.dumps(data).encode())
+    assert cli.main(command(path, "v2")) == 2
+    output = capsys.readouterr()
+    assert output.out == "" and output.err == "request_invalid\n"
+
+
+def test_v2_identities_labels_and_mutated_costs():
+    data = request("v2")
+    parsed = loss.loss_scenario_request_v2_from_json(json.dumps(data).encode())
+    result = loss.calculate_loss_scenario_v2(parsed)
+    assert result["amounts"]["scenario_loss_including_assumed_costs"] == "62.34"
+    assert result == loss.calculate_loss_scenario_v2(dict(reversed(list(data.items()))))
+
+    def independent_hash(value):
+        raw = (
+            json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
+            + "\n"
+        ).encode()
+        return hashlib.sha256(raw).hexdigest()
+
+    assert result["request_identity_sha256"] == independent_hash(data)
+    without_identity = result.copy()
+    digest = without_identity.pop("result_identity_sha256")
+    assert digest == independent_hash(without_identity)
+    observed = {
+        name: hashlib.sha256(
+            (Path(__file__).resolve().parents[2] / name).read_bytes()
+        ).hexdigest()
+        for name in loss.LOSS_SCENARIO_RUNTIME_SOURCE_SHA256_V1
+    }
+    assert result["runtime_code_identity_sha256"] == independent_hash(observed)
+    assert result["calculation_version"] == "integer-paise-long-loss-with-costs@v2"
+    for key, expected in {
+        "input_basis": "CALLER_SUPPLIED_ASSUMPTIONS",
+        "instrument_verification": "NOT_PERFORMED",
+        "market_evidence": "NOT_USED",
+        "risk_eligibility": "NOT_ASSESSED",
+        "costs_basis": "CALLER_SUPPLIED_AGGREGATE",
+        "cost_completeness": "NOT_VERIFIED",
+        "slippage": "EXCLUDED",
+        "currency": "INR",
+    }.items():
+        assert result[key] == expected
+    assert "costs_and_slippage" not in result
+    assert result["limitations"] == [
+        "Stop execution is not guaranteed; actual losses may exceed this scenario.",
+        "No fee or tax schedule was calculated or verified.",
+        "Costs are caller assumptions; their completeness is not verified.",
+        "Slippage is excluded.",
+        "No liquidity, event, gap, portfolio or trade suitability assessment was performed.",
+    ]
+    for key, value in [
+        ("entry_price", "100.01"),
+        ("stop_price", "94.99"),
+        ("quantity", 11),
+        ("holding_sessions", 6),
+        ("round_trip_costs", "12.35"),
+    ]:
+        changed = loss.calculate_loss_scenario_v2(data | {key: value})
+        assert changed["request_identity_sha256"] != result["request_identity_sha256"]
+        assert changed["result_identity_sha256"] != digest
+    parsed["round_trip_costs"] = False
+    with pytest.raises(loss.LossScenarioInputError):
+        loss.calculate_loss_scenario_v2(parsed)
+    assert result["assumptions"]["round_trip_costs"] == "12.34"
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        b'{"secret":"PRIVATE-MARKER"}',
+        b"\xff",
+        json.dumps(request("v2") | {"round_trip_costs": "PRIVATE-MARKER"}).encode(),
+    ],
+)
+def test_v2_invalid_precedes_runtime_corruption(tmp_path, monkeypatch, capsys, raw):
+    path = private_input(tmp_path, raw)
+    runtime = Mock(side_effect=RuntimeError("PRIVATE-MARKER /private/path"))
+    calculator = Mock(side_effect=AssertionError("must validate first"))
+    monkeypatch.setattr(loss, "loss_scenario_runtime_identity", runtime)
+    monkeypatch.setattr(cli, "calculate_loss_scenario_v2", calculator)
+    assert cli.main(command(path, "v2")) == 2
+    output = capsys.readouterr()
+    assert output.out == "" and output.err == "request_invalid\n"
+    runtime.assert_not_called()
+    calculator.assert_not_called()
+    with pytest.raises(loss.LossScenarioInputError):
+        loss.calculate_loss_scenario_v2(request("v2") | {"round_trip_costs": False})
+    runtime.assert_not_called()
+
+
+def test_v2_version_isolation_and_v1_rollback(tmp_path, monkeypatch, capsys):
+    for version in ("v1", "v2"):
+        other = "v1" if version == "v2" else "v2"
+        with pytest.raises(loss.LossScenarioInputError):
+            parse(json.dumps(request(other)).encode(), version)
+        with pytest.raises(loss.LossScenarioInputError):
+            calculate(request(other), version)
+    path = private_input(tmp_path)
+    assert cli.main(["loss-scenario", "--input-file", str(path)]) == 0
+    default = capsys.readouterr()
+    assert cli.main(command(path, "v1")) == 0
+    assert capsys.readouterr() == default
+    result = json.loads(default.out)
+    assert result["schema"] == "equity-loss-scenario@v1"
+    assert result["costs_and_slippage"] == "EXCLUDED"
+    assert result["amounts"]["gross_scenario_loss"] == "50.00"
+    assert "assumed_round_trip_costs" not in result["amounts"]
+    reader = Mock(side_effect=AssertionError("must reject version before read"))
+    monkeypatch.setattr(cli, "_read_current_regime_input", reader)
+    with pytest.raises(SystemExit) as error:
+        cli.main(command(path, "v3"))
+    assert error.value.code == 2
+    output = capsys.readouterr()
+    assert output.out == "" and output.err == "request_invalid\n"
+    reader.assert_not_called()
+
+
+def test_v2_concurrent_actual_commands_are_identical_and_effect_free(tmp_path):
+    path = private_input(tmp_path, json.dumps(request("v2")).encode())
+    before = path.read_bytes()
+
+    def invoke(_):
+        return subprocess.run(  # noqa: S603
+            [
+                sys.executable,
+                "-c",
+                "from swing_trading_ai_assistant.market_data.cli import main; raise SystemExit(main())",
+                *command(path, "v2"),
+            ],
+            capture_output=True,
+            check=False,
+        )
+
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        results = list(executor.map(invoke, range(3)))
+    assert all(result.returncode == 0 and result.stderr == b"" for result in results)
+    assert len({result.stdout for result in results}) == 1
+    assert (
+        json.loads(results[0].stdout)["amounts"][
+            "scenario_loss_including_assumed_costs"
+        ]
+        == "62.34"
+    )
+    assert path.read_bytes() == before
+    assert sorted(item.name for item in tmp_path.iterdir()) == [path.name]
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        b"\xff",
+        b"{",
+        b'{"private-marker":"NEVER-ECHO"}',
+        json.dumps(request("v2"))
+        .replace('"12.34"', '"12.34", "round_trip_costs":"0.00"')
+        .encode(),
+        json.dumps(request("v2")).replace('"NSE"', '"NSE", "exchange":"NSE"').encode(),
+        json.dumps(request("v1")).encode(),
+    ],
+)
+def test_actual_v2_cli_rejects_invalid_input_without_leaks(tmp_path, raw):
+    path = private_input(tmp_path, raw)
+    result = subprocess.run(  # noqa: S603
+        [
+            sys.executable,
+            "-c",
+            "from swing_trading_ai_assistant.market_data.cli import main; raise SystemExit(main())",
+            *command(path, "v2"),
+        ],
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 2
+    assert result.stdout == b"" and result.stderr == b"request_invalid\n"
+    assert path.read_bytes() == raw
+
+
+def test_v2_interruption_then_explicit_retry_preserves_input(
+    tmp_path, monkeypatch, capsys
+):
+    path = private_input(tmp_path, json.dumps(request("v2")).encode())
+    before = path.read_bytes()
+    with monkeypatch.context() as interrupted:
+        interrupted.setattr(
+            cli, "loss_scenario_result_bytes", Mock(side_effect=KeyboardInterrupt())
+        )
+        with pytest.raises(KeyboardInterrupt):
+            cli.main(command(path, "v2"))
+    output = capsys.readouterr()
+    assert output.out == "" and output.err == ""
+    assert path.read_bytes() == before
+    assert cli.main(command(path, "v2")) == 0
+    first = capsys.readouterr()
+    assert cli.main(command(path, "v2")) == 0
+    assert capsys.readouterr() == first
+    assert (
+        json.loads(first.out)["amounts"]["scenario_loss_including_assumed_costs"]
+        == "62.34"
+    )
+    assert path.read_bytes() == before
+    assert sorted(item.name for item in tmp_path.iterdir()) == [path.name]
