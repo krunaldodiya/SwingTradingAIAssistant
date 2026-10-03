@@ -64,7 +64,7 @@ def main(
             observations.append(observation)
         result = compare_setup_observations_v1(observations[0], observations[1])
         raw = canonical_comparison_bytes(result)
-    except Exception:  # noqa: BLE001 - closed terminal CLI; no private exception disclosure
+    except (Exception, KeyboardInterrupt):  # noqa: BLE001 - closed terminal CLI failure
         sys.stderr.write("setup_comparison_failed\n")
         return 2
     sys.stdout.buffer.write(raw)

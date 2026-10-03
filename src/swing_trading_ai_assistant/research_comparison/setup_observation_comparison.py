@@ -130,10 +130,10 @@ def _verdict(  # noqa: C901 - closed factual states with explicit precedence.
             and cast(str, left) > cast(str, right)
         ):
             return "NON_COMPARABLE", "INVALID_TEMPORAL_ORDER"
-    if before["status"] == "UNKNOWN" or after["status"] == "UNKNOWN":
-        return "UNKNOWN", "REQUIRED_STRUCTURE_UNKNOWN"
     if before["canonical_stock"] is None or after["canonical_stock"] is None:
         return "NON_COMPARABLE", "CANONICAL_STOCK_UNAVAILABLE"
+    if before["status"] == "UNKNOWN" or after["status"] == "UNKNOWN":
+        return "UNKNOWN", "REQUIRED_STRUCTURE_UNKNOWN"
     if before["status"] == "NO_MATCH":
         return (
             ("NO_MATCH", "BOTH_OBSERVATIONS_NO_MATCH")

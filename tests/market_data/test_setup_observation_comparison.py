@@ -296,10 +296,70 @@ def test_nonpacket_unknown_and_private_symbol_rejection(tmp_path):
         None,
         ("not_trade_eligibility",),
     )
-    assert compare(observed, unknown)["status"] == "UNKNOWN"
+    assert compare(observed, unknown)["status"] == "NON_COMPARABLE"
+    assert compare(observed, unknown)["reason"] == "CANONICAL_STOCK_UNAVAILABLE"
     unsafe = replace(unknown, symbol="PRIVATE_PATH_TOKEN/OWNER")
     with pytest.raises(ValueError):
         compare(unsafe, unsafe)
+
+
+@pytest.mark.parametrize("missing", ["previous", "current", "both"])
+def test_missing_canonical_identity_noncomparable_before_unknown(tmp_path, missing):
+    from swing_trading_ai_assistant.market_data.current_stock_research_v2 import (  # noqa: PLC0415
+        CurrentStockResearchResultV2,
+        _runtime_identity,
+    )
+
+    compare = importlib.import_module(MODULE).compare_setup_observations_v1
+    observations = []
+    for index, side in enumerate(("previous", "current")):
+        selection = _NOW + timedelta(minutes=index)
+        if missing in (side, "both"):
+            observation = CurrentStockResearchResultV2(
+                "current-stock-research@v2",
+                "UNAVAILABLE",
+                "mapping",
+                "MAPPING_UNAVAILABLE",
+                "CURRENT_STRUCTURE",
+                "PNB",
+                selection,
+                selection + timedelta(minutes=30),
+                _runtime_identity(),
+                None,
+                ("not_trade_eligibility",),
+            )
+        else:
+            observation = _observe(tmp_path / side, minutes=index)
+        observations.append(observation)
+    result = compare(*observations)
+    assert result["status"] == "NON_COMPARABLE"
+    assert result["reason"] == "CANONICAL_STOCK_UNAVAILABLE"
+
+
+@pytest.mark.parametrize("interrupted_call", [1, 2])
+def test_cli_keyboard_interruption_fixed_private_safe_failure(
+    tmp_path,
+    capsys,
+    interrupted_call,
+):
+    main = importlib.import_module(MODULE + "_cli").main
+    observation = _observe(tmp_path / "observed")
+    calls = []
+
+    def service(*args, **kwargs):
+        calls.append(1)
+        if len(calls) == interrupted_call:
+            raise KeyboardInterrupt("SYNTHETIC_PRIVATE_INTERRUPTION_TOKEN")
+        return observation
+
+    try:
+        code = main(_args(tmp_path), observation_service=service)
+    except KeyboardInterrupt:
+        pytest.fail("keyboard interruption escaped private-safe CLI boundary")
+    output = capsys.readouterr()
+    assert code == 2
+    assert output.out == ""
+    assert output.err == "setup_comparison_failed\n"
 
 
 @pytest.mark.parametrize("limitations", [("x",) * 33, ("x" * 1025,)])

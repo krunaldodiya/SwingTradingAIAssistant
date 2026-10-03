@@ -52,3 +52,22 @@ publication and merge/closeout remain pending. No sprint completion claim.
 
 Evidence directory:
 `/home/krunaldodiya/Documents/Codex/2026-10-03/sprint34-evidence/`.
+
+## Initial independent reviews and corrections
+
+Both complete independent whole-slice reviews of clean10258e4/treeb3d29184
+returned BLOCKERS. Domain reproduced missing canonical identity incorrectly
+returning UNKNOWN; security reproduced KeyboardInterrupt escaping with private
+synthetic message/traceback and interrupt exit instead of the fixed failure.
+Complete reports retained as domain-review-10258e4.md and
+provenance-review-10258e4.md. Both native assignments completed and exact source
+identity/clean checks remained valid. Neither verdict approves later bytes.
+
+Six discriminating regression cases failed before bounded corrections: missing
+canonical identity on either/both sides, existing inconsistent expectation, and
+keyboard interruption of either observation call. Fix canonical absence before
+UNKNOWN while preserving admitted exact REPLAY, and explicitly handle
+KeyboardInterrupt at the existing CLI failure boundary. No contract, formula,
+provider, storage, old API or general BaseException policy expanded. Additional
+domain suggestions are deferred optional coverage improvements, not blockers.
+Fresh exact-current verification and independent review remain required.
