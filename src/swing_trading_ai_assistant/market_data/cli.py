@@ -218,6 +218,7 @@ from .range_ingestion import (
     ProviderSessionAuthenticationError,
 )
 from .schedule_evidence import ScheduleEvidenceValidationError
+from .setup_screen import screen_setup_current
 from .storage_root_lease import StorageRootLease, StorageRootLeaseError
 from .watchlist_screen import screen_watchlist_current
 from .workflow_coordination import PublicationGateV1
@@ -607,6 +608,18 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     research_current.add_argument("--output", choices=("json",), required=True)
+    setup = commands.add_parser(
+        "setup-screen-current",
+        help="detect a causal latest upward Structure break in an explicit stock list",
+    )
+    setup.add_argument("--symbol", action="append", required=True)
+    setup.add_argument(
+        "--storage-root",
+        type=Path,
+        required=True,
+        metavar="ABSOLUTE_OWNER_PRIVATE_ROOT",
+    )
+    setup.add_argument("--output", choices=("json",), required=True)
     watchlist = commands.add_parser(
         "watchlist-screen-current",
         help="screen an explicit bounded stock list using admitted V2 price facts",
@@ -736,6 +749,8 @@ def main(  # noqa: C901 - command dispatch remains explicit.
             return _run_research_current_command(
                 args, current_stock_research, current_stock_research_v2
             )
+        if args.command == "setup-screen-current":
+            return _run_setup_screen_command(args, current_stock_research_v2)
         if args.command == "watchlist-screen-current":
             return _run_watchlist_screen_command(args, current_stock_research_v2)
         if args.command == "research-run-current":
@@ -765,6 +780,26 @@ def main(  # noqa: C901 - command dispatch remains explicit.
     except Exception:
         sys.stderr.write("internal_error\n")
         return 2
+
+
+def _run_setup_screen_command(
+    args: argparse.Namespace, service: CurrentStockResearchPortV2 | None
+) -> int:
+    try:
+        report = screen_setup_current(
+            tuple(args.symbol),
+            args.storage_root,
+            research=research_current_stock_v2 if service is None else service,
+        )
+    except CurrentStockResearchInputError:
+        sys.stderr.write("request_invalid\n")
+        return 2
+    payload = (
+        json.dumps(report, sort_keys=True, separators=(",", ":")) + "\n"
+    ).encode()
+    sys.stdout.buffer.write(payload)
+    members = cast(list[dict[str, object]], report["members"])
+    return 0 if all(row["status"] != "UNKNOWN" for row in members) else 1
 
 
 def _run_watchlist_screen_command(
