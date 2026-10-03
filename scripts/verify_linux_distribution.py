@@ -205,6 +205,99 @@ def _verify_cli(
     return outcomes
 
 
+def _verify_installed_continuity(
+    python: Path, scratch: Path
+) -> dict[str, dict[str, object]]:
+    """Exercise the new SDK/CLI from the clean wheel using reviewed source fixtures.
+
+    Isolation removes checkout/PYTHONPATH imports. Both changed public modules
+    must resolve inside the installed environment before the synthetic producer
+    loads. The fixture is source-checkout evidence, not an installed entrypoint.
+    """
+    probe = "\n".join(
+        (
+            "import pathlib, runpy, sys",
+            "sys.dont_write_bytecode = True",
+            "import swing_trading_ai_assistant.research_comparison.setup_event_continuity as sdk",
+            "import swing_trading_ai_assistant.research_comparison.setup_event_continuity_cli as cli",
+            "for module in (sdk, cli):",
+            "    if not pathlib.Path(module.__file__).resolve().is_relative_to(pathlib.Path(sys.prefix).resolve()):",
+            "        raise RuntimeError('continuity import escaped installed environment')",
+            "fixture, scenario = sys.argv[1:]",
+            "sys.argv = [fixture, '--scenario', scenario]",
+            "runpy.run_path(fixture, run_name='__main__')",
+        )
+    )
+    safe_env = {
+        "HOME": str(scratch),
+        "TMPDIR": str(scratch),
+        "PATH": "/usr/bin:/bin",
+        "LANG": "C.UTF-8",
+        "PYTHONDONTWRITEBYTECODE": "1",
+    }
+    outcomes: dict[str, dict[str, object]] = {}
+    for scenario, status, current_status, code in (
+        ("same-event", "SAME_EVENT", "NO_MATCH", 0),
+        ("unknown", "UNKNOWN", "UNKNOWN", 1),
+    ):
+        observed = _run(
+            [
+                str(python),
+                "-I",
+                "-c",
+                probe,
+                str(ROOT / "examples/causal_setup_event_continuity_demo.py"),
+                scenario,
+            ],
+            cwd=scratch,
+            env=safe_env,
+        )
+        if (
+            observed.returncode != code
+            or len(observed.stdout) > 1024 * 1024
+            or b"SYNTHETIC" not in observed.stderr
+            or b"not current market data" not in observed.stderr
+        ):
+            raise RuntimeError("installed continuity execution failed")
+        value = json.loads(observed.stdout)
+        digests = (
+            value["result_identity_sha256"],
+            value["runtime_code_identity_sha256"],
+        )
+        if (
+            value["contract_version"] != "causal-setup-event-continuity@v1"
+            or value["status"] != status
+            or value["current"]["status"] != current_status
+            or any(
+                not isinstance(digest, str)
+                or len(digest) != 64
+                or any(char not in "0123456789abcdef" for char in digest)
+                for digest in digests
+            )
+            or any(
+                token in observed.stdout
+                for token in (
+                    b'"close"',
+                    b'"open"',
+                    b'"high"',
+                    b'"low"',
+                    str(scratch).encode(),
+                )
+            )
+        ):
+            raise RuntimeError("installed continuity result disagrees with contract")
+        outcomes[scenario] = {
+            "exit": code,
+            "status": status,
+            "current_projection_status": current_status,
+            "stdout_sha256": hashlib.sha256(observed.stdout).hexdigest(),
+            "result_identity_sha256": digests[0],
+            "runtime_code_identity_sha256": digests[1],
+            "imports": "SDK and injected CLI resolved under installed sys.prefix with -I",
+        }
+    return outcomes
+
+
 def _verify_mounts(image: str, scratch: Path) -> None:
     private = scratch / "private"
     private.mkdir(mode=0o700)
@@ -620,6 +713,7 @@ def verify(wheel: Path, receipt: Path | None, prior_commit: str) -> dict[str, ob
             raise RuntimeError("altered wheel digest was admitted")
         _verify_interruption(build, image)
         outcomes = _verify_cli(image, python, scratch)
+        continuity = _verify_installed_continuity(python, scratch)
         config = _run(
             [_engine(), "image", "inspect", image, "--format", "{{json .Config}}"]
         )
@@ -659,6 +753,7 @@ def verify(wheel: Path, receipt: Path | None, prior_commit: str) -> dict[str, ob
             "local_image_id": inspection.stdout.decode().strip(),
             "image_tag": image,
             "outcomes": outcomes,
+            "installed_setup_event_continuity": continuity,
             "mount_checks": "owner mapped, wrong UID, broad mode, read-only, symlink",
             "source_substitution": "rejected",
             "interrupted_build_and_run": "rejected; current image remained available",

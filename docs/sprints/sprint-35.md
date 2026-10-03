@@ -57,3 +57,16 @@ Merge/new release and residual-risk authority remain separate. Implementation,
 review, pre-merge acceptance and sprint closeout are distinct claims.
 No validity/expiry/invalidation, persistence, generation/eligibility/effectiveness,
 new calculation/provider, position management or trading effect is added.
+
+## Installed acceptance correction
+
+Both full initial reviews of `7bfc2ba` passed with no current implementation
+blockers and confirmed that installed continuity evidence was still absent.
+The existing hosted Linux distribution verifier now exercises the reviewed
+source fixture through isolated installed-wheel SDK and injected CLI imports,
+requires SAME_EVENT despite latest NO_MATCH and UNKNOWN/exit 1, and records
+runtime/result/output identities. Its six discriminating focused regressions
+first failed for the missing gate, then all 23 verifier tests passed. This is
+repair feedback, not evidence that an installed wheel has run. No new packaging
+entrypoint, OCI mount, workflow, dependency or runtime formula was added. Both
+reviewers must issue fresh exact-candidate verdicts before hosted acceptance.

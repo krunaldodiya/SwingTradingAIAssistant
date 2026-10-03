@@ -88,6 +88,13 @@ generation/eligibility/effectiveness and all new sources remain outside scope.
 Coordinator sole writer: new continuity module, CLI and source manifest under
 research_comparison; focused tests; synthetic example; this Plan, Sprint 35 and
 small related documentation. Only mechanically bound manifests may change.
+Acceptance correction: the existing hosted Linux distribution verifier and its
+focused regressions also belong to coordinator ownership. Existing installed
+smokes do not exercise continuity. The smallest adequate correction runs the
+reviewed synthetic fixture with isolated installed-wheel SDK/CLI imports,
+checks SAME_EVENT with latest NO_MATCH and UNKNOWN/exit 1, and retains identities
+in the distribution receipt. No new installed entrypoint or OCI mount is added;
+existing OCI checks remain separate compatibility evidence.
 Approved tooling: existing main checkout `.venv` outside this worktree, official
 uv only if environment management is needed; no installation or environment copy.
 Fallback handbook specification/TDD sections used; no original procedure's
