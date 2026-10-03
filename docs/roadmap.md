@@ -1,5 +1,20 @@
 # Initial Roadmap
 
+## Sprint 33 — Causal Setup Detection, October 3, 2026
+
+[Issue 246](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/246)
+and [Plan 47](plans/47-causal-setup-detection.md) freeze one research-candidate
+path by projecting existing latest-session upward BOS facts. This section records the implementation checkpoint; the linked Issue and
+PR own current review, verification, merge and closeout evidence.
+Plan 47 retains the finite signal-phase checklist and ordered gaps. The latest
+owner direction excludes every issue marked Future from sprint selection and
+indirect scope reuse, superseding older scheduling references below.
+
+Sprint 32 is verified closed through PR 245, merge
+`08501889ef7aacab93ac58409209fbe46dfaed10`, successful main admission
+37029767889, closed Issue 244/milestone 24 and Project Done. Older checkpoints
+below retain their original pre-merge state as history.
+
 ## Sprint 32 — frozen scope, October 2, 2026
 
 [Sprint32 / #244](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/244),

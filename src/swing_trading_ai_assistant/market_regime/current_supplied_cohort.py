@@ -56,6 +56,8 @@ CURRENT_SUPPLIED_COHORT_MARKET_REGIME_RUNTIME_SOURCES_V1: Final = (
     "src/swing_trading_ai_assistant/market_data/schedule_evidence.py",
     "src/swing_trading_ai_assistant/market_data/storage_root_lease.py",
     "src/swing_trading_ai_assistant/market_regime/current_supplied_cohort.py",
+    "src/swing_trading_ai_assistant/market_data/setup_screen.py",
+    "src/swing_trading_ai_assistant/market_data/setup_screen_runtime_identity_manifest.py",
 )
 CURRENT_SUPPLIED_COHORT_MARKET_REGIME_RUNTIME_MANIFEST_MODULE_V1: Final = "swing_trading_ai_assistant.market_regime.current_supplied_cohort_runtime_identity_manifest"
 CURRENT_SUPPLIED_COHORT_MARKET_REGIME_RUNTIME_MANIFEST_V1: Final = "src/swing_trading_ai_assistant/market_regime/current_supplied_cohort_runtime_identity_manifest.py"
@@ -706,6 +708,8 @@ def current_supplied_cohort_market_regime_runtime_code_identity_v1() -> str:
         "src/swing_trading_ai_assistant/market_data/schedule_evidence.py": "swing_trading_ai_assistant.market_data.schedule_evidence",
         "src/swing_trading_ai_assistant/market_data/storage_root_lease.py": "swing_trading_ai_assistant.market_data.storage_root_lease",
         "src/swing_trading_ai_assistant/market_regime/current_supplied_cohort.py": __name__,
+        "src/swing_trading_ai_assistant/market_data/setup_screen.py": "swing_trading_ai_assistant.market_data.setup_screen",
+        "src/swing_trading_ai_assistant/market_data/setup_screen_runtime_identity_manifest.py": "swing_trading_ai_assistant.market_data.setup_screen_runtime_identity_manifest",
     }
     for relative in CURRENT_SUPPLIED_COHORT_MARKET_REGIME_RUNTIME_SOURCES_V1:
         _require_loaded_source(loaded[relative], root, relative)
