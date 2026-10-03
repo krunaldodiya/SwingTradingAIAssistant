@@ -17,10 +17,6 @@ permissions:
 env:
   SWING_CONTAINER_RUNTIME: docker
 
-concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-
 jobs:
   reject-untrusted-main:
     name: Reject unauthorized main actor
@@ -29,6 +25,10 @@ jobs:
       github.repository == 'krunaldodiya/SwingTradingAIAssistant' &&
       github.actor != 'krunaldodiya'
     permissions: {}
+    concurrency:
+      group: ci-${{ github.workflow }}-${{ github.ref }}
+      queue: max
+      cancel-in-progress: false
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -49,6 +49,10 @@ jobs:
       github.event.pull_request.head.repo.full_name == github.repository
     permissions:
       contents: read
+    concurrency:
+      group: ci-${{ github.workflow }}-pr-${{ github.event.pull_request.number }}
+      queue: single
+      cancel-in-progress: true
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -196,6 +200,10 @@ jobs:
       contents: read
       pull-requests: read
       checks: read
+    concurrency:
+      group: ci-${{ github.workflow }}-${{ github.ref }}
+      queue: max
+      cancel-in-progress: false
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:

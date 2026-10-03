@@ -17,8 +17,24 @@ restart CI on the owner's PC, change visibility, buy capacity or weaken gates.
 Only the owner actor and same-repository owner-authored PRs are admitted. The
 quality job runs for ready PRs; draft updates do not allocate a quality runner.
 Marking a PR ready triggers its checks. Superseded PR runs cancel through the
-existing per-PR concurrency group. Main and publication work stays serialized
-within its existing groups and cannot be cancelled just to erase failure evidence.
+per-PR quality-job group with `queue: single` and `cancel-in-progress: true`.
+Both main job paths share `ci-${{ github.workflow }}-${{ github.ref }}` across run
+IDs, with `queue: max` and `cancel-in-progress: false`. Publication has its own
+job-level `publish-oci-main` group with the same non-cancelling queue policy;
+ineligible PR completion events never join that publication job queue. No
+workflow-wide lock can prevent a newer PR quality job from superseding its
+predecessor. Main CI still has no `workflow_dispatch` trigger.
+
+GitHub's [concurrency contract](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency)
+allows one active and at most 100 pending jobs per `max` queue. It orders jobs
+by when they started waiting, not necessarily commit or dispatch order. At the
+limit, further jobs are cancelled; those outcomes remain blocked, never admitted.
+Inspect pending work and remaining allowance before merging. Do not merge a new
+candidate while required publication for the prior candidate remains incomplete:
+the publisher still requires the exact current main commit, so a superseded
+commit fails explicitly instead of inheriting a later receipt. Preserve all
+failed, timed-out, cancelled and skipped outcomes; queueing is not unlimited
+capacity and does not guarantee publication success.
 No schedule, matrix, automatic retry, setup-uv cache or Actions artifact upload
 is introduced. Markdown-only events retain their native path exclusions and
 local `git diff --check` policy. Large/indeterminate GitHub path comparisons and
@@ -38,8 +54,11 @@ are repair evidence, not the final full gate.
 Main reuses PR success only through verified exact-tree admission: exact successful
 run attempt, completed quality job before merge, GitHub Actions runner group 0,
 exact `ubuntu-24.04` label, strict notice record, PR/base/head/merge parents/tree
-and workflow identities. Self-hosted, stale, missing, ambiguous or malformed
-admission fails closed to the existing full main fallback. A valid admission does
+and workflow identities. An explicitly completed/skipped quality job for the
+queried run attempt contributes no admission candidate; a draft workflow success
+cannot invalidate a later ready run or provide evidence itself. Exactly one
+successful executed quality job and strict notice are still required. Self-hosted,
+failed, stale, missing, ambiguous or malformed admission fails closed to the existing full main fallback. A valid admission does
 not repeat the full suite. Old self-hosted evidence remains historical and cannot
 establish hosted execution. The artifact transport remains solely for explicitly
 selected historical tooling; current workflows use check annotations.
@@ -129,6 +148,9 @@ No direct main push or automatic merge is authorized by this procedure.
 
 Only after hosted validation, inventory local CI services/controllers, runner
 registrations, job containers/networks/volumes, images, caches and retained receipts.
+Include local `ggshield` installations and GitGuardian hooks only if inspection
+proves they exist and are CI-only. Preserve the hosted GitGuardian App/checks,
+shared development dependencies, and repository workflows required for hosted CI.
 For each item record its exact identity/path, ownership, dependencies, unique data,
 recovery/retention choice and proposed action. Obtain approval of that exact
 permanent-deletion inventory. Preserve shared Podman, Node, Python, application

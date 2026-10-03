@@ -32,7 +32,7 @@ _ALWAYS_GATE = (
     'uv run --no-sync --extra dev pytest -m "not private_source"',
 )
 _RELEASE_BUILD = "uv build --no-build-isolation --python .venv/bin/python"
-_CI_ROOT_HEADERS = ("name: CI", "on:", "permissions:", "env:", "concurrency:", "jobs:")
+_CI_ROOT_HEADERS = ("name: CI", "on:", "permissions:", "env:", "jobs:")
 _CI_STATIC_BLOCKS = {
     "name: CI": ("name: CI",),
     "on:": (
@@ -49,12 +49,6 @@ _CI_STATIC_BLOCKS = {
     ),
     "permissions:": ("permissions:", "  contents: read"),
     "env:": ("env:", "  SWING_CONTAINER_RUNTIME: docker"),
-    "concurrency:": (
-        "concurrency:",
-        "  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || "
-        "github.run_id }}",
-        "  cancel-in-progress: ${{ github.event_name == 'pull_request' }}",
-    ),
 }
 _APPROVED_ACTIONS = (
     "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2",
@@ -85,6 +79,10 @@ _REJECTION_JOB = """  reject-untrusted-main:
       github.repository == 'krunaldodiya/SwingTradingAIAssistant' &&
       github.actor != 'krunaldodiya'
     permissions: {}
+    concurrency:
+      group: ci-${{ github.workflow }}-${{ github.ref }}
+      queue: max
+      cancel-in-progress: false
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -237,6 +235,14 @@ def validate_ci_workflow(text: str) -> None:
         or jobs_text.count('PYTEST_XDIST_AUTO_NUM_WORKERS: "2"') != 2
         or jobs_text.count("    runs-on: ubuntu-24.04") != 3
         or jobs_text.count("          enable-cache: false") != 2
+        or jobs_text.count("      queue: max") != 2
+        or jobs_text.count("      cancel-in-progress: false") != 2
+        or jobs_text.count("      queue: single") != 1
+        or jobs_text.count("      cancel-in-progress: true") != 1
+        or jobs_text.count("      group: ci-${{ github.workflow }}-${{ github.ref }}")
+        != 2
+        or "      group: ci-${{ github.workflow }}-pr-${{ github.event.pull_request.number }}"
+        not in jobs_text
     ):
         raise ValueError("CI admission, quality, or fallback contract is missing")
     if any(re.fullmatch(r"\s+[a-z-]+:\s+write", line) for line in job_lines):
@@ -261,6 +267,11 @@ def test_ci_structural_contract_rejects_privilege_pin_activity_and_gate_regressi
 
     fixtures = (
         workflow.replace("ubuntu-24.04", "self-hosted"),
+        workflow.replace("${{ github.ref }}", "${{ github.run_id }}"),
+        workflow.replace("      queue: max", "      queue: single"),
+        workflow.replace(
+            "      cancel-in-progress: false", "      cancel-in-progress: true"
+        ),
         workflow.replace(
             "SWING_CONTAINER_RUNTIME: docker", "SWING_CONTAINER_RUNTIME: auto"
         ),

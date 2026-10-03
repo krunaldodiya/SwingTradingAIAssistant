@@ -10,10 +10,6 @@ permissions: {}
 env:
   SWING_CONTAINER_RUNTIME: docker
 
-concurrency:
-  group: publish-oci-main
-  cancel-in-progress: false
-
 jobs:
   publish:
     name: Build, verify and publish Linux x86_64 image
@@ -24,6 +20,10 @@ jobs:
       github.event.workflow_run.head_repository.full_name == github.repository &&
       github.repository == 'krunaldodiya/SwingTradingAIAssistant' &&
       github.event.workflow_run.actor.login == 'krunaldodiya'
+    concurrency:
+      group: publish-oci-main
+      queue: max
+      cancel-in-progress: false
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
