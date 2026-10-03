@@ -89,6 +89,6 @@ RELATIVE_STRENGTH_RUNTIME_SOURCE_SHA256_V1: Final[dict[str, str]] = {
     "src/swing_trading_ai_assistant/relative_strength/current.py": "63720e4d6bd48b1f173cc120307668a2b10a161e69165324cfc72c1c62621b43",
     "src/swing_trading_ai_assistant/relative_strength/request.py": "46e85ad41c788186eb380bedc2bd58fe65755ccbbc2bf2fddb060e267cd7aa06",
     "src/swing_trading_ai_assistant/relative_strength/service.py": "4f40eefbed5b0412e5bf0b6892ff84a1f1ef37906b394c3071eb9062789b084a",
-    "src/swing_trading_ai_assistant/market_data/setup_screen.py": "5f97a04465f1c97be3989c54154fd59eba4d81cb7a405650157dd1adee5b87d0",
-    "src/swing_trading_ai_assistant/market_data/setup_screen_runtime_identity_manifest.py": "b5e4266c0327abc5fd2ac8f3b186398caa79c1782ecc8f3163ef1498a74b83bf",
+    "src/swing_trading_ai_assistant/market_data/setup_screen.py": "900bd6703ef3b1384a8a2a2e03b8c1c9e2820bd63548d4b165aad75ba9b401a9",
+    "src/swing_trading_ai_assistant/market_data/setup_screen_runtime_identity_manifest.py": "32a25eafa0620add77282238c1848cef1f4944c8045bf2f80f88590034ca4d1b",
 }

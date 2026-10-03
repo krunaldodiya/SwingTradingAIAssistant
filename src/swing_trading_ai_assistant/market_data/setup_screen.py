@@ -21,6 +21,7 @@ from swing_trading_ai_assistant.research_packet.bharatstock_v2 import (
     validate_bharatstock_research_packet_v2,
 )
 
+from .current_evidence_acquisition import CurrentEvidenceAcquisitionFailureCode
 from .current_stock_research import CurrentStockResearchInputError
 from .current_stock_research_v2 import CurrentStockResearchResultV2
 from .current_stock_research_v2 import (
@@ -35,6 +36,46 @@ CRITERION: Final = "LATEST_COMPLETED_UPWARD_BOS@v1"
 _ALLOWED: Final = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.&_-"
 _MAX_OUTPUT: Final = 1024 * 1024
 ResearchService = Callable[..., CurrentStockResearchResultV2]
+
+
+def _validate_diagnostic(result: CurrentStockResearchResultV2) -> None:
+    # The envelope constructor admits arbitrary text; export only producer-owned
+    # diagnostic combinations, including the packet/status relationship.
+    if result.packet is not None:
+        expected = {
+            "READY": ("complete", "QUESTION_READY"),
+            "NOT_READY": ("complete", "QUESTION_NOT_READY"),
+        }.get(result.status)
+        if (result.stage, result.code) != expected:
+            raise ValueError("invalid setup packet diagnostic")
+        return
+    allowed = (
+        {
+            ("mapping", code)
+            for code in (
+                "UNSUPPORTED_NSE_EQ_IDENTITY",
+                "MAPPING_MISSING",
+                "MAPPING_AMBIGUOUS",
+                "MAPPING_UNAVAILABLE",
+            )
+        }
+        | {
+            ("deadline", "CLOCK_PRECEDES_SELECTION"),
+            ("deadline", "ACQUISITION_DEADLINE_EXPIRED"),
+        }
+        | {("calendar", code.value) for code in CurrentEvidenceAcquisitionFailureCode}
+    )
+    if result.status == "INSUFFICIENT_EVIDENCE":
+        valid = (result.stage, result.code) == (
+            "calendar",
+            "INSUFFICIENT_COMPLETED_SESSIONS",
+        )
+    else:
+        valid = (
+            result.status == "UNAVAILABLE" and (result.stage, result.code) in allowed
+        )
+    if not valid or result.evidence_known_at is not None:
+        raise ValueError("terminal or invalid setup producer diagnostic")
 
 
 def _instant(value: datetime | None) -> str | None:
@@ -79,19 +120,7 @@ def _project(  # noqa: C901 - explicit admission and causal failures precede pro
         raise ValueError("setup research request mismatch")
     if result.runtime_code_identity_sha256 != producer_runtime:
         raise ValueError("setup producer runtime mismatch")
-    if (
-        result.stage == "storage"
-        or not 1 <= len(result.stage) <= 64
-        or any(
-            character not in "abcdefghijklmnopqrstuvwxyz_" for character in result.stage
-        )
-        or not 1 <= len(result.code) <= 128
-        or any(
-            character not in "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_"
-            for character in result.code
-        )
-    ):
-        raise ValueError("terminal or invalid setup producer diagnostic")
+    _validate_diagnostic(result)
     row: dict[str, object] = {
         "requested_symbol": symbol,
         "status": "UNKNOWN",
@@ -122,6 +151,17 @@ def _project(  # noqa: C901 - explicit admission and causal failures precede pro
     if type(result.packet) is not BharatStockResearchPacketV2:
         raise ValueError("unexpected setup research packet")
     packet = validate_bharatstock_research_packet_v2(result.packet)
+    known_values = [
+        slot.source.known_at
+        for slot in packet.feature_slots
+        if slot.source is not None
+        and any(
+            coverage.feature == slot.feature and coverage.observed > 0
+            for coverage in packet.coverage
+        )
+    ]
+    if result.evidence_known_at != (max(known_values) if known_values else None):
+        raise ValueError("setup producer knowledge time mismatch")
     mapped = packet.mapping_projection.members[0]
     member = packet.members[0]
     instrument = member.member
@@ -175,8 +215,6 @@ def _project(  # noqa: C901 - explicit admission and causal failures precede pro
         or len(source.admitted_sessions) != 21
     ):
         raise ValueError("invalid admitted setup Structure source")
-    if result.evidence_known_at != source.known_at:
-        raise ValueError("setup producer knowledge time mismatch")
     calculation = feature.fact.calculation
     if (calculation.isin, calculation.exchange, calculation.effective_symbol) != (
         instrument.isin,

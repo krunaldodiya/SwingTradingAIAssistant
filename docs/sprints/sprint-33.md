@@ -107,6 +107,32 @@ verified all 887 bindings with no further changes. Complete focused output,
 Pyright, Vulture and manifest receipts are retained in the visible evidence
 directory above. Full coverage, package/installed and hosted gates remain pending.
 
+Both complete independent full reviews of candidate
+`a4f03049dd1aca4d22920efbac121d45d62775b7` (tree
+`c5de273515d463e56bede41ef3427713f0da9c2a`) returned BLOCKERS. Domain and
+security independently reproduced unknown-row knowledge-time substitution;
+security also reproduced alphabet-safe arbitrary diagnostic disclosure. Both
+reviewers remained read-only and verified clean exact bytes. Complete reports
+`domain-review-a4f0304.md` and `security-review-a4f0304.md` are retained in the
+visible evidence directory. Their 51 passing focused checks did not invalidate
+the counterexamples, and neither verdict transfers to corrected bytes.
+
+Correction regressions reproduced five failures and one already-correct
+insufficient-structure rejection before repair (`review-correction-red.txt`).
+Projection now admits the producer's closed stage/code/status/packet combinations
+and validates the observed-coverage-derived envelope knowledge time before any
+missing-evidence return. Packetless results require no source knowledge time.
+No new mathematics, provider, persistence or attestation mechanism was added.
+All 57 setup/demo checks then passed in 20.00 seconds
+(`review-correction-green.txt`). Corrected comparison identities were recomputed
+from captured observations; packets/facts/timing still match base bytes
+(`corrected-comparison-identity-reconstruction.txt`). Broader focused/static
+compatibility and new exact-current independent verdicts remain required.
+The corrected combined focused run passed all 78 checks in 36.82 seconds
+(`correction-focused-tests.txt`); Ruff/format, existing-interpreter Pyright and
+configured Vulture passed. Final audit verified 887 bindings without changes.
+Full coverage/build/installed/hosted gates and exact-current reviews remain pending.
+
 Complete every Plan 47 matrix row, stable static/focused compatibility checks,
 actual synthetic public demonstration and runtime identity reconstruction where
 existing expected hashes move. Freeze a committed clean exact candidate, obtain

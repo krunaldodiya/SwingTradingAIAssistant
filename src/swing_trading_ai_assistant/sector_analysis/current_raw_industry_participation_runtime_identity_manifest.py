@@ -89,6 +89,6 @@ CURRENT_RAW_INDUSTRY_PARTICIPATION_RUNTIME_SOURCE_SHA256_V1: Final[dict[str, str
     "src/swing_trading_ai_assistant/volume_analysis/current.py": "e55e854e4a1629be4e2bf522dc1dcaf2cd9ae763784ac557b6b201591a6c8618",
     "src/swing_trading_ai_assistant/volume_analysis/request.py": "241fa165aa3e684037499a187d18779f835997ce9c064a6a32a2c542dc6ecc97",
     "src/swing_trading_ai_assistant/volume_analysis/service.py": "3c23777c5825f2b4c46c6b5ff9de184826c25910688ef2ec432dfc86da096893",
-    "src/swing_trading_ai_assistant/market_data/setup_screen.py": "5f97a04465f1c97be3989c54154fd59eba4d81cb7a405650157dd1adee5b87d0",
-    "src/swing_trading_ai_assistant/market_data/setup_screen_runtime_identity_manifest.py": "b5e4266c0327abc5fd2ac8f3b186398caa79c1782ecc8f3163ef1498a74b83bf",
+    "src/swing_trading_ai_assistant/market_data/setup_screen.py": "900bd6703ef3b1384a8a2a2e03b8c1c9e2820bd63548d4b165aad75ba9b401a9",
+    "src/swing_trading_ai_assistant/market_data/setup_screen_runtime_identity_manifest.py": "32a25eafa0620add77282238c1848cef1f4944c8045bf2f80f88590034ca4d1b",
 }

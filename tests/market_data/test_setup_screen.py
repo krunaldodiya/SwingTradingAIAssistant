@@ -760,3 +760,88 @@ def test_producer_provenance_substitution_is_terminal(
 
     with pytest.raises(ValueError):
         screen_setup_current(("PNB",), tmp_path, research=substituted)
+
+
+@pytest.mark.parametrize("mode", ["short", "insufficient", "packetless"])
+def test_unknown_knowledge_substitution_is_terminal(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], mode: str
+) -> None:
+    if mode == "packetless":
+        admitted = CurrentStockResearchResultV2(
+            "current-stock-research@v2",
+            "UNAVAILABLE",
+            "mapping",
+            "MAPPING_UNAVAILABLE",
+            "CURRENT_STRUCTURE",
+            "PNB",
+            _NOW,
+            _NOW + timedelta(minutes=30),
+            _runtime_identity(),
+            None,
+            ("not_trade_eligibility",),
+        )
+    else:
+        admitted = _service(mode)(
+            "PNB", tmp_path, question="CURRENT_STRUCTURE", refresh=False
+        )
+    if mode != "insufficient":
+        assert admitted.evidence_known_at is None
+    object.__setattr__(admitted, "evidence_known_at", _NOW - timedelta(days=1))
+    code = main(
+        [
+            "setup-screen-current",
+            "--symbol",
+            "PNB",
+            "--storage-root",
+            str(tmp_path),
+            "--output",
+            "json",
+        ],
+        current_stock_research_v2=lambda *args, **kwargs: admitted,
+    )
+    output = capsys.readouterr()
+    assert code == 2
+    assert output.out == ""
+    assert output.err == "internal_error\n"
+
+
+@pytest.mark.parametrize(
+    "stage,diagnostic",
+    [
+        ("private_provider_stage", "PRIVATE_PROVIDER_BODY_TOKEN_ABC123"),
+        ("mapping", "PRIVATE_PROVIDER_BODY_TOKEN_ABC123"),
+        ("calendar", "MAPPING_UNAVAILABLE"),
+    ],
+)
+def test_alphabet_safe_forged_diagnostic_is_terminal(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], stage: str, diagnostic: str
+) -> None:
+    admitted = CurrentStockResearchResultV2(
+        "current-stock-research@v2",
+        "UNAVAILABLE",
+        stage,
+        diagnostic,
+        "CURRENT_STRUCTURE",
+        "PNB",
+        _NOW,
+        _NOW + timedelta(minutes=30),
+        _runtime_identity(),
+        None,
+        ("not_trade_eligibility",),
+    )
+    code = main(
+        [
+            "setup-screen-current",
+            "--symbol",
+            "PNB",
+            "--storage-root",
+            str(tmp_path),
+            "--output",
+            "json",
+        ],
+        current_stock_research_v2=lambda *args, **kwargs: admitted,
+    )
+    output = capsys.readouterr()
+    assert code == 2
+    assert output.out == ""
+    assert output.err == "internal_error\n"
