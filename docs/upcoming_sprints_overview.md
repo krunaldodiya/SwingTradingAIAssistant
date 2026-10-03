@@ -4,8 +4,8 @@
 
 [Issue 246](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/246)
 and [Plan 47](plans/47-causal-setup-detection.md) freeze one research-candidate
-path by projecting existing latest-session upward BOS facts. Implementation
-and focused verification are in progress; review/release are not complete.
+path by projecting existing latest-session upward BOS facts. This section records the implementation checkpoint; the linked Issue and
+PR own current review, verification, merge and closeout evidence.
 Plan 47 retains the finite signal-phase checklist and ordered gaps. The latest
 owner direction excludes every issue marked Future from sprint selection and
 indirect scope reuse, superseding older scheduling references below.

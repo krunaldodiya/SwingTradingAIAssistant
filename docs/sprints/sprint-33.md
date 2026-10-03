@@ -1,6 +1,6 @@
 # Sprint 33 — Causal Setup Detection
 
-Status: implementation in progress. [Issue 246](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/246),
+Status: implementation checkpoint; linked Issue 246 owns live delivery status. [Issue 246](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/246),
 milestone 25, Project In Progress, High priority/risk, Story.
 Owner/risk owner: Krunal Dodiya. [Plan 47](../plans/47-causal-setup-detection.md)
 owns the bounded contract, finite signal-phase checklist and ordered gaps.
@@ -141,3 +141,27 @@ applicable full/build/installed/hosted gates with required effect authority.
 Preserve truthful tracker/PR/main admission state and separate merge approval.
 No lifecycle, expiry, eligibility or effectiveness completion follows from this
 first detection slice; broader signal-phase gaps remain visible in Plan 47.
+
+## Full-gate inventory correction
+
+Both independent correction reviews passed candidate `d81dbda` for the complete
+accepted slice. Configured self-hosted run 37099726634 subsequently exposed
+legacy cohort source-inventory failures. The existing discriminating
+`test_all_runtime_identity_manifests_bind_every_supported_path_form` failed
+before repair: the old package-relative inventory retained stale manifest
+hashes and omitted the two new setup files. The prior 887-binding audit covered
+source-root entries only; it did not verify this package-relative map.
+
+The legacy inventory now includes both setup files and current hashes without
+changing cohort mathematics or weakening closed inventory verification. All
+88 cohort checks pass after repair. Initial CI was cancelled after the failure
+was locally reproduced; its failed progress and cancellation remain evidence,
+not acceptance. New exact-byte reviews and a fresh full gate are required.
+
+The installed setup demonstration passed all three scenarios outside checkout
+with frozen dependencies and no PYTHONPATH. Initial cached group-writable source
+permissions were rejected; official uv copy-mode/no-cache installation under
+umask 022 resolved the environment issue without changing runtime checks.
+
+This document retains pre-merge checkpoints. The governing Issue and linked PR
+own final review, full-gate, merge/main-admission and lifecycle receipts.
