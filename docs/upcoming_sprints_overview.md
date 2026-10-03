@@ -1,5 +1,19 @@
 # Upcoming Sprints Overview
 
+## Sprint 34 — candidate comparison, October 3, 2026
+
+[Issue 248](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/248)
+and [Plan 48](plans/48-candidate-observation-comparison.md) govern the owner's
+selected bounded two-observation candidate comparison. Signal/research work
+precedes risk/capital/money management/position sizing. All eight Plan 47 phase
+outcomes remain visible; no Future issue supplies scope. Verification and reviews
+are pending; this is not signal-phase completion.
+
+Sprint 33 is live-verified closed through PR 247 merge
+`9d30fa6083cbed95c1bd96866237dd01ee8c78dc`, successful main admission
+37106938993/publication 37106959996, closed Issue 246/milestone 25 and Project Done.
+Older checkpoints below preserve their historical state.
+
 ## Sprint 33 — Causal Setup Detection, October 3, 2026
 
 [Issue 246](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/246)
