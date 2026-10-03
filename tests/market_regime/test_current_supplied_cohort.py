@@ -89,6 +89,8 @@ _RUNTIME_SOURCES = (
     "src/swing_trading_ai_assistant/market_data/schedule_evidence.py",
     "src/swing_trading_ai_assistant/market_data/storage_root_lease.py",
     "src/swing_trading_ai_assistant/market_regime/current_supplied_cohort.py",
+    "src/swing_trading_ai_assistant/market_data/setup_screen.py",
+    "src/swing_trading_ai_assistant/market_data/setup_screen_runtime_identity_manifest.py",
 )
 _RUNTIME_MANIFEST = "src/swing_trading_ai_assistant/market_regime/current_supplied_cohort_runtime_identity_manifest.py"
 
@@ -1930,6 +1932,12 @@ def test_runtime_identity_accepts_checkout_and_installed_package_layouts(
             "swing_trading_ai_assistant.market_data.storage_root_lease"
         ),
         "src/swing_trading_ai_assistant/market_regime/current_supplied_cohort.py": module,
+        "src/swing_trading_ai_assistant/market_data/setup_screen.py": importlib.import_module(
+            "swing_trading_ai_assistant.market_data.setup_screen"
+        ),
+        "src/swing_trading_ai_assistant/market_data/setup_screen_runtime_identity_manifest.py": importlib.import_module(
+            "swing_trading_ai_assistant.market_data.setup_screen_runtime_identity_manifest"
+        ),
         _RUNTIME_MANIFEST: manifest_module,
     }
     for logical_path, imported_module in modules.items():

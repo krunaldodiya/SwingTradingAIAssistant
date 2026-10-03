@@ -11,6 +11,11 @@ from pathlib import Path
 from typing import cast
 
 import pytest
+from test_current_stock_research import (
+    _NOW,
+    _Clock,
+    _watchlist_sources,
+)
 
 from swing_trading_ai_assistant.market_data.bharatstock import (
     BharatStockClient,
@@ -36,11 +41,6 @@ from swing_trading_ai_assistant.market_structure.current_live import (
     MarketStructureMathBarV1,
     MarketStructureMathMemberInputV1,
     evaluate_market_structure_math_member_v1,
-)
-from tests.market_data.test_current_stock_research import (
-    _NOW,
-    _Clock,
-    _watchlist_sources,
 )
 
 _HIGHS = (
