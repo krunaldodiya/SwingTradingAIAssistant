@@ -336,7 +336,9 @@ class AnnotationApi(FakeApi):
                     "run_id": RUN_ID,
                     "run_attempt": RUN_ATTEMPT,
                     "completed_at": "2026-08-27T12:00:00Z",
-                    "labels": ["self-hosted", "Linux", "X64", "swing-ci-linux"],
+                    "labels": ["ubuntu-24.04"],
+                    "runner_group_id": 0,
+                    "runner_group_name": "GitHub Actions",
                 }
             ],
         }
@@ -379,7 +381,12 @@ def test_annotation_admission_reuses_exact_tree_without_artifact_storage() -> No
         ("status", "in_progress"),
         ("run_attempt", 2),
         ("run_id", 999),
-        ("labels", ["ubuntu-24.04"]),
+        ("labels", ["self-hosted", "Linux", "X64", "swing-ci-linux"]),
+        ("labels", ["ubuntu-latest"]),
+        ("labels", ["self-hosted", "ubuntu-24.04"]),
+        ("runner_group_id", 1),
+        ("runner_group_id", None),
+        ("runner_group_name", "Default"),
         ("completed_at", "2026-08-27T12:02:00Z"),
     ],
 )

@@ -431,8 +431,10 @@ def _candidate_annotation(
             or job.get("conclusion") != "success"
             or job.get("run_id") != run_id
             or job.get("run_attempt") != attempt
-            or not isinstance(labels, list)
-            or not {"self-hosted", "Linux", "X64", "swing-ci-linux"}.issubset(labels)
+            or labels != ["ubuntu-24.04"]
+            or type(job.get("runner_group_id")) is not int
+            or job.get("runner_group_id") != 0
+            or job.get("runner_group_name") != "GitHub Actions"
             or _parse_time(job.get("completed_at"), "job completion") > merged_at
         ):
             raise ValueError("quality job does not establish trusted prior execution")

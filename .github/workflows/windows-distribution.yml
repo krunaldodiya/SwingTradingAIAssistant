@@ -3,8 +3,7 @@ name: Windows distribution conformance
 on:
   workflow_dispatch:
 
-permissions:
-  contents: read
+permissions: {}
 
 concurrency:
   group: windows-distribution
@@ -12,24 +11,12 @@ concurrency:
 
 jobs:
   conformance:
-    # No pull_request, push, repository_dispatch, or user-supplied source refs.
-    if: github.ref == 'refs/heads/main' && github.repository == 'krunaldodiya/SwingTradingAIAssistant'
-    runs-on: [self-hosted, Windows, X64, swing-windows-conformance]
-    timeout-minutes: 45
+    # WSL2 + Docker Desktop remains a separate qualification, never a Linux pass.
+    if: github.ref == 'refs/heads/main' && github.repository == 'krunaldodiya/SwingTradingAIAssistant' && github.actor == 'krunaldodiya'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 1
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-        with:
-          ref: ${{ github.sha }}
-          fetch-depth: 0
-          persist-credentials: false
-      - name: Verify WSL installed wheel and published Docker Desktop digest
-        shell: powershell
-        run: ./scripts/verify_windows_distribution.ps1
-      - name: Retain conformance receipts on the Windows host
-        if: always()
-        shell: powershell
+      - name: Report unsupported hosted Windows qualification
         run: |
-          $ErrorActionPreference = 'Stop'
-          $target = Join-Path $env:LOCALAPPDATA "SwingTradingAIAssistant/ci-receipts/$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
-          New-Item -ItemType Directory -Force -Path $target | Out-Null
-          Copy-Item -Recurse -ErrorAction Stop artifacts/windows-distribution/* $target
+          echo '::error::Windows qualification is blocked: the required WSL2 and Docker Desktop environment is not established on standard hosted runners. Local CI fallback is prohibited.'
+          exit 1
