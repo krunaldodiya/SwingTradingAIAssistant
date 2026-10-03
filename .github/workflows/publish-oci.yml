@@ -7,9 +7,8 @@ on:
 
 permissions: {}
 
-concurrency:
-  group: publish-oci-main
-  cancel-in-progress: false
+env:
+  SWING_CONTAINER_RUNTIME: docker
 
 jobs:
   publish:
@@ -21,7 +20,11 @@ jobs:
       github.event.workflow_run.head_repository.full_name == github.repository &&
       github.repository == 'krunaldodiya/SwingTradingAIAssistant' &&
       github.event.workflow_run.actor.login == 'krunaldodiya'
-    runs-on: [self-hosted, Linux, X64, swing-ci-linux]
+    concurrency:
+      group: publish-oci-main
+      queue: max
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
       contents: read
@@ -153,9 +156,5 @@ jobs:
             '{source_commit:$source,image:$image,tag:$tag,digest:$digest,local_image_id:$local_id,published_image_id:$published_id,distribution:$verified[0]}' \
             > "$RUNNER_TEMP/oci-publication-receipt.json"
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
-          target="$SWING_CI_ARTIFACTS/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
-          mkdir -p "$target"
-          cp "$RUNNER_TEMP/oci-publication-receipt.json" "$target/"
-          cp "$RUNNER_TEMP/linux-distribution-receipt.json" "$target/"
-          jq -c '{source_commit,digest,published_image_id}' "$target/oci-publication-receipt.json" >> "$GITHUB_STEP_SUMMARY"
+          jq -c . "$RUNNER_TEMP/oci-publication-receipt.json" | tee -a "$GITHUB_STEP_SUMMARY"
           "$runtime" logout ghcr.io

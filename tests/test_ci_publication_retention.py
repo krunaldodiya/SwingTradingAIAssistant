@@ -34,7 +34,6 @@ def test_verified_receipt_survives_failed_logout(tmp_path):
         os.environ,
         PATH=str(binary) + ":" + os.environ["PATH"],
         RUNNER_TEMP=str(scratch),
-        SWING_CI_ARTIFACTS=str(tmp_path / "artifacts"),
         GITHUB_RUN_ID="123",
         GITHUB_RUN_ATTEMPT="1",
         GITHUB_OUTPUT=str(tmp_path / "outputs"),
@@ -55,10 +54,7 @@ def test_verified_receipt_survives_failed_logout(tmp_path):
         check=False,
     )
     assert result.returncode == 47, result.stderr
-    retained = tmp_path / "artifacts/123-1"
-    assert (retained / "oci-publication-receipt.json").read_bytes() == (
-        scratch / "oci-publication-receipt.json"
-    ).read_bytes()
-    assert (
-        retained / "linux-distribution-receipt.json"
-    ).read_bytes() == receipt.read_bytes()
+    publication = scratch / "oci-publication-receipt.json"
+    assert publication.read_bytes() in result.stdout
+    assert publication.read_bytes() in (tmp_path / "summary").read_bytes()
+    assert receipt.exists()

@@ -32,12 +32,13 @@ _ALWAYS_GATE = (
     'uv run --no-sync --extra dev pytest -m "not private_source"',
 )
 _RELEASE_BUILD = "uv build --no-build-isolation --python .venv/bin/python"
-_CI_ROOT_HEADERS = ("name: CI", "on:", "permissions:", "concurrency:", "jobs:")
+_CI_ROOT_HEADERS = ("name: CI", "on:", "permissions:", "env:", "jobs:")
 _CI_STATIC_BLOCKS = {
     "name: CI": ("name: CI",),
     "on:": (
         "on:",
         "  pull_request:",
+        "    types: [opened, synchronize, reopened, ready_for_review]",
         "    paths-ignore:",
         "      - '**.md'",
         "  push:",
@@ -47,12 +48,7 @@ _CI_STATIC_BLOCKS = {
         "      - '**.md'",
     ),
     "permissions:": ("permissions:", "  contents: read"),
-    "concurrency:": (
-        "concurrency:",
-        "  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || "
-        "github.run_id }}",
-        "  cancel-in-progress: ${{ github.event_name == 'pull_request' }}",
-    ),
+    "env:": ("env:", "  SWING_CONTAINER_RUNTIME: docker"),
 }
 _APPROVED_ACTIONS = (
     "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2",
@@ -64,6 +60,7 @@ _APPROVED_JOB_IDS = ("reject-untrusted-main", "quality", "main-backstop")
 _APPROVED_JOB_CONDITIONS = {
     "quality": (
         "github.event_name == 'pull_request' && "
+        "github.event.pull_request.draft == false && "
         "github.repository == 'krunaldodiya/SwingTradingAIAssistant' && "
         "github.actor == 'krunaldodiya' && "
         "github.event.pull_request.user.login == 'krunaldodiya' && "
@@ -82,7 +79,11 @@ _REJECTION_JOB = """  reject-untrusted-main:
       github.repository == 'krunaldodiya/SwingTradingAIAssistant' &&
       github.actor != 'krunaldodiya'
     permissions: {}
-    runs-on: [self-hosted, Linux, X64, swing-ci-linux]
+    concurrency:
+      group: ci-${{ github.workflow }}-${{ github.ref }}
+      queue: max
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - name: Reject without checking out untrusted source
@@ -101,9 +102,9 @@ _APPROVED_STEP_NAMES = (
     "Run authoritative quality gate",
     "Build distribution",
     "Verify Linux wheel and OCI distribution",
-    "Retain Linux distribution receipt locally",
+    "Record Linux distribution receipt in GitHub",
     "Issue exact-tree CI admission",
-    "Retain exact-tree CI admission locally",
+    "Record exact-tree CI admission in GitHub",
     "Check out repository",
     "Verify exact prior CI admission",
     "Run admitted merge integrity gate",
@@ -121,8 +122,7 @@ _REQUIRED_CI_FRAGMENTS = (
     "      checks: read",
     "          python3 .github/scripts/ci_admission.py issue",
     '          --output "$RUNNER_TEMP/ci-admission.json" --annotation',
-    '          target="$SWING_CI_ARTIFACTS/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"',
-    '          cp "$RUNNER_TEMP/ci-admission.json" "$target/"',
+    '          jq -c . "$RUNNER_TEMP/ci-admission.json" | tee -a "$GITHUB_STEP_SUMMARY"',
     "          CI_ADMISSION_TRANSPORT: check-annotation",
     "        continue-on-error: true",
     "          GITHUB_TOKEN: ${{ github.token }}",
@@ -136,7 +136,7 @@ _REQUIRED_CI_FRAGMENTS = (
     '          uv run --no-sync --extra dev pytest -m "not private_source"',
     "          uv run --no-sync --extra dev python scripts/verify_linux_distribution.py",
     '          --receipt "$RUNNER_TEMP/linux-distribution-receipt.json"',
-    '          cp "$RUNNER_TEMP/linux-distribution-receipt.json" "$target/"',
+    '          jq -c . "$RUNNER_TEMP/linux-distribution-receipt.json" | tee -a "$GITHUB_STEP_SUMMARY"',
 )
 
 
@@ -189,7 +189,7 @@ def _validate_job_policy(job_lines: tuple[str, ...]) -> None:
 
 
 def validate_ci_workflow(text: str) -> None:
-    """Validate owner-only self-hosted rejection, admission and fallback."""
+    """Validate owner-only hosted rejection, admission and fallback."""
     blocks = _root_blocks(text)
     if any(
         blocks[header] != expected for header, expected in _CI_STATIC_BLOCKS.items()
@@ -233,9 +233,16 @@ def validate_ci_workflow(text: str) -> None:
         or commands.count(admitted_condition) != 1
         or commands.count(fallback_condition) != 5
         or jobs_text.count('PYTEST_XDIST_AUTO_NUM_WORKERS: "2"') != 2
-        or jobs_text.count("    runs-on: [self-hosted, Linux, X64, swing-ci-linux]")
-        != 3
+        or jobs_text.count("    runs-on: ubuntu-24.04") != 3
         or jobs_text.count("          enable-cache: false") != 2
+        or jobs_text.count("      queue: max") != 2
+        or jobs_text.count("      cancel-in-progress: false") != 2
+        or jobs_text.count("      queue: single") != 1
+        or jobs_text.count("      cancel-in-progress: true") != 1
+        or jobs_text.count("      group: ci-${{ github.workflow }}-${{ github.ref }}")
+        != 2
+        or "      group: ci-${{ github.workflow }}-pr-${{ github.event.pull_request.number }}"
+        not in jobs_text
     ):
         raise ValueError("CI admission, quality, or fallback contract is missing")
     if any(re.fullmatch(r"\s+[a-z-]+:\s+write", line) for line in job_lines):
@@ -259,7 +266,16 @@ def test_ci_structural_contract_rejects_privilege_pin_activity_and_gate_regressi
     validate_ci_workflow(workflow)
 
     fixtures = (
-        workflow.replace("swing-ci-linux", "unreviewed-runner"),
+        workflow.replace("ubuntu-24.04", "self-hosted"),
+        workflow.replace("${{ github.ref }}", "${{ github.run_id }}"),
+        workflow.replace("      queue: max", "      queue: single"),
+        workflow.replace(
+            "      cancel-in-progress: false", "      cancel-in-progress: true"
+        ),
+        workflow.replace(
+            "SWING_CONTAINER_RUNTIME: docker", "SWING_CONTAINER_RUNTIME: auto"
+        ),
+        workflow.replace("github.event.pull_request.draft == false &&", ""),
         workflow.replace("enable-cache: false", "enable-cache: true"),
         workflow.replace("github.actor == 'krunaldodiya'", "github.actor == 'other'"),
         workflow.replace(
@@ -274,9 +290,13 @@ def test_ci_structural_contract_rejects_privilege_pin_activity_and_gate_regressi
             "CI_ADMISSION_TRANSPORT: check-annotation",
             "CI_ADMISSION_TRANSPORT: artifact",
         ),
-        workflow.replace('cp "$RUNNER_TEMP/ci-admission.json" "$target/"', "true"),
         workflow.replace(
-            'cp "$RUNNER_TEMP/linux-distribution-receipt.json" "$target/"', "true"
+            'jq -c . "$RUNNER_TEMP/ci-admission.json" | tee -a "$GITHUB_STEP_SUMMARY"',
+            "true",
+        ),
+        workflow.replace(
+            'jq -c . "$RUNNER_TEMP/linux-distribution-receipt.json" | tee -a "$GITHUB_STEP_SUMMARY"',
+            "true",
         ),
         workflow.replace("contents: read", "contents: write"),
         workflow.replace("contents: read", "contents: read # still read-only"),
@@ -454,3 +474,23 @@ def test_project_docs_have_no_slack_update_requirement() -> None:
     )
 
     assert "slack" not in documentation
+
+
+def test_hosted_distribution_has_no_local_runner_or_receipt_dependency() -> None:
+    for path in (ROOT / ".github/workflows").glob("*.yml"):
+        text = path.read_text()
+        assert "runs-on: [self-hosted" not in text
+        assert "SWING_CI_ARTIFACTS" not in text
+        assert "actions/upload-artifact@" not in text
+        assert "actions/cache@" not in text
+        assert "strategy:" not in text
+    publication = (ROOT / ".github/workflows/publish-oci.yml").read_text()
+    assert "runs-on: ubuntu-24.04" in publication
+    assert "SWING_CONTAINER_RUNTIME: docker" in publication
+    assert "timeout-minutes: 60" in publication
+    windows = (ROOT / ".github/workflows/windows-distribution.yml").read_text()
+    assert "permissions: {}" in windows
+    assert "timeout-minutes: 1" in windows
+    assert "exit 1" in windows
+    assert "uses:" not in windows
+    assert "WSL2 and Docker Desktop" in windows

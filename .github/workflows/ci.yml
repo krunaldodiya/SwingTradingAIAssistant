@@ -2,6 +2,7 @@ name: CI
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     paths-ignore:
       - '**.md'
   push:
@@ -13,9 +14,8 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+env:
+  SWING_CONTAINER_RUNTIME: docker
 
 jobs:
   reject-untrusted-main:
@@ -25,7 +25,11 @@ jobs:
       github.repository == 'krunaldodiya/SwingTradingAIAssistant' &&
       github.actor != 'krunaldodiya'
     permissions: {}
-    runs-on: [self-hosted, Linux, X64, swing-ci-linux]
+    concurrency:
+      group: ci-${{ github.workflow }}-${{ github.ref }}
+      queue: max
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - name: Reject without checking out untrusted source
@@ -38,13 +42,18 @@ jobs:
     name: Quality and build
     if: >-
       github.event_name == 'pull_request' &&
+      github.event.pull_request.draft == false &&
       github.repository == 'krunaldodiya/SwingTradingAIAssistant' &&
       github.actor == 'krunaldodiya' &&
       github.event.pull_request.user.login == 'krunaldodiya' &&
       github.event.pull_request.head.repo.full_name == github.repository
     permissions:
       contents: read
-    runs-on: [self-hosted, Linux, X64, swing-ci-linux]
+    concurrency:
+      group: ci-${{ github.workflow }}-pr-${{ github.event.pull_request.number }}
+      queue: single
+      cancel-in-progress: true
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
       - name: Check out repository
@@ -160,13 +169,11 @@ jobs:
           --prior-commit "$PR_BASE_SHA"
           --receipt "$RUNNER_TEMP/linux-distribution-receipt.json"
 
-      - name: Retain Linux distribution receipt locally
+      - name: Record Linux distribution receipt in GitHub
         if: steps.changes.outputs.full_gate == 'true'
         run: |
-          set -eu
-          target="$SWING_CI_ARTIFACTS/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
-          mkdir -p "$target"
-          cp "$RUNNER_TEMP/linux-distribution-receipt.json" "$target/"
+          set -euo pipefail
+          jq -c . "$RUNNER_TEMP/linux-distribution-receipt.json" | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Issue exact-tree CI admission
         env:
@@ -176,12 +183,10 @@ jobs:
           python3 .github/scripts/ci_admission.py issue
           --output "$RUNNER_TEMP/ci-admission.json" --annotation
 
-      - name: Retain exact-tree CI admission locally
+      - name: Record exact-tree CI admission in GitHub
         run: |
-          set -eu
-          target="$SWING_CI_ARTIFACTS/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
-          mkdir -p "$target"
-          cp "$RUNNER_TEMP/ci-admission.json" "$target/"
+          set -euo pipefail
+          jq -c . "$RUNNER_TEMP/ci-admission.json" | tee -a "$GITHUB_STEP_SUMMARY"
 
 
   main-backstop:
@@ -195,7 +200,11 @@ jobs:
       contents: read
       pull-requests: read
       checks: read
-    runs-on: [self-hosted, Linux, X64, swing-ci-linux]
+    concurrency:
+      group: ci-${{ github.workflow }}-${{ github.ref }}
+      queue: max
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
       - name: Check out repository

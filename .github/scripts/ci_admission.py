@@ -425,14 +425,20 @@ def _candidate_annotation(
         if len(matches) != 1:
             raise ValueError("exactly one quality job is required")
         job = matches[0]
+        if job.get("run_id") != run_id or job.get("run_attempt") != attempt:
+            raise ValueError("quality job does not match the requested run attempt")
+        # A draft workflow may succeed with its quality job explicitly skipped.
+        # It issued no admission; ignore it without weakening executed-job checks.
+        if (job.get("status"), job.get("conclusion")) == ("completed", "skipped"):
+            continue
         labels = job.get("labels")
         if (
             job.get("status") != "completed"
             or job.get("conclusion") != "success"
-            or job.get("run_id") != run_id
-            or job.get("run_attempt") != attempt
-            or not isinstance(labels, list)
-            or not {"self-hosted", "Linux", "X64", "swing-ci-linux"}.issubset(labels)
+            or labels != ["ubuntu-24.04"]
+            or type(job.get("runner_group_id")) is not int
+            or job.get("runner_group_id") != 0
+            or job.get("runner_group_name") != "GitHub Actions"
             or _parse_time(job.get("completed_at"), "job completion") > merged_at
         ):
             raise ValueError("quality job does not establish trusted prior execution")

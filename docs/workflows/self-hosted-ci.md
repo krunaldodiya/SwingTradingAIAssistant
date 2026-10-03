@@ -1,5 +1,11 @@
 # Project self-hosted CI
 
+Status: **SUPERSEDED for execution on 2026-10-03**. The owner now requires
+[GitHub-hosted CI only](github-hosted-ci.md). Do not provision, activate, restart
+or dispatch this historical runner. Retain this procedure and existing resources
+for evidence and exact-inventory retirement after hosted validation and owner
+approval. The instructions below describe the previous implementation.
+
 Owner accepted this delivery change on 2026-09-27 in issue #222. Linux validation,
 main admission and OCI publication use only `[self-hosted, Linux, X64,
 swing-ci-linux]`. There is no GitHub-hosted fallback. The manual Windows workflow

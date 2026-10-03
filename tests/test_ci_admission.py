@@ -336,7 +336,9 @@ class AnnotationApi(FakeApi):
                     "run_id": RUN_ID,
                     "run_attempt": RUN_ATTEMPT,
                     "completed_at": "2026-08-27T12:00:00Z",
-                    "labels": ["self-hosted", "Linux", "X64", "swing-ci-linux"],
+                    "labels": ["ubuntu-24.04"],
+                    "runner_group_id": 0,
+                    "runner_group_name": "GitHub Actions",
                 }
             ],
         }
@@ -379,7 +381,12 @@ def test_annotation_admission_reuses_exact_tree_without_artifact_storage() -> No
         ("status", "in_progress"),
         ("run_attempt", 2),
         ("run_id", 999),
-        ("labels", ["ubuntu-24.04"]),
+        ("labels", ["self-hosted", "Linux", "X64", "swing-ci-linux"]),
+        ("labels", ["ubuntu-latest"]),
+        ("labels", ["self-hosted", "ubuntu-24.04"]),
+        ("runner_group_id", 1),
+        ("runner_group_id", None),
+        ("runner_group_name", "Default"),
         ("completed_at", "2026-08-27T12:02:00Z"),
     ],
 )
@@ -428,6 +435,105 @@ def test_annotation_admission_rejects_incomplete_or_tampered_evidence(
         record["tested_tree" if mutation == "wrong-tree" else "extra"] = "0" * 40
         api.annotations[0]["message"] = json.dumps(record)
     with pytest.raises(ValueError):
+        ci_admission.verify_admission(
+            _push_event(), _annotation_context(), api, _git_value
+        )
+
+
+class DraftThenReadyApi(AnnotationApi):
+    """Two workflow-success runs for one head, but only ready executed quality."""
+
+    def __init__(self, *, draft_first: bool = True) -> None:
+        super().__init__()
+        ready = cast(dict[str, Any], self.runs)["workflow_runs"][0]
+        self.draft_id = RUN_ID - 1
+        draft = {**ready, "id": self.draft_id}
+        self.runs = {"workflow_runs": [draft, ready] if draft_first else [ready, draft]}
+        self.draft_jobs = deepcopy(self.jobs)
+        self.draft_jobs["jobs"][0].update(
+            id=554,
+            run_id=self.draft_id,
+            conclusion="skipped",
+            labels=["ubuntu-24.04"],
+            runner_group_id=None,
+            runner_group_name=None,
+            completed_at=None,
+        )
+        self.draft_annotations: list[dict[str, object]] = []
+        self.annotation_reads: list[str] = []
+
+    def get_json(self, path: str, query: dict[str, str] | None = None) -> object:
+        if path.endswith(f"/actions/runs/{self.draft_id}/attempts/{RUN_ATTEMPT}/jobs"):
+            return self.draft_jobs
+        if path.endswith("/annotations"):
+            self.annotation_reads.append(path)
+        if path.endswith("/check-runs/554/annotations"):
+            return self.draft_annotations
+        return super().get_json(path, query)
+
+
+@pytest.mark.parametrize("draft_first", [True, False])
+def test_draft_then_ready_merge_reuses_only_executed_quality(draft_first) -> None:
+    api = DraftThenReadyApi(draft_first=draft_first)
+    admitted, reason = ci_admission.verify_admission(
+        _push_event(), _annotation_context(), api, _git_value
+    )
+    assert admitted
+    assert reason == f"exact CI admission from PR #{PR_NUMBER}, run {RUN_ID}/1"
+    assert api.annotation_reads == [f"/repos/{REPOSITORY}/check-runs/555/annotations"]
+
+
+def test_draft_only_workflow_success_cannot_admit_main() -> None:
+    api = DraftThenReadyApi()
+    cast(dict[str, Any], api.runs)["workflow_runs"].pop()
+    with pytest.raises(ValueError, match="exactly one successful CI admission"):
+        ci_admission.verify_admission(
+            _push_event(), _annotation_context(), api, _git_value
+        )
+    assert api.annotation_reads == []
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("run_id", 999),
+        ("run_attempt", 2),
+        ("status", "in_progress"),
+        ("conclusion", "failure"),
+    ],
+)
+def test_skipped_run_filter_does_not_hide_mismatched_or_failed_jobs(
+    field, value
+) -> None:
+    api = DraftThenReadyApi()
+    api.draft_jobs["jobs"][0][field] = value
+    with pytest.raises(ValueError):
+        ci_admission.verify_admission(
+            _push_event(), _annotation_context(), api, _git_value
+        )
+
+
+@pytest.mark.parametrize(
+    "field", ["tested_tree", "workflow_blob_sha", "repository", "run_id", "run_attempt"]
+)
+def test_earlier_draft_does_not_mask_invalid_ready_provenance(field) -> None:
+    api = DraftThenReadyApi()
+    record = _record()
+    record[field] = "0" * 40
+    api.annotations[0]["message"] = json.dumps(record)
+    with pytest.raises(ValueError):
+        ci_admission.verify_admission(
+            _push_event(), _annotation_context(), api, _git_value
+        )
+
+
+def test_two_executed_successful_runs_still_reject_ambiguous_admission() -> None:
+    api = DraftThenReadyApi()
+    api.draft_jobs = deepcopy(api.jobs)
+    api.draft_jobs["jobs"][0].update(id=554, run_id=api.draft_id)
+    record = {**_record(), "run_id": api.draft_id}
+    api.draft_annotations = [{**api.annotations[0], "message": json.dumps(record)}]
+    with pytest.raises(ValueError, match="exactly one successful CI admission"):
         ci_admission.verify_admission(
             _push_event(), _annotation_context(), api, _git_value
         )

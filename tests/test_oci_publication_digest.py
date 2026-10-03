@@ -217,7 +217,6 @@ def _publication(tmp_path, runtime, scenario="success", *, exists=False):
             GITHUB_ACTOR="Owner",
             GHCR_TOKEN="synthetic",  # noqa: S106 -- fake executable receives no credential
             ADMITTED_SHA=SOURCE,
-            SWING_CI_ARTIFACTS=str(tmp_path / "artifacts"),
             GITHUB_RUN_ID="123",
             GITHUB_RUN_ATTEMPT="1",
             GITHUB_OUTPUT=str(tmp_path / "outputs"),
@@ -228,7 +227,7 @@ def _publication(tmp_path, runtime, scenario="success", *, exists=False):
         check=False,
         timeout=30,
     )
-    return result, json.loads(state_path.read_text()), tmp_path / "artifacts/123-1"
+    return result, json.loads(state_path.read_text()), scratch
 
 
 def test_registry_parser_pipeline_does_not_read_engine_state(
@@ -258,6 +257,10 @@ def test_publication_verifies_registry_digest_after_discarding_local_metadata(
     result, state, retained = _publication(tmp_path, runtime, exists=exists)
     assert result.returncode == 0, result.stderr
     receipt = json.loads((retained / "oci-publication-receipt.json").read_text())
+    assert json.dumps(receipt, separators=(",", ":")) in result.stdout
+    assert (tmp_path / "summary").read_text().strip() == json.dumps(
+        receipt, separators=(",", ":")
+    )
     assert receipt["digest"] == REGISTRY_DIGEST
     assert receipt["published_image_id"] == LOCAL_ID
     commands = state["commands"]
