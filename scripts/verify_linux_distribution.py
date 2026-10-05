@@ -205,6 +205,164 @@ def _verify_cli(
     return outcomes
 
 
+def _verify_installed_age(python: Path, scratch: Path) -> dict[str, dict[str, object]]:
+    """Exercise installed age SDK/CLI and retain exact public-output evidence."""
+    probe = "\n".join(
+        (
+            "import pathlib, runpy, sys",
+            "sys.dont_write_bytecode = True",
+            "import swing_trading_ai_assistant.research_comparison.setup_age as sdk",
+            "import swing_trading_ai_assistant.research_comparison.setup_age_cli as cli",
+            "for module in (sdk, cli):",
+            "    if not pathlib.Path(module.__file__).resolve().is_relative_to(pathlib.Path(sys.prefix).resolve()):",
+            "        raise RuntimeError('age import escaped installed environment')",
+            "fixture, scenario = sys.argv[1:]",
+            "sys.argv = [fixture, '--scenario', scenario]",
+            "runpy.run_path(fixture, run_name='__main__')",
+        )
+    )
+    safe_env = {
+        "HOME": str(scratch),
+        "TMPDIR": str(scratch),
+        "PATH": "/usr/bin:/bin",
+        "LANG": "C.UTF-8",
+        "PYTHONDONTWRITEBYTECODE": "1",
+    }
+    outcomes: dict[str, dict[str, object]] = {}
+    for scenario, status, continuity, current, count, code in (
+        ("same-event", "OBSERVED", "SAME_EVENT", "NO_MATCH", 1, 0),
+        ("replay", "REPLAY", "REPLAY", "MATCH", 0, 0),
+        ("unknown", "UNKNOWN", "UNKNOWN", "UNKNOWN", None, 1),
+    ):
+        observed = _run(
+            [
+                str(python),
+                "-I",
+                "-c",
+                probe,
+                str(ROOT / "examples/causal_setup_age_demo.py"),
+                scenario,
+            ],
+            cwd=scratch,
+            env=safe_env,
+        )
+        if (
+            observed.returncode != code
+            or len(observed.stdout) > 1024 * 1024
+            or b"SYNTHETIC" not in observed.stderr
+            or b"not current market data" not in observed.stderr
+            or any(
+                token in observed.stdout
+                for token in (
+                    b'"close"',
+                    b'"open"',
+                    b'"high"',
+                    b'"low"',
+                    b'"price"',
+                    b'"volume"',
+                    str(scratch).encode(),
+                )
+            )
+        ):
+            raise RuntimeError("installed age execution failed")
+        value = json.loads(observed.stdout)
+        digests = tuple(
+            value[key]
+            for key in (
+                "result_identity_sha256",
+                "runtime_code_identity_sha256",
+                "previous_observation_identity_sha256",
+                "current_observation_identity_sha256",
+                "continuity_identity_sha256",
+            )
+        )
+        if (
+            value["contract_version"] != "causal-setup-age@v1"
+            or value["criterion"]
+            != "ADMITTED_COMPLETED_SESSIONS_SINCE_ORIGINAL_UPWARD_BOS@v1"
+            or value["status"] != status
+            or value["continuity_status"] != continuity
+            or value["current"]["status"] != current
+            or value["completed_sessions_elapsed"] != count
+            or (
+                count is not None
+                and type(value["completed_sessions_elapsed"]) is not int
+            )
+            or any(
+                not isinstance(d, str)
+                or len(d) != 64
+                or any(c not in "0123456789abcdef" for c in d)
+                for d in digests
+            )
+        ):
+            raise RuntimeError("installed age result disagrees with contract")
+        unsigned = dict(value)
+        identity = unsigned.pop("result_identity_sha256")
+        canonical = (
+            json.dumps(unsigned, sort_keys=True, separators=(",", ":")) + "\n"
+        ).encode()
+        if (
+            identity != hashlib.sha256(canonical).hexdigest()
+            or observed.stdout
+            != (
+                json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n"
+            ).encode()
+        ):
+            raise RuntimeError("installed age result identity invalid")
+        _verify_age_endpoints(value, count)
+        outcomes[scenario] = {
+            "exit": code,
+            "status": status,
+            "completed_sessions_elapsed": count,
+            "continuity_status": continuity,
+            "current_projection_status": current,
+            "stdout_sha256": hashlib.sha256(observed.stdout).hexdigest(),
+            "result_identity_sha256": digests[0],
+            "runtime_code_identity_sha256": digests[1],
+            "previous_observation_identity_sha256": digests[2],
+            "current_observation_identity_sha256": digests[3],
+            "imports": "SDK and actual injected CLI resolved under installed sys.prefix with -I",
+        }
+    return outcomes
+
+
+def _verify_age_endpoints(value, count: int | None) -> None:
+    if count is None:
+        if any(
+            value[key] is not None
+            for key in (
+                "original_event_session",
+                "current_completed_session",
+                "schedules",
+            )
+        ):
+            raise RuntimeError("installed age fabricated count evidence")
+    else:
+        original, latest = (
+            value["original_event_session"],
+            value["current_completed_session"],
+        )
+        if (
+            original != value["previous"]["candidate"]["event_session"]
+            or not isinstance(original, str)
+            or not isinstance(latest, str)
+            or (count == 0 and original != latest)
+            or (count > 0 and original >= latest)
+            or not isinstance(value["schedules"], dict)
+            or set(value["schedules"]) != {"previous", "current"}
+        ):
+            raise RuntimeError("installed age endpoint invalid")
+        for schedule in value["schedules"].values():
+            for key in ("evidence_identity_sha256", "schedule_identity_sha256"):
+                digest = schedule[key]
+                if (
+                    not isinstance(digest, str)
+                    or len(digest) != 64
+                    or any(c not in "0123456789abcdef" for c in digest)
+                ):
+                    raise RuntimeError("installed age schedule identity invalid")
+
+
 def _verify_installed_continuity(
     python: Path, scratch: Path
 ) -> dict[str, dict[str, object]]:
@@ -851,6 +1009,7 @@ def verify(wheel: Path, receipt: Path | None, prior_commit: str) -> dict[str, ob
         outcomes = _verify_cli(image, python, scratch)
         continuity = _verify_installed_continuity(python, scratch)
         invalidation = _verify_installed_invalidation(python, scratch)
+        age = _verify_installed_age(python, scratch)
         config = _run(
             [_engine(), "image", "inspect", image, "--format", "{{json .Config}}"]
         )
@@ -892,6 +1051,7 @@ def verify(wheel: Path, receipt: Path | None, prior_commit: str) -> dict[str, ob
             "outcomes": outcomes,
             "installed_setup_event_continuity": continuity,
             "installed_setup_invalidation": invalidation,
+            "installed_setup_age": age,
             "mount_checks": "owner mapped, wrong UID, broad mode, read-only, symlink",
             "source_substitution": "rejected",
             "interrupted_build_and_run": "rejected; current image remained available",
