@@ -1,5 +1,7 @@
 # Swing Trading Research Tool for AI Assistants
 
+[Coherent candidate evidence](docs/workflows/causal-setup-evidence.md) binds delivered continuity, invalidation and age to one admitted observation pair for external AI interpretation. It does not establish eligibility or a recommendation.
+
 [Candidate completed-session age](docs/workflows/causal-setup-age.md) reports
 one descriptive session count for an unchanged original event. It does not
 establish validity, expiry, active status or trade eligibility.

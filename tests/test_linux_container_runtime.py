@@ -499,3 +499,159 @@ def test_installed_invalidation_rejects_wrong_evidence(monkeypatch, tmp_path, fa
     monkeypatch.setattr(api, "_run", run)
     with pytest.raises(RuntimeError, match="invalidation"):
         api._verify_installed_invalidation(tmp_path / "venv/bin/python", tmp_path)
+
+
+def _evidence_output(scenario):
+    age = _age_output("same-event" if scenario == "invalidated" else scenario)
+    current = age["current"]
+    previous = age["previous"]
+    continuity = {
+        "contract_version": "causal-setup-event-continuity@v1",
+        "criterion": "LATEST_COMPLETED_UPWARD_BOS@v1",
+        "status": {
+            "same-event": "SAME_EVENT",
+            "invalidated": "SAME_EVENT",
+            "replay": "REPLAY",
+            "unknown": "UNKNOWN",
+        }[scenario],
+        "runtime_code_identity_sha256": "b" * 64,
+        "previous_observation_identity_sha256": "f" * 64,
+        "current_observation_identity_sha256": "a" * 64,
+        "previous": previous,
+        "current": current,
+    }
+    continuity = json.loads(_sealed_age(continuity))
+    invalidation = _invalidation_output(
+        "invalidated"
+        if scenario == "invalidated"
+        else "unknown"
+        if scenario == "unknown"
+        else "no-contradiction"
+    )
+    if scenario == "replay":
+        invalidation["status"] = "REPLAY"
+    for key in (
+        "previous_observation_identity_sha256",
+        "current_observation_identity_sha256",
+        "previous",
+        "current",
+    ):
+        invalidation[key] = continuity[key]
+    for value in (age, invalidation):
+        value["continuity_identity_sha256"] = continuity["result_identity_sha256"]
+    age = json.loads(_sealed_age(age))
+    invalidation = json.loads(_sealed_age(invalidation))
+    return {
+        "contract_version": "causal-setup-evidence@v1",
+        "criterion": "LATEST_COMPLETED_UPWARD_BOS@v1",
+        "runtime_code_identity_sha256": "b" * 64,
+        "previous_observation_identity_sha256": "f" * 64,
+        "current_observation_identity_sha256": "a" * 64,
+        "continuity": continuity,
+        "invalidation": invalidation,
+        "age": age,
+        "limitations": ["No eligibility."],
+    }
+
+
+def test_installed_evidence_checks_isolated_imports_and_coherent_four_outcomes(
+    monkeypatch, tmp_path
+):
+    api = load(monkeypatch)
+    calls = []
+
+    def run(args, **kwargs):
+        calls.append((args, kwargs))
+        return subprocess.CompletedProcess(
+            args,
+            1 if args[-1] == "unknown" else 0,
+            _sealed_age(_evidence_output(args[-1])),
+            b"SYNTHETIC: not current market data.\n",
+        )
+
+    monkeypatch.setattr(api, "_run", run)
+    result = api._verify_installed_evidence(tmp_path / "venv/bin/python", tmp_path)
+    assert set(result) == {"same-event", "invalidated", "replay", "unknown"}
+    assert result["invalidated"]["invalidation_status"] == "INVALIDATED"
+    assert result["invalidated"]["completed_sessions_elapsed"] == 1
+    for args, kwargs in calls:
+        assert args[1:3] == ["-I", "-c"]
+        assert (
+            "setup_evidence as sdk" in args[3]
+            and "setup_evidence_cli as cli" in args[3]
+        )
+        assert "sys.prefix" in args[3] and "is_relative_to" in args[3]
+        assert (
+            kwargs["cwd"] == tmp_path
+            and "PYTHONPATH" not in kwargs["env"]
+            and "BHARATSTOCK_API_KEY" not in kwargs["env"]
+        )
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        "pair",
+        "projection",
+        "continuity",
+        "nested-digest",
+        "top-digest",
+        "count",
+        "bool",
+        "status",
+        "exit",
+        "noncanonical",
+        "leak",
+        "invented-unknown",
+        "aggregate",
+        "witness",
+    ],
+)
+def test_installed_evidence_rejects_plausible_wrong_or_mixed_reports(
+    monkeypatch, tmp_path, failure
+):
+    api = load(monkeypatch)
+
+    def run(args, **kwargs):
+        scenario = args[-1]
+        value = _evidence_output(scenario)
+        mutations = {
+            "pair": ("age", "current_observation_identity_sha256", "0" * 64),
+            "projection": ("age", "current", {"status": "MATCH"}),
+            "continuity": ("age", "continuity_identity_sha256", "0" * 64),
+            "count": ("age", "completed_sessions_elapsed", 2),
+            "bool": ("age", "completed_sessions_elapsed", True),
+            "status": ("invalidation", "status", "VALID"),
+        }
+        if failure in mutations:
+            component, field, replacement = mutations[failure]
+            value[component][field] = replacement
+        envelope_mutations = {"leak": ("price", 134), "aggregate": ("status", "ACTIVE")}
+        if failure in envelope_mutations:
+            field, replacement = envelope_mutations[failure]
+            value[field] = replacement
+        if failure == "invented-unknown" and scenario == "unknown":
+            value["age"]["completed_sessions_elapsed"] = 0
+        if failure == "witness" and scenario == "invalidated":
+            value["invalidation"]["contradiction"] = None
+        for name in ("age", "invalidation"):
+            value[name] = json.loads(_sealed_age(value[name]))
+        if failure == "nested-digest":
+            value["age"]["result_identity_sha256"] = "0" * 64
+        raw = _sealed_age(value)
+        if failure == "top-digest":
+            raw = raw.replace(
+                b'"result_identity_sha256":', b'"bad_result_identity_sha256":'
+            )
+        if failure == "noncanonical":
+            raw = json.dumps(json.loads(raw), indent=2).encode()
+        return subprocess.CompletedProcess(
+            args,
+            2 if failure == "exit" else 1 if scenario == "unknown" else 0,
+            raw,
+            b"SYNTHETIC: not current market data.\n",
+        )
+
+    monkeypatch.setattr(api, "_run", run)
+    with pytest.raises(RuntimeError, match="installed evidence"):
+        api._verify_installed_evidence(tmp_path / "venv/bin/python", tmp_path)

@@ -1,5 +1,23 @@
 # Initial Roadmap
 
+## Sprint 38 — coherent candidate evidence, October 5, 2026
+
+[Sprint38](sprints/sprint-38.md), [Issue258](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/258)
+and [Plan52](plans/52-coherent-candidate-evidence.md) govern one same-pair
+handoff of delivered continuity, invalidation and age facts to an external AI.
+Exactly two service calls supply the pair; component identities/rows must agree.
+No aggregate active/eligible/tradable verdict or new analytical calculation.
+This is the pre-delivery implementation checkpoint; the live Issue owns complete
+review, hosted acceptance, normal merge, exact main admission, private publication
+and tracker closeout. All eight Plan47 obligations and Future exclusions remain.
+
+Sprint37 is live-verified closed: PR257 merged main
+`3c79333f6073017e4d27eadb39bc553369f5d793`, reviewed tree
+`5c3e06e3435a9427226979a1a628136a98246881`; admission37273286788 and private
+publication37273319244 succeeded; Issue256/ProjectDone/milestone29closed zeroopen.
+Its earlier checkpoints remain historical and are not reopened.
+
+
 ## Sprint 37 — candidate completed-session age, October 5, 2026
 
 [Sprint37](sprints/sprint-37.md), [Issue256](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/256)
