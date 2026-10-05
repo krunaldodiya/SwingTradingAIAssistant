@@ -829,3 +829,174 @@ def test_installed_interpretation_rejects_plausible_wrong_reports(
     monkeypatch.setattr(api, "_run", run)
     with pytest.raises(RuntimeError, match="installed interpretation"):
         api._verify_installed_interpretation(tmp_path / "venv/bin/python", tmp_path)
+
+
+def _level_output(scenario):
+    observed = scenario in ("above", "at", "below")
+    candidate = {
+        "event_session": "2026-08-25",
+        "pivot_session": "2026-08-19",
+        "pivot_confirmation_session": "2026-08-21",
+        "event_identity_sha256": "a" * 64,
+        "pivot_identity_sha256": "b" * 64,
+    }
+    return {
+        "contract_version": "causal-setup-level@v1",
+        "criterion": "LATEST_COMPLETED_CLOSE_VS_ORIGINAL_BROKEN_HIGH@v1",
+        "runtime_code_identity_sha256": "c" * 64,
+        "previous_observation_identity_sha256": "d" * 64,
+        "current_observation_identity_sha256": "d" * 64
+        if scenario == "replay"
+        else "e" * 64,
+        "continuity_identity_sha256": "f" * 64,
+        "continuity_status": "SAME_EVENT" if observed else scenario.upper(),
+        "status": "OBSERVED" if observed else scenario.upper(),
+        "reason": "LATEST_COMPLETED_CLOSE_COMPARED_WITH_ORIGINAL_BROKEN_HIGH"
+        if observed
+        else "IDENTICAL_ADMITTED_OBSERVATION"
+        if scenario == "replay"
+        else "CURRENT_STRUCTURE_UNKNOWN",
+        "relation": scenario.upper() if observed else None,
+        "previous": {
+            "candidate": candidate,
+            "status": "MATCH",
+            "session": "2026-08-25",
+        },
+        "current": {
+            "status": "NO_MATCH"
+            if observed
+            else "MATCH"
+            if scenario == "replay"
+            else "UNKNOWN",
+            "session": "2026-08-26" if observed else "2026-08-25",
+        },
+        "witness": {
+            "original_event_session": candidate["event_session"],
+            "original_high_pivot_session": candidate["pivot_session"],
+            "original_high_confirmation_session": candidate[
+                "pivot_confirmation_session"
+            ],
+            "original_event_identity_sha256": candidate["event_identity_sha256"],
+            "original_high_identity_sha256": candidate["pivot_identity_sha256"],
+            "represented_event_identity_sha256": "1" * 64,
+            "represented_high_identity_sha256": "2" * 64,
+            "current_completed_session": "2026-08-26",
+            "current_bar_identity_sha256": "3" * 64,
+        }
+        if observed
+        else None,
+        "limitations": ["Descriptive level only; no eligibility."],
+    }
+
+
+def test_installed_level_gate_probes_five_isolated_actual_sdk_cli_cases(
+    monkeypatch, tmp_path
+):
+    api = load(monkeypatch)
+    calls = []
+
+    def run(args, **kwargs):
+        calls.append((args, kwargs))
+        return subprocess.CompletedProcess(
+            args,
+            1 if args[-1] == "unknown" else 0,
+            _sealed_age(_level_output(args[-1])),
+            b"SYNTHETIC: not current market data.\n",
+        )
+
+    monkeypatch.setattr(api, "_run", run)
+    method = getattr(api, "_verify_installed_level", api._verify_installed_age)
+    outcomes = method(tmp_path / "venv/bin/python", tmp_path)
+    assert set(outcomes) == {"above", "at", "below", "replay", "unknown"}
+    for args, kwargs in calls:
+        assert args[1:3] == ["-I", "-c"]
+        assert "setup_level as sdk" in args[3] and "setup_level_cli as cli" in args[3]
+        assert "sys.prefix" in args[3] and "is_relative_to" in args[3]
+        assert (
+            kwargs["cwd"] == tmp_path
+            and "PYTHONPATH" not in kwargs["env"]
+            and "BHARATSTOCK_API_KEY" not in kwargs["env"]
+        )
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        "relation",
+        "status",
+        "reason",
+        "criterion",
+        "contract",
+        "extra",
+        "witness",
+        "anchor",
+        "endpoint",
+        "confirmation",
+        "digest",
+        "runtime",
+        "replay",
+        "unknown",
+        "exit",
+        "noncanonical",
+        "overflow",
+        "private-path",
+        "partial",
+    ],
+)
+def test_installed_level_gate_rejects_resealed_wrong_reports(  # noqa: C901 - closed adversarial matrix
+    monkeypatch, tmp_path, failure
+):
+    api = load(monkeypatch)
+
+    def run(args, **kwargs):  # noqa: C901 - closed adversarial matrix
+        scenario = args[-1]
+        value = _level_output(scenario)
+        changed = {
+            "relation": ("relation", "AT"),
+            "status": ("status", "VALID"),
+            "reason": ("reason", "CONFIRMED"),
+            "criterion": ("criterion", "RETEST"),
+            "contract": ("contract_version", "causal-setup-level@v2"),
+            "extra": ("price", 130),
+            "runtime": ("runtime_code_identity_sha256", "invalid"),
+        }
+        if failure in changed:
+            key, replacement = changed[failure]
+            value[key] = replacement
+        if failure == "witness" and value["witness"]:
+            value["witness"]["unexpected"] = "sealed"
+        if failure == "anchor" and value["witness"]:
+            value["witness"]["original_high_identity_sha256"] = "0" * 64
+        if failure == "endpoint" and value["witness"]:
+            value["witness"]["current_completed_session"] = "2026-08-25"
+        if failure == "confirmation" and value["witness"]:
+            value["witness"]["original_high_confirmation_session"] = "2026-08-26"
+        if failure == "replay" and scenario == "replay":
+            value["current_observation_identity_sha256"] = "0" * 64
+        if failure == "unknown" and scenario == "unknown":
+            value["witness"] = {}
+        if failure == "private-path":
+            value["limitations"] = [str(tmp_path)]
+        raw = _sealed_age(value)
+        if failure == "digest":
+            value = json.loads(raw)
+            value["result_identity_sha256"] = "0" * 64
+            raw = (
+                json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n"
+            ).encode()
+        if failure == "noncanonical":
+            raw = json.dumps(json.loads(raw), indent=2).encode()
+        if failure == "overflow":
+            raw = b"x" * (1024 * 1024 + 1)
+        if failure == "partial":
+            raw = b"{"
+        return subprocess.CompletedProcess(
+            args,
+            2 if failure == "exit" else 1 if scenario == "unknown" else 0,
+            raw,
+            b"SYNTHETIC: not current market data.\n",
+        )
+
+    monkeypatch.setattr(api, "_run", run)
+    with pytest.raises(RuntimeError, match="installed level"):
+        api._verify_installed_level(tmp_path / "venv/bin/python", tmp_path)
