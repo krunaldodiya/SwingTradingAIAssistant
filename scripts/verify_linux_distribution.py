@@ -407,6 +407,229 @@ def _verify_installed_level(
     return outcomes
 
 
+def _check_installed_level_range(value: dict, raw: bytes, scenario: str) -> None:
+    observed = scenario in ("contains", "above", "below", "low-equal", "high-equal")
+    status = "OBSERVED" if observed else scenario.upper()
+    reason = (
+        "LATEST_COMPLETED_RANGE_COMPARED_WITH_ORIGINAL_BROKEN_HIGH"
+        if observed
+        else "IDENTICAL_ADMITTED_OBSERVATION"
+        if scenario == "replay"
+        else "CURRENT_STRUCTURE_UNKNOWN"
+    )
+    if (
+        set(value)
+        != {
+            "contract_version",
+            "criterion",
+            "runtime_code_identity_sha256",
+            "previous_observation_identity_sha256",
+            "current_observation_identity_sha256",
+            "level_identity_sha256",
+            "continuity_identity_sha256",
+            "continuity_status",
+            "previous",
+            "current",
+            "status",
+            "reason",
+            "range_relation",
+            "witness",
+            "limitations",
+            "result_identity_sha256",
+        }
+        or value["contract_version"] != "causal-setup-level-range@v1"
+        or value["criterion"] != "LATEST_COMPLETED_RANGE_VS_ORIGINAL_BROKEN_HIGH@v1"
+        or (value["status"], value["reason"]) != (status, reason)
+        or value["continuity_status"] != ("SAME_EVENT" if observed else status)
+        or value["range_relation"]
+        != (
+            {
+                "contains": "CONTAINS_LEVEL",
+                "above": "ENTIRELY_ABOVE",
+                "below": "ENTIRELY_BELOW",
+                "low-equal": "CONTAINS_LEVEL",
+                "high-equal": "CONTAINS_LEVEL",
+            }[scenario]
+            if observed
+            else None
+        )
+        or value["previous"]["status"] != "MATCH"
+        or value["current"]["status"]
+        != ("NO_MATCH" if observed else "MATCH" if scenario == "replay" else "UNKNOWN")
+        or raw != _interpretation_bytes(value)
+        or type(value["limitations"]) is not list
+        or not value["limitations"]
+        or any(type(item) is not str or not item for item in value["limitations"])
+    ):
+        raise ValueError("level envelope invalid")
+    digests = [
+        value[key]
+        for key in (
+            "runtime_code_identity_sha256",
+            "previous_observation_identity_sha256",
+            "current_observation_identity_sha256",
+            "level_identity_sha256",
+            "continuity_identity_sha256",
+            "result_identity_sha256",
+        )
+    ]
+    witness = value["witness"]
+    if observed:
+        candidate = value["previous"]["candidate"]
+        if (
+            type(witness) is not dict
+            or set(witness)
+            != {
+                "original_event_session",
+                "original_high_pivot_session",
+                "original_high_confirmation_session",
+                "original_event_identity_sha256",
+                "original_high_identity_sha256",
+                "represented_event_identity_sha256",
+                "represented_high_identity_sha256",
+                "current_completed_session",
+                "current_bar_identity_sha256",
+            }
+            or any(
+                witness[key] != candidate[source]
+                for key, source in (
+                    ("original_event_session", "event_session"),
+                    ("original_high_pivot_session", "pivot_session"),
+                    (
+                        "original_high_confirmation_session",
+                        "pivot_confirmation_session",
+                    ),
+                    ("original_event_identity_sha256", "event_identity_sha256"),
+                    ("original_high_identity_sha256", "pivot_identity_sha256"),
+                )
+            )
+            or not witness["original_high_pivot_session"]
+            < witness["original_high_confirmation_session"]
+            < witness["original_event_session"]
+            < witness["current_completed_session"]
+            or witness["original_event_session"] != value["previous"]["session"]
+            or witness["current_completed_session"] != value["current"]["session"]
+        ):
+            raise ValueError("level witness invalid")
+        digests += [witness[key] for key in witness if key.endswith("sha256")]
+    elif witness is not None:
+        raise ValueError("level invented witness")
+    if any(
+        type(d) is not str
+        or len(d) != 64
+        or any(c not in "0123456789abcdef" for c in d)
+        for d in digests
+    ):
+        raise ValueError("level identity invalid")
+    if (
+        scenario == "replay"
+        and value["previous_observation_identity_sha256"]
+        != value["current_observation_identity_sha256"]
+    ):
+        raise ValueError("level replay identity invalid")
+    unsigned = dict(value)
+    identity = unsigned.pop("result_identity_sha256")
+    if identity != hashlib.sha256(_interpretation_bytes(unsigned)).hexdigest():
+        raise ValueError("level result digest invalid")
+
+
+def _verify_installed_level_range(
+    python: Path, scratch: Path
+) -> dict[str, dict[str, object]]:
+    """Qualify the installed SDK and actual CLI, never a mocked acceptance report."""
+    probe = "\n".join(
+        (
+            "import pathlib, runpy, sys",
+            "sys.dont_write_bytecode = True",
+            "import swing_trading_ai_assistant.research_comparison.setup_level_range as sdk",
+            "import swing_trading_ai_assistant.research_comparison.setup_level_range_cli as cli",
+            "for module in (sdk, cli):",
+            "    if not pathlib.Path(module.__file__).resolve().is_relative_to(pathlib.Path(sys.prefix).resolve()):",
+            "        raise RuntimeError('level import escaped installed environment')",
+            "fixture, scenario = sys.argv[1:]",
+            "sys.argv = [fixture, '--scenario', scenario]",
+            "runpy.run_path(fixture, run_name='__main__')",
+        )
+    )
+    safe_env = {
+        "HOME": str(scratch),
+        "TMPDIR": str(scratch),
+        "PATH": "/usr/bin:/bin",
+        "LANG": "C.UTF-8",
+        "PYTHONDONTWRITEBYTECODE": "1",
+    }
+    outcomes = {}
+    for scenario in (
+        "contains",
+        "above",
+        "below",
+        "low-equal",
+        "high-equal",
+        "replay",
+        "unknown",
+    ):
+        observed = _run(
+            [
+                str(python),
+                "-I",
+                "-c",
+                probe,
+                str(ROOT / "examples/causal_setup_level_range_demo.py"),
+                scenario,
+            ],
+            cwd=scratch,
+            env=safe_env,
+        )
+        code = 1 if scenario == "unknown" else 0
+        if (
+            observed.returncode != code
+            or len(observed.stdout) > 1024 * 1024
+            or b"SYNTHETIC" not in observed.stderr
+            or b"not current market data" not in observed.stderr
+            or any(
+                token in observed.stdout
+                for token in (
+                    b'"close"',
+                    b'"open"',
+                    b'"high"',
+                    b'"low"',
+                    b'"price"',
+                    b'"volume"',
+                    b'"bars"',
+                    b'"body"',
+                    str(scratch).encode(),
+                )
+            )
+        ):
+            raise RuntimeError("installed level range execution failed")
+        try:
+            value = json.loads(observed.stdout)
+            _check_installed_level_range(value, observed.stdout, scenario)
+        except (KeyError, TypeError, ValueError) as error:
+            raise RuntimeError("installed level range result invalid") from error
+        outcomes[scenario] = {
+            "exit": code,
+            "status": value["status"],
+            "range_relation": value["range_relation"],
+            "continuity_status": value["continuity_status"],
+            "current_projection_status": value["current"]["status"],
+            "result_identity_sha256": value["result_identity_sha256"],
+            "runtime_code_identity_sha256": value["runtime_code_identity_sha256"],
+            "level_identity_sha256": value["level_identity_sha256"],
+            "continuity_identity_sha256": value["continuity_identity_sha256"],
+            "previous_observation_identity_sha256": value[
+                "previous_observation_identity_sha256"
+            ],
+            "current_observation_identity_sha256": value[
+                "current_observation_identity_sha256"
+            ],
+            "witness": value["witness"],
+            "stdout_sha256": hashlib.sha256(observed.stdout).hexdigest(),
+            "imports": "SDK and injected CLI under installed sys.prefix with -I; actual outputs equal; synthetic descriptive fact only",
+        }
+    return outcomes
+
+
 def _check_legacy_evidence_identity(identity: object) -> None:
     if type(identity) is not str or re.fullmatch(r"[0-9a-f]{64}", identity) is None:
         raise ValueError("evidence v2 legacy identity invalid")
@@ -1940,6 +2163,7 @@ def verify(wheel: Path, receipt: Path | None, prior_commit: str) -> dict[str, ob
         level_interpretation = _verify_installed_level_interpretation_v2(
             python, scratch
         )
+        level_range = _verify_installed_level_range(python, scratch)
         config = _run(
             [_engine(), "image", "inspect", image, "--format", "{{json .Config}}"]
         )
@@ -1985,6 +2209,7 @@ def verify(wheel: Path, receipt: Path | None, prior_commit: str) -> dict[str, ob
             "installed_setup_evidence": evidence,
             "installed_setup_interpretation": interpretation,
             "installed_setup_level": level,
+            "installed_setup_level_range": level_range,
             "installed_setup_level_interpretation_v2": level_interpretation,
             "mount_checks": "owner mapped, wrong UID, broad mode, read-only, symlink",
             "source_substitution": "rejected",

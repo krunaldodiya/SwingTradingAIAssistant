@@ -1184,3 +1184,147 @@ def test_installed_level_interpretation_v2_rejects_wrong_resealed_reports(  # no
         api._verify_installed_level_interpretation_v2(
             tmp_path / "venv/bin/python", tmp_path
         )
+
+
+def _level_range_output(scenario):
+    value = _level_output(
+        "above"
+        if scenario in ("contains", "above", "below", "low-equal", "high-equal")
+        else scenario
+    )
+    value["contract_version"] = "causal-setup-level-range@v1"
+    value["criterion"] = "LATEST_COMPLETED_RANGE_VS_ORIGINAL_BROKEN_HIGH@v1"
+    value["level_identity_sha256"] = "d" * 64
+    value.pop("relation")
+    value["range_relation"] = {
+        "contains": "CONTAINS_LEVEL",
+        "above": "ENTIRELY_ABOVE",
+        "below": "ENTIRELY_BELOW",
+        "low-equal": "CONTAINS_LEVEL",
+        "high-equal": "CONTAINS_LEVEL",
+    }.get(scenario)
+    if scenario not in ("replay", "unknown"):
+        value["reason"] = "LATEST_COMPLETED_RANGE_COMPARED_WITH_ORIGINAL_BROKEN_HIGH"
+    return value
+
+
+def test_installed_level_range_gate_seven_isolated_actual_sdk_cli_cases(
+    monkeypatch, tmp_path
+):
+    api = load(monkeypatch)
+    calls = []
+
+    def run(args, **kwargs):
+        calls.append((args, kwargs))
+        return subprocess.CompletedProcess(
+            args,
+            1 if args[-1] == "unknown" else 0,
+            _sealed_age(_level_range_output(args[-1])),
+            b"SYNTHETIC: not current market data.\n",
+        )
+
+    monkeypatch.setattr(api, "_run", run)
+    result = api._verify_installed_level_range(tmp_path / "venv/bin/python", tmp_path)
+    assert set(result) == {
+        "contains",
+        "above",
+        "below",
+        "low-equal",
+        "high-equal",
+        "replay",
+        "unknown",
+    }
+    for args, kwargs in calls:
+        assert (
+            args[1:3] == ["-I", "-c"]
+            and "setup_level_range as sdk" in args[3]
+            and "setup_level_range_cli as cli" in args[3]
+        )
+        assert "sys.prefix" in args[3] and "is_relative_to" in args[3]
+        assert (
+            kwargs["cwd"] == tmp_path
+            and "PYTHONPATH" not in kwargs["env"]
+            and "BHARATSTOCK_API_KEY" not in kwargs["env"]
+        )
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        "relation",
+        "status",
+        "reason",
+        "contract",
+        "criterion",
+        "extra",
+        "runtime",
+        "level",
+        "witness",
+        "anchor",
+        "endpoint",
+        "digest",
+        "replay",
+        "unknown",
+        "exit",
+        "noncanonical",
+        "overflow",
+        "partial",
+        "private-path",
+    ],
+)
+def test_installed_level_range_gate_rejects_resealed_wrong_reports(  # noqa: C901 - closed adversarial matrix
+    monkeypatch, tmp_path, failure
+):
+    api = load(monkeypatch)
+
+    def run(args, **kwargs):  # noqa: C901 - explicit adversarial acceptance matrix
+        scenario = args[-1]
+        value = _level_range_output(scenario)
+        fields = {
+            "relation": ("range_relation", "AT"),
+            "status": ("status", "VALID"),
+            "reason": ("reason", "RETEST_CONFIRMED"),
+            "contract": ("contract_version", "causal-setup-level@v1"),
+            "criterion": ("criterion", "RETEST"),
+            "extra": ("price", 130),
+            "runtime": ("runtime_code_identity_sha256", "invalid"),
+            "level": ("level_identity_sha256", False),
+        }
+        if failure in fields:
+            key, changed = fields[failure]
+            value[key] = changed
+        if failure == "witness" and value["witness"]:
+            value["witness"]["extra"] = True
+        if failure == "anchor" and value["witness"]:
+            value["witness"]["original_high_identity_sha256"] = "0" * 64
+        if failure == "endpoint" and value["witness"]:
+            value["witness"]["current_completed_session"] = "2026-08-25"
+        if failure == "replay" and scenario == "replay":
+            value["current_observation_identity_sha256"] = "0" * 64
+        if failure == "unknown" and scenario == "unknown":
+            value["range_relation"] = "CONTAINS_LEVEL"
+        if failure == "private-path":
+            value["limitations"] = [str(tmp_path)]
+        raw = _sealed_age(value)
+        if failure == "digest":
+            value = json.loads(raw)
+            value["result_identity_sha256"] = "0" * 64
+            raw = (
+                json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n"
+            ).encode()
+        if failure == "noncanonical":
+            raw = json.dumps(json.loads(raw), indent=2).encode()
+        if failure == "overflow":
+            raw = b"x" * (1024 * 1024 + 1)
+        if failure == "partial":
+            raw = b"{"
+        return subprocess.CompletedProcess(
+            args,
+            2 if failure == "exit" else 1 if scenario == "unknown" else 0,
+            raw,
+            b"SYNTHETIC: not current market data.\n",
+        )
+
+    monkeypatch.setattr(api, "_run", run)
+    with pytest.raises(RuntimeError, match="installed level range"):
+        api._verify_installed_level_range(tmp_path / "venv/bin/python", tmp_path)
