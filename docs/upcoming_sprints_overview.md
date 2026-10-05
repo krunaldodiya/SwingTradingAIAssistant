@@ -1,5 +1,23 @@
 # Upcoming Sprints Overview
 
+## Sprint 36 — evidence-based candidate invalidation, October 5, 2026
+
+[Sprint36](sprints/sprint-36.md), [Issue254](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/254)
+and [Plan50](plans/50-evidence-based-candidate-invalidation.md) govern one
+later close-confirmed DOWN CHOCH at the original pre-BOS confirmed HL. Only that
+anchored contradiction invalidates the fixed upward continuation premise.
+Missing/revised/window evidence stays distinct; absence never proves validity.
+Implementation is under autonomous Goal execution through required independent
+reviews, hosted gates, normal merge, private publication and tracker closeout.
+All eight Plan47 outcomes remain; no signal-phase completion is claimed.
+Future issues and expiry/persistence/provider/broker/money expansion are excluded.
+
+Sprint35 is live-verified closed: PR253 merged `9da48feb94e172223582503070a9cc4865d68181`,
+main admission37259816680 and private publication/pull37259834123 passed;
+Issue252/milestone27 closed, Project Done. Older checkpoint prose below is
+superseded by this verified closeout and preserves its historical state.
+
+
 ## Sprint 35 — candidate event continuity, October 3, 2026
 
 [Sprint 35](sprints/sprint-35.md), [Issue #252](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/252)

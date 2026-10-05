@@ -1,5 +1,6 @@
 """Distribution checks retain isolation and ownership across engines."""
 
+import hashlib
 import importlib.util
 import json
 import os
@@ -222,3 +223,139 @@ def test_installed_continuity_rejects_plausible_wrong_output(
     monkeypatch.setattr(api, "_run", run)
     with pytest.raises(RuntimeError, match="continuity"):
         api._verify_installed_continuity(tmp_path / "venv/bin/python", tmp_path)
+
+
+def _invalidation_output(scenario):
+    low = {
+        "kind": "SWING_LOW",
+        "relation": "HL",
+        "pivot_session": "2026-08-17",
+        "pivot_confirmation_session": "2026-08-19",
+        "pivot_identity_sha256": "c" * 64,
+    }
+    value = {
+        "contract_version": "causal-setup-invalidation@v1",
+        "criterion": "LATER_DOWN_CHOCH_OF_ORIGINAL_CONFIRMED_HL@v1",
+        "status": {
+            "invalidated": "INVALIDATED",
+            "no-contradiction": "NO_CONTRADICTION_OBSERVED",
+            "unknown": "UNKNOWN",
+        }[scenario],
+        "current": {"status": "UNKNOWN" if scenario == "unknown" else "NO_MATCH"},
+        "previous": {"candidate": {"event_session": "2026-08-26"}},
+        "original_supporting_low": low,
+        "current_supporting_low": low,
+        "contradiction": None,
+        "runtime_code_identity_sha256": "b" * 64,
+    }
+    if scenario == "invalidated":
+        value["contradiction"] = {
+            "event": "CHOCH",
+            "direction": "DOWN",
+            "prior_trend": "UPTREND",
+            "event_session": "2026-08-27",
+            "pivot_session": low["pivot_session"],
+            "pivot_confirmation_session": low["pivot_confirmation_session"],
+            "pivot_identity_sha256": low["pivot_identity_sha256"],
+        }
+    return value
+
+
+def _sealed_invalidation(value):
+    value = dict(value)
+    value.pop("result_identity_sha256", None)
+    raw = (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    value["result_identity_sha256"] = hashlib.sha256(raw).hexdigest()
+    return json.dumps(value).encode()
+
+
+def test_installed_invalidation_gate_probes_sdk_cli_and_three_outcomes(
+    monkeypatch, tmp_path
+):
+    api = load(monkeypatch)
+    calls = []
+
+    def run(args, **kwargs):
+        calls.append((args, kwargs))
+        scenario = args[-1]
+        return subprocess.CompletedProcess(
+            args,
+            1 if scenario == "unknown" else 0,
+            _sealed_invalidation(_invalidation_output(scenario)),
+            b"SYNTHETIC: not current market data.\n",
+        )
+
+    monkeypatch.setattr(api, "_run", run)
+    python = tmp_path / "venv/bin/python"
+    outcomes = api._verify_installed_invalidation(python, tmp_path)
+    assert set(outcomes) == {"invalidated", "no-contradiction", "unknown"}
+    for args, kwargs in calls:
+        assert args[:3] == [str(python), "-I", "-c"]
+        assert (
+            "setup_invalidation as sdk" in args[3]
+            and "setup_invalidation_cli as cli" in args[3]
+        )
+        assert "is_relative_to" in args[3] and "sys.prefix" in args[3]
+        assert kwargs["cwd"] == tmp_path
+        assert (
+            "PYTHONPATH" not in kwargs["env"]
+            and "BHARATSTOCK_API_KEY" not in kwargs["env"]
+        )
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        "status",
+        "exit",
+        "leak",
+        "digest",
+        "contract",
+        "criterion",
+        "anchor",
+        "later",
+        "direction",
+        "missing-witness",
+        "fabricated-witness",
+    ],
+)
+def test_installed_invalidation_rejects_wrong_evidence(monkeypatch, tmp_path, failure):
+    api = load(monkeypatch)
+
+    def run(args, **kwargs):
+        scenario = args[-1]
+        value = _invalidation_output(scenario)
+        mutations = {
+            "status": (("status",), "VALID"),
+            "leak": (("close",), 89),
+            "contract": (("contract_version",), "wrong"),
+            "criterion": (("criterion",), "ANY_OPPOSITE_EVENT"),
+            "anchor": (("contradiction", "pivot_session"), "2026-08-18"),
+            "later": (("contradiction", "event_session"), "2026-08-26"),
+            "direction": (("contradiction", "direction"), "UP"),
+            "missing-witness": (("contradiction",), None),
+            "fabricated-witness": (("contradiction",), {}),
+        }
+        if failure in mutations and (
+            failure != "fabricated-witness" or scenario == "no-contradiction"
+        ):
+            keys, replacement = mutations[failure]
+            target = value
+            for key in keys[:-1]:
+                target = target[key]
+            target[keys[-1]] = replacement
+        raw = _sealed_invalidation(value)
+        if failure == "digest":
+            parsed = json.loads(raw)
+            parsed["result_identity_sha256"] = "a" * 64
+            raw = json.dumps(parsed).encode()
+        return subprocess.CompletedProcess(
+            args,
+            2 if failure == "exit" else 1 if scenario == "unknown" else 0,
+            raw,
+            b"SYNTHETIC: not current market data.\n",
+        )
+
+    monkeypatch.setattr(api, "_run", run)
+    with pytest.raises(RuntimeError, match="invalidation"):
+        api._verify_installed_invalidation(tmp_path / "venv/bin/python", tmp_path)

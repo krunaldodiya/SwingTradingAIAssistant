@@ -298,6 +298,142 @@ def _verify_installed_continuity(
     return outcomes
 
 
+def _verify_installed_invalidation(
+    python: Path, scratch: Path
+) -> dict[str, dict[str, object]]:
+    """Exercise the new SDK/CLI from the clean wheel using reviewed source fixtures.
+
+    Isolation removes checkout/PYTHONPATH imports. Both changed public modules
+    must resolve inside the installed environment before the synthetic producer
+    loads. The fixture is source-checkout evidence, not an installed entrypoint.
+    """
+    probe = "\n".join(
+        (
+            "import pathlib, runpy, sys",
+            "sys.dont_write_bytecode = True",
+            "import swing_trading_ai_assistant.research_comparison.setup_invalidation as sdk",
+            "import swing_trading_ai_assistant.research_comparison.setup_invalidation_cli as cli",
+            "for module in (sdk, cli):",
+            "    if not pathlib.Path(module.__file__).resolve().is_relative_to(pathlib.Path(sys.prefix).resolve()):",
+            "        raise RuntimeError('invalidation import escaped installed environment')",
+            "fixture, scenario = sys.argv[1:]",
+            "sys.argv = [fixture, '--scenario', scenario]",
+            "runpy.run_path(fixture, run_name='__main__')",
+        )
+    )
+    safe_env = {
+        "HOME": str(scratch),
+        "TMPDIR": str(scratch),
+        "PATH": "/usr/bin:/bin",
+        "LANG": "C.UTF-8",
+        "PYTHONDONTWRITEBYTECODE": "1",
+    }
+    outcomes: dict[str, dict[str, object]] = {}
+    for scenario, status, current_status, code in (
+        ("invalidated", "INVALIDATED", "NO_MATCH", 0),
+        ("no-contradiction", "NO_CONTRADICTION_OBSERVED", "NO_MATCH", 0),
+        ("unknown", "UNKNOWN", "UNKNOWN", 1),
+    ):
+        observed = _run(
+            [
+                str(python),
+                "-I",
+                "-c",
+                probe,
+                str(ROOT / "examples/causal_setup_invalidation_demo.py"),
+                scenario,
+            ],
+            cwd=scratch,
+            env=safe_env,
+        )
+        if (
+            observed.returncode != code
+            or len(observed.stdout) > 1024 * 1024
+            or b"SYNTHETIC" not in observed.stderr
+            or b"not current market data" not in observed.stderr
+        ):
+            raise RuntimeError("installed invalidation execution failed")
+        value = json.loads(observed.stdout)
+        digests = (
+            value["result_identity_sha256"],
+            value["runtime_code_identity_sha256"],
+        )
+        if (
+            value["contract_version"] != "causal-setup-invalidation@v1"
+            or value["criterion"] != "LATER_DOWN_CHOCH_OF_ORIGINAL_CONFIRMED_HL@v1"
+            or value["status"] != status
+            or value["current"]["status"] != current_status
+            or any(
+                not isinstance(digest, str)
+                or len(digest) != 64
+                or any(char not in "0123456789abcdef" for char in digest)
+                for digest in digests
+            )
+            or any(
+                token in observed.stdout
+                for token in (
+                    b'"close"',
+                    b'"open"',
+                    b'"high"',
+                    b'"low"',
+                    str(scratch).encode(),
+                )
+            )
+        ):
+            raise RuntimeError("installed invalidation result disagrees with contract")
+        unsigned = dict(value)
+        identity = unsigned.pop("result_identity_sha256")
+        canonical = (
+            json.dumps(unsigned, sort_keys=True, separators=(",", ":")) + "\n"
+        ).encode()
+        if identity != hashlib.sha256(canonical).hexdigest():
+            raise RuntimeError("installed invalidation result identity invalid")
+        witness = value["contradiction"]
+        if status == "INVALIDATED":
+            original = value["original_supporting_low"]
+            current_low = value["current_supporting_low"]
+            candidate = value["previous"]["candidate"]
+            if (
+                witness is None
+                or witness["event"] != "CHOCH"
+                or witness["direction"] != "DOWN"
+                or witness["prior_trend"] != "UPTREND"
+                or original["kind"] != "SWING_LOW"
+                or original["relation"] != "HL"
+                or not original["pivot_session"]
+                < original["pivot_confirmation_session"]
+                < candidate["event_session"]
+                < witness["event_session"]
+                or any(
+                    original[key] != current_low[key]
+                    for key in (
+                        "kind",
+                        "relation",
+                        "pivot_session",
+                        "pivot_confirmation_session",
+                    )
+                )
+                or witness["pivot_identity_sha256"]
+                != current_low["pivot_identity_sha256"]
+                or witness["pivot_session"] != original["pivot_session"]
+                or witness["pivot_confirmation_session"]
+                != original["pivot_confirmation_session"]
+            ):
+                raise RuntimeError("installed invalidation witness invalid")
+        elif witness is not None:
+            raise RuntimeError("installed invalidation invented contradiction")
+        outcomes[scenario] = {
+            "exit": code,
+            "status": status,
+            "current_projection_status": current_status,
+            "stdout_sha256": hashlib.sha256(observed.stdout).hexdigest(),
+            "result_identity_sha256": digests[0],
+            "runtime_code_identity_sha256": digests[1],
+            "imports": "SDK and injected CLI resolved under installed sys.prefix with -I",
+        }
+    return outcomes
+
+
 def _verify_mounts(image: str, scratch: Path) -> None:
     private = scratch / "private"
     private.mkdir(mode=0o700)
@@ -714,6 +850,7 @@ def verify(wheel: Path, receipt: Path | None, prior_commit: str) -> dict[str, ob
         _verify_interruption(build, image)
         outcomes = _verify_cli(image, python, scratch)
         continuity = _verify_installed_continuity(python, scratch)
+        invalidation = _verify_installed_invalidation(python, scratch)
         config = _run(
             [_engine(), "image", "inspect", image, "--format", "{{json .Config}}"]
         )
@@ -754,6 +891,7 @@ def verify(wheel: Path, receipt: Path | None, prior_commit: str) -> dict[str, ob
             "image_tag": image,
             "outcomes": outcomes,
             "installed_setup_event_continuity": continuity,
+            "installed_setup_invalidation": invalidation,
             "mount_checks": "owner mapped, wrong UID, broad mode, read-only, symlink",
             "source_substitution": "rejected",
             "interrupted_build_and_run": "rejected; current image remained available",

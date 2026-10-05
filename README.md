@@ -1,5 +1,9 @@
 # Swing Trading Research Tool for AI Assistants
 
+[Evidence-based candidate invalidation](docs/workflows/causal-setup-invalidation.md)
+adds one anchored structural contradiction across admitted observations.
+Absence of contradiction never proves a valid or profitable trade.
+
 Opt-in agent research V6 adds one explicitly supplied hypothetical loss scenario
 beside V5 facts. See the [agent workflow](docs/workflows/agent-current-research-run.md#hypothetical-loss-assumptions-beside-research-v6)
 for inputs and assumption limits.
