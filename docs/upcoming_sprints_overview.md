@@ -1,5 +1,27 @@
 # Upcoming Sprints Overview
 
+## Sprint 37 — candidate completed-session age, October 5, 2026
+
+[Sprint37](sprints/sprint-37.md), [Issue256](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/256)
+and [Plan51](plans/51-candidate-completed-session-age.md) govern one descriptive
+count of admitted completed sessions after an unchanged original upward BOS.
+The event session is excluded; same-session refresh/replay0 and all inconclusive
+outcomes stay explicit. Schedule evidence revisions remain visible; incompatible
+ordered overlap withholds the count. No expiry threshold or active status.
+This is the pre-delivery implementation checkpoint; the live Issue owns exact
+review, hosted acceptance, normal merge, publication and tracker closeout.
+All eight Plan47 obligations remain distinct; no signal-phase completion.
+Future issues, persistence/providers/catalogues, broker and money expansion stay
+excluded. Owner direction authorizes the gated full normal delivery lifecycle.
+
+Sprint36 is live-verified complete: PR255 merged as
+`f405bbdb3b2e0b003905415098ed3141413e6dd5`, reviewed tree
+`deda2a00d9903dd07c5b281c63eabba82890e9b6`; main admission37265623553 and
+private publication/fresh pulls37265639697 succeeded; Issue254 and milestone28
+closed, zero open issues, private Delivery Project Done. Earlier committed
+checkpoint prose remains historical and is not reopened.
+
+
 ## Sprint 36 — evidence-based candidate invalidation, October 5, 2026
 
 [Sprint36](sprints/sprint-36.md), [Issue254](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/254)

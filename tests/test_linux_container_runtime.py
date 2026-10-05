@@ -23,6 +23,146 @@ def load(monkeypatch):
     return module
 
 
+def _age_output(scenario):
+    count = {"same-event": 1, "replay": 0, "unknown": None}[scenario]
+    schedule = {
+        "source": "nse-upstox-composed-calendar",
+        "source_release": "composed-calendar@v1=" + "c" * 64,
+        "evidence_identity_sha256": "d" * 64,
+        "schedule_identity_sha256": "e" * 64,
+        "feature_known_at": "2026-08-27T04:15:00.000000Z",
+    }
+    return {
+        "contract_version": "causal-setup-age@v1",
+        "criterion": "ADMITTED_COMPLETED_SESSIONS_SINCE_ORIGINAL_UPWARD_BOS@v1",
+        "status": {"same-event": "OBSERVED", "replay": "REPLAY", "unknown": "UNKNOWN"}[
+            scenario
+        ],
+        "continuity_status": {
+            "same-event": "SAME_EVENT",
+            "replay": "REPLAY",
+            "unknown": "UNKNOWN",
+        }[scenario],
+        "completed_sessions_elapsed": count,
+        "original_event_session": "2026-08-25" if count is not None else None,
+        "current_completed_session": "2026-08-26"
+        if count
+        else "2026-08-25"
+        if count == 0
+        else None,
+        "schedules": {"previous": dict(schedule), "current": dict(schedule)}
+        if count is not None
+        else None,
+        "previous": {"candidate": {"event_session": "2026-08-25"}},
+        "current": {
+            "status": "NO_MATCH" if count == 1 else "MATCH" if count == 0 else "UNKNOWN"
+        },
+        "runtime_code_identity_sha256": "b" * 64,
+        "previous_observation_identity_sha256": "f" * 64,
+        "current_observation_identity_sha256": "a" * 64,
+        "continuity_identity_sha256": "9" * 64,
+    }
+
+
+def _sealed_age(value):
+    value = dict(value)
+    value.pop("result_identity_sha256", None)
+    raw = (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    value["result_identity_sha256"] = hashlib.sha256(raw).hexdigest()
+    return (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
+
+
+def test_installed_age_gate_probes_isolated_sdk_cli_and_three_outcomes(
+    monkeypatch, tmp_path
+):
+    api = load(monkeypatch)
+    calls = []
+
+    def run(args, **kwargs):
+        calls.append((args, kwargs))
+        return subprocess.CompletedProcess(
+            args,
+            1 if args[-1] == "unknown" else 0,
+            _sealed_age(_age_output(args[-1])),
+            b"SYNTHETIC: not current market data.\n",
+        )
+
+    monkeypatch.setattr(api, "_run", run)
+    python = tmp_path / "venv/bin/python"
+    outcomes = api._verify_installed_age(python, tmp_path)
+    assert set(outcomes) == {"same-event", "replay", "unknown"}
+    assert outcomes["same-event"]["completed_sessions_elapsed"] == 1
+    for args, kwargs in calls:
+        assert args[:3] == [str(python), "-I", "-c"]
+        assert "setup_age as sdk" in args[3] and "setup_age_cli as cli" in args[3]
+        assert "sys.prefix" in args[3] and "is_relative_to" in args[3]
+        assert kwargs["cwd"] == tmp_path
+        assert (
+            "PYTHONPATH" not in kwargs["env"]
+            and "BHARATSTOCK_API_KEY" not in kwargs["env"]
+        )
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        "count",
+        "bool",
+        "status",
+        "exit",
+        "digest",
+        "leak",
+        "schedule",
+        "endpoint",
+        "fabricated-unknown",
+        "criterion",
+        "noncanonical",
+    ],
+)
+def test_installed_age_gate_rejects_plausible_wrong_evidence(
+    monkeypatch, tmp_path, failure
+):
+    api = load(monkeypatch)
+
+    def run(args, **kwargs):
+        scenario = args[-1]
+        value = _age_output(scenario)
+        mutations = {
+            "count": ("completed_sessions_elapsed", 2),
+            "bool": ("completed_sessions_elapsed", True),
+            "status": ("status", "VALID"),
+            "criterion": ("criterion", "CALENDAR_DAYS"),
+            "leak": ("close", 134),
+            "endpoint": ("current_completed_session", "2026-08-25"),
+        }
+        if failure in mutations:
+            key, replacement = mutations[failure]
+            value[key] = replacement
+        if failure == "schedule" and value["schedules"]:
+            value["schedules"]["current"]["schedule_identity_sha256"] = "invalid"
+        if failure == "fabricated-unknown" and scenario == "unknown":
+            value["schedules"] = {}
+        raw = _sealed_age(value)
+        if failure == "digest":
+            value = json.loads(raw)
+            value["result_identity_sha256"] = "0" * 64
+            raw = (
+                json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n"
+            ).encode()
+        if failure == "noncanonical":
+            raw = json.dumps(json.loads(raw)).encode()
+        return subprocess.CompletedProcess(
+            args,
+            2 if failure == "exit" else 1 if scenario == "unknown" else 0,
+            raw,
+            b"SYNTHETIC: not current market data.\n",
+        )
+
+    monkeypatch.setattr(api, "_run", run)
+    with pytest.raises(RuntimeError, match="age"):
+        api._verify_installed_age(tmp_path / "venv/bin/python", tmp_path)
+
+
 @pytest.mark.parametrize(
     "runtime, rootless", [("docker", False), ("podman", False), ("podman", True)]
 )

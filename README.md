@@ -1,5 +1,9 @@
 # Swing Trading Research Tool for AI Assistants
 
+[Candidate completed-session age](docs/workflows/causal-setup-age.md) reports
+one descriptive session count for an unchanged original event. It does not
+establish validity, expiry, active status or trade eligibility.
+
 [Evidence-based candidate invalidation](docs/workflows/causal-setup-invalidation.md)
 adds one anchored structural contradiction across admitted observations.
 Absence of contradiction never proves a valid or profitable trade.
