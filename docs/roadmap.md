@@ -1,5 +1,22 @@
 # Initial Roadmap
 
+## Sprint 41 — coherent level-aware interpretation, October 5, 2026
+
+[Sprint41](sprints/sprint-41.md), [Issue264](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/264)
+and [Plan55](plans/55-level-aware-setup-interpretation.md) govern additive v2
+evidence and checked external responses: continuity, invalidation, age and
+original broken-high relation on one exact pair. Existing v1 contracts remain.
+No new calculation/confirmation/eligibility policy or signal-phase completion.
+This is a pre-delivery checkpoint; live Issue264 owns exact reviews, hosted/
+installed gates, normal merge/main/private publication and tracker closeout.
+
+Sprint40 is live-verified complete through PR263, main
+`f311eb021b2e76fc97f80d8865d89a0f75fc4056`, reviewed tree
+`626a074ed40f0f6e164b191b27ba80b22d1c4c1d`, quality37308263582,
+admission37314206882 and private publication37314244191;
+Issue262/privateProjectDone/milestone32closed0open. Earlier checkpoints remain
+historical; original full receipts are retained.
+
 ## Sprint 40 — original broken-high relation, October 5, 2026
 
 [Sprint40](sprints/sprint-40.md), [Issue262](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/262)

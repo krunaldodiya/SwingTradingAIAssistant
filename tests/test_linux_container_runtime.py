@@ -1000,3 +1000,187 @@ def test_installed_level_gate_rejects_resealed_wrong_reports(  # noqa: C901 - cl
     monkeypatch.setattr(api, "_run", run)
     with pytest.raises(RuntimeError, match="installed level"):
         api._verify_installed_level(tmp_path / "venv/bin/python", tmp_path)
+
+
+def _level_interpretation_v2_output(scenario):
+    old_scenario = (
+        "same-event"
+        if scenario in ("above", "at", "below", "no-trade", "false-claim")
+        else scenario
+    )
+    legacy = json.loads(_sealed_age(_evidence_output(old_scenario)))
+    evidence = dict(legacy)
+    evidence["contract_version"] = "causal-setup-evidence@v2"
+    evidence["legacy_evidence_identity_sha256"] = legacy["result_identity_sha256"]
+    level_scenario = {
+        "invalidated": "below",
+        "no-trade": "above",
+        "false-claim": "above",
+    }.get(scenario, scenario)
+    level = _level_output(level_scenario)
+    # Synthetic qualification data joins exact shared projection rows, then seals.
+    previous, current = level["previous"], level["current"]
+    for name in ("continuity", "invalidation", "age"):
+        component = dict(evidence[name])
+        component["previous"], component["current"] = previous, current
+        if scenario == "replay":
+            component["current_observation_identity_sha256"] = component[
+                "previous_observation_identity_sha256"
+            ]
+        evidence[name] = json.loads(_sealed_age(component))
+    for name in ("invalidation", "age"):
+        evidence[name]["continuity_identity_sha256"] = evidence["continuity"][
+            "result_identity_sha256"
+        ]
+        evidence[name] = json.loads(_sealed_age(evidence[name]))
+    for key in (
+        "previous_observation_identity_sha256",
+        "current_observation_identity_sha256",
+    ):
+        evidence[key] = evidence["continuity"][key]
+        level[key] = evidence[key]
+    level["continuity_identity_sha256"] = evidence["continuity"][
+        "result_identity_sha256"
+    ]
+    evidence["level"] = json.loads(_sealed_age(level))
+    evidence = json.loads(_sealed_age(evidence))
+    response = _interpretation_output(
+        old_scenario
+        if old_scenario != "same-event"
+        else "no-trade"
+        if scenario == "no-trade"
+        else "same-event"
+    )
+    response["contract_version"] = "external-setup-interpretation-check@v2"
+    response["evidence"] = evidence
+    request = response["external_response"]
+    request["schema"] = "external-setup-interpretation-request@v2"
+    request["evidence_identity_sha256"] = evidence["result_identity_sha256"]
+    request["facts"] = {
+        name: {key: evidence[name][key] for key in ("result_identity_sha256", "status")}
+        for name in ("continuity", "invalidation", "age", "level")
+    }
+    request["facts"]["age"]["completed_sessions_elapsed"] = evidence["age"][
+        "completed_sessions_elapsed"
+    ]
+    request["facts"]["level"]["relation"] = level["relation"]
+    response["external_response_identity_sha256"] = hashlib.sha256(
+        (json.dumps(request, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    ).hexdigest()
+    return response
+
+
+def test_installed_level_interpretation_v2_probes_eight_isolated_paths(
+    monkeypatch, tmp_path
+):
+    api = load(monkeypatch)
+    calls = []
+
+    def run(args, **kwargs):
+        calls.append((args, kwargs))
+        scenario = args[-1]
+        return subprocess.CompletedProcess(
+            args,
+            2 if scenario == "false-claim" else 1 if scenario == "unknown" else 0,
+            b""
+            if scenario == "false-claim"
+            else _sealed_age(_level_interpretation_v2_output(scenario)),
+            b"SYNTHETIC CALLER-AUTHORED: not current market data.\n"
+            + (b"setup_interpretation_failed\n" if scenario == "false-claim" else b""),
+        )
+
+    monkeypatch.setattr(api, "_run", run)
+    result = api._verify_installed_level_interpretation_v2(
+        tmp_path / "venv/bin/python", tmp_path
+    )
+    assert set(result) == {
+        "above",
+        "at",
+        "below",
+        "invalidated",
+        "replay",
+        "unknown",
+        "no-trade",
+        "false-claim",
+    }
+    assert result["below"]["relation"] == "BELOW"
+    assert result["invalidated"]["invalidation_status"] == "INVALIDATED"
+    assert result["false-claim"]["rejected"]
+    for args, kwargs in calls:
+        assert args[1:3] == ["-I", "-c"]
+        assert "setup_interpretation_v2 as sdk" in args[3] and "sys.prefix" in args[3]
+        assert kwargs["cwd"] == tmp_path and "PYTHONPATH" not in kwargs["env"]
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "relation",
+        "component-pair",
+        "component-digest",
+        "claim",
+        "legacy-hash",
+        "schema",
+        "version",
+        "raw-price",
+        "noncanonical",
+        "overflow",
+        "false-accepted",
+        "exit",
+    ],
+)
+def test_installed_level_interpretation_v2_rejects_wrong_resealed_reports(  # noqa: C901 - closed adversarial matrix
+    monkeypatch, tmp_path, mutation
+):
+    api = load(monkeypatch)
+
+    def run(args, **kwargs):  # noqa: C901 - closed adversarial matrix
+        scenario = args[-1]
+        value = _level_interpretation_v2_output(
+            "above" if scenario == "false-claim" else scenario
+        )
+        level = value["evidence"]["level"]
+        if mutation == "relation":
+            level["relation"] = "AT"
+        elif mutation == "component-pair":
+            level["current_observation_identity_sha256"] = "0" * 64
+        elif mutation == "component-digest":
+            level["result_identity_sha256"] = "0" * 64
+        elif mutation == "claim":
+            value["external_response"]["facts"]["level"]["relation"] = "BELOW"
+        elif mutation == "legacy-hash":
+            value["evidence"]["legacy_evidence_identity_sha256"] = "wrong"
+        elif mutation == "schema":
+            value["external_response"]["schema"] = (
+                "external-setup-interpretation-request@v1"
+            )
+        elif mutation == "version":
+            value["contract_version"] = "external-setup-interpretation-check@v1"
+        elif mutation == "raw-price":
+            value["price"] = 130
+        if mutation != "component-digest":
+            value["evidence"]["level"] = json.loads(_sealed_age(level))
+        value["evidence"] = json.loads(_sealed_age(value["evidence"]))
+        raw = _sealed_age(value)
+        if mutation == "noncanonical":
+            raw = json.dumps(json.loads(raw), indent=2).encode()
+        elif mutation == "overflow":
+            raw = b"x" * (1024 * 1024 + 1)
+        code = 2 if scenario == "false-claim" else 1 if scenario == "unknown" else 0
+        if mutation == "exit":
+            code = 3
+        if scenario == "false-claim" and mutation != "false-accepted":
+            raw = b""
+        return subprocess.CompletedProcess(
+            args,
+            code,
+            raw,
+            b"SYNTHETIC CALLER-AUTHORED: not current market data.\n"
+            + (b"setup_interpretation_failed\n" if scenario == "false-claim" else b""),
+        )
+
+    monkeypatch.setattr(api, "_run", run)
+    with pytest.raises(RuntimeError):
+        api._verify_installed_level_interpretation_v2(
+            tmp_path / "venv/bin/python", tmp_path
+        )
