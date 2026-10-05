@@ -1,5 +1,8 @@
 # Sprint records
 
+- [Sprint36: evidence-based candidate invalidation](sprint-36.md) — Issue254, Plan50; live Issue owns current delivery evidence.
+- Sprint35 is closed through PR253, main admission and private publication; its earlier checkpoint below is historical.
+
 - [Sprint 35: candidate event continuity](sprint-35.md) — Issue #252, Plan49; implementation/review pending.
 
 Current bounded delivery: [Sprint 32 — Loss Beyond the Stop Price](sprint-32.md),
