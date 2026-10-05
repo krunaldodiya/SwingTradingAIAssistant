@@ -130,3 +130,13 @@ integration/final qualification3–5. Overlapping work explains the overall rang
 not a sum of committed backlog items, accepted future scope, countdown, delivery
 date or phase-completion percentage. Excludes all five Future issues. Real
 market observation adds calendar time. Refresh after material scope/evidence.
+
+## Accepted CI runtime recovery amendment (2026-10-05)
+
+The owner directly replied "approved" to the prepared four-line recovery after qualification attempts `37336362844/1` and `/2` both reached the unchanged one-hour limit. This accepts only a narrow workflow exception: in `.github/workflows/ci.yml`, the `quality` and `main-backstop` job limits become 90 minutes, and both complete pytest commands gain `-vv --durations=0 --durations-min=0`. Detailed names are emitted during execution; full setup/execution/teardown durations depend on actual test completion. This is diagnostic room, not a demonstrated root-cause fix or performance improvement.
+
+All original 13 requirements, eight criteria and twelve matrix rows remain required, with an explicit exception to workflow byte compatibility for these four lines. Runtime sources/manifests, selectors, two workers, dependencies, static/87% branch-coverage/build/installed/nativeOCI/adversarial/interruption/priorwheel gates, admission, permissions and private full lifecycle remain unchanged. Both complete failed archives remain failed, never acceptance.
+
+The new stable complete candidate requires both independent exact-candidate reviews expanded to CI/admission/privacy. Exactly one initial measured qualification execution is authorized after fresh whole-account included capacity (reserve >=300 minutes for quality90/main-fallback90/publication60 and rounding) and Actions AND Packages $0 Stop-usage-Yes budgets. No automatic rerun, paid/public/access/settings/heavy-local/self-hosted fallback or lowered gate. If it cannot finish within90minutes, retain diagnostics and stop the dependent release until an evidenced correction or additional owner direction exists. Review the diagnostic/resource exception after the measured run; its retained 90-minute resource cap remains the explicit scoped owner decision, not retry authority.
+
+The amended Plan56 appendix records the same accepted exception. Original accepted freeze below is retained verbatim as historical baseline and superseded only for these four workflow lines.

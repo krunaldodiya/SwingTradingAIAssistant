@@ -35,3 +35,17 @@ The owner's requested estimated overview was given before starting: provisional
 20–30 more bounded core-product sprints, including42, excluding five Future
 issues. Plan56 records categories, overlap and qualification/calendar limits;
 not a committed backlog/countdown/date/percentage. Reassess with new evidence.
+
+## Accepted CI runtime recovery
+
+Both complete qualification attempts37336362844/1 and /2 were cancelled at the
+unchanged one-hour limit, after last logged progress98% and99%. Neither proves
+full tests, coverage, installed distribution or admission. Both archives are
+retained. The owner approved the prepared narrow four-line CI exception on
+October5: quality/main-backstop limits90minutes and detailed pytest timings.
+Plan56 records the exact amended authority; all original functional and
+release requirements remain required with this workflow compatibility
+exception. Fresh independent current-candidate reviews and >=300 included
+minutes/both zero-spend StopusageYes checks precede one new measured
+qualification. No automatic rerun or claimed performance/root-cause fix.
+Implementation/review/full qualification/merge/publication remain pending.
