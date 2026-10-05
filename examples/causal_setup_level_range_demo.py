@@ -22,6 +22,9 @@ from swing_trading_ai_assistant.market_data.current_stock_research_v2 import (  
 from swing_trading_ai_assistant.research_comparison.current_stock_observation_comparison_cli import (  # noqa: E402
     CurrentStockObservationPortV1,
 )
+from swing_trading_ai_assistant.research_comparison.setup_level import (  # noqa: E402
+    observe_setup_level_v1,
+)
 from swing_trading_ai_assistant.research_comparison.setup_level_range import (  # noqa: E402
     observe_setup_level_range_v1,
 )
@@ -54,6 +57,24 @@ class _RangePrices(fixture.InvalidationPrices):
                 ),
             )
         return history
+
+
+def _check_level_reference(report: dict, level: dict) -> None:
+    """Independently preserve the exact upstream evidence for the admitted pair."""
+    for key in (
+        "previous",
+        "current",
+        "previous_observation_identity_sha256",
+        "current_observation_identity_sha256",
+        "continuity_identity_sha256",
+        "continuity_status",
+        "status",
+        "witness",
+    ):
+        if report[key] != level[key]:
+            raise RuntimeError("level range retained evidence changed")
+    if report["level_identity_sha256"] != level["result_identity_sha256"]:
+        raise RuntimeError("level range upstream result binding changed")
 
 
 def main() -> int:
@@ -93,9 +114,11 @@ def main() -> int:
             )
             for side in ("previous", "current")
         ]
-        expected = canonical_comparison_bytes(
-            observe_setup_level_range_v1(observations[0], observations[1])
+        report = observe_setup_level_range_v1(observations[0], observations[1])
+        _check_level_reference(
+            report, observe_setup_level_v1(observations[0], observations[1])
         )
+        expected = canonical_comparison_bytes(report)
         calls = iter(observations)
         selections = []
 

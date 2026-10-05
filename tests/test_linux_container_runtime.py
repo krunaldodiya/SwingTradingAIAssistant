@@ -1195,6 +1195,13 @@ def _level_range_output(scenario):
     value["contract_version"] = "causal-setup-level-range@v1"
     value["criterion"] = "LATEST_COMPLETED_RANGE_VS_ORIGINAL_BROKEN_HIGH@v1"
     value["level_identity_sha256"] = "d" * 64
+    value["limitations"] = [
+        "Inclusive low/high range of the latest completed post-event bar only; not first or any-bar contact.",
+        "Range inclusion does not prove an exact traded tick, intrabar ordering, a reclaim or a successful retest.",
+        "No confirmation, invalidation, validity, eligibility, recommendation, effectiveness or trade authorization is inferred.",
+        "Original unchanged causal high and completed bar must remain represented and fully admitted in the finite21-session window.",
+        "No tolerance, threshold, expiry, persistence, monitoring, new acquisition or external model.",
+    ]
     value.pop("relation")
     value["range_relation"] = {
         "contains": "CONTAINS_LEVEL",
@@ -1205,6 +1212,69 @@ def _level_range_output(scenario):
     }.get(scenario)
     if scenario not in ("replay", "unknown"):
         value["reason"] = "LATEST_COMPLETED_RANGE_COMPARED_WITH_ORIGINAL_BROKEN_HIGH"
+    for side in ("previous", "current"):
+        row = value[side]
+        unknown = row["status"] == "UNKNOWN"
+        instant = (
+            "2026-08-27T04:15:00.000000Z"
+            if side == "current" and scenario not in ("replay", "unknown")
+            else "2026-08-26T04:16:00.000000Z"
+            if unknown
+            else "2026-08-26T04:15:00.000000Z"
+        )
+        row.update(
+            requested_symbol="PNB",
+            reason="INSUFFICIENT_STRUCTURE"
+            if unknown
+            else "OBSERVED_COMPARABLE_STRUCTURE",
+            research_status="READY",
+            research_stage="complete",
+            research_runtime_code_identity_sha256="7" * 64,
+            data_selection_time=instant,
+            research_evidence_known_at=instant,
+            feature_known_at=instant,
+            canonical_stock={
+                "isin": "INE160A01022",
+                "exchange": "NSE",
+                "effective_symbol": "PNB",
+                "mapping_identity_sha256": "8" * 64,
+            },
+            price_basis="BHARATSTOCK_SOURCE_REPORTED_OHLC",
+            feature_availability="OBSERVED",
+            feature_support="SUPPORTED",
+            feature_comparability="SUPPORTED",
+            research_result_identity_sha256="9" * 64,
+            feature_source_identity_sha256="1" * 64,
+            capture_revision_identity_sha256="2" * 64,
+            schedule_identity_sha256="3" * 64,
+            source_profile="BHARATSTOCK_CAPTURE_FORWARD_DAILY_V3",
+            structure_state="INSUFFICIENT_STRUCTURE" if unknown else "CONFIRMED",
+            candidate_identity_sha256=None,
+        )
+        row["candidate"] = (
+            dict(value["previous"]["candidate"]) if row["status"] == "MATCH" else None
+        )
+        if row["candidate"] is not None:
+            row["candidate"].update(event="BOS", direction="UP", prior_trend="UPTREND")
+            bound = {
+                key: row[key]
+                for key in (
+                    "canonical_stock",
+                    "price_basis",
+                    "source_profile",
+                    "capture_revision_identity_sha256",
+                    "feature_source_identity_sha256",
+                    "candidate",
+                )
+            }
+            bound["criterion"] = "LATEST_COMPLETED_UPWARD_BOS@v1"
+            row["candidate_identity_sha256"] = hashlib.sha256(
+                (
+                    json.dumps(bound, sort_keys=True, separators=(",", ":")) + "\n"
+                ).encode()
+            ).hexdigest()
+    if scenario == "replay":
+        value["current"] = dict(value["previous"])
     return value
 
 
@@ -1270,6 +1340,9 @@ def test_installed_level_range_gate_seven_isolated_actual_sdk_cli_cases(
         "overflow",
         "partial",
         "private-path",
+        "nested-private-path",
+        "row-source-digest",
+        "candidate-direction",
     ],
 )
 def test_installed_level_range_gate_rejects_resealed_wrong_reports(  # noqa: C901 - closed adversarial matrix
@@ -1305,6 +1378,14 @@ def test_installed_level_range_gate_rejects_resealed_wrong_reports(  # noqa: C90
             value["range_relation"] = "CONTAINS_LEVEL"
         if failure == "private-path":
             value["limitations"] = [str(tmp_path)]
+        if failure == "nested-private-path":
+            value["previous"]["unexpected_private_field"] = (
+                "/owner-private/synthetic/token"
+            )
+        if failure == "row-source-digest":
+            value["previous"]["feature_source_identity_sha256"] = "not-a-digest"
+        if failure == "candidate-direction":
+            value["previous"]["candidate"]["direction"] = "DOWN"
         raw = _sealed_age(value)
         if failure == "digest":
             value = json.loads(raw)
@@ -1328,3 +1409,114 @@ def test_installed_level_range_gate_rejects_resealed_wrong_reports(  # noqa: C90
     monkeypatch.setattr(api, "_run", run)
     with pytest.raises(RuntimeError, match="installed level range"):
         api._verify_installed_level_range(tmp_path / "venv/bin/python", tmp_path)
+
+
+@pytest.mark.parametrize("side", ["previous", "current"])
+@pytest.mark.parametrize(
+    "failure",
+    [
+        "row-extra",
+        "row-missing",
+        "row-null",
+        "source-digest",
+        "result-digest",
+        "time-type",
+        "time-order",
+        "stage",
+        "stock-extra",
+        "stock-missing",
+        "stock-digest",
+        "stock-substitution",
+        "invented-candidate",
+    ],
+)
+def test_level_range_closed_nested_rows_reject_resealed_corruption(  # noqa: C901 - closed corruption matrix
+    monkeypatch, side, failure
+):
+    api = load(monkeypatch)
+    value = _level_range_output("contains")
+    row = value[side]
+    if failure == "row-extra":
+        row["unexpected_private_field"] = "/another-private-root/synthetic/token"
+    elif failure == "row-missing":
+        del row["feature_source_identity_sha256"]
+    elif failure == "row-null":
+        value[side] = None
+    elif failure == "source-digest":
+        row["feature_source_identity_sha256"] = "not-a-digest"
+    elif failure == "result-digest":
+        row["research_result_identity_sha256"] = False
+    elif failure == "time-type":
+        row["feature_known_at"] = 1
+    elif failure == "time-order":
+        row["data_selection_time"] = "2026-08-24T04:15:00.000000Z"
+    elif failure == "stage":
+        row["research_stage"] = "/another-private-root/synthetic/token"
+    elif failure == "stock-extra":
+        row["canonical_stock"]["unexpected_private_field"] = (
+            "/another-private-root/synthetic/token"
+        )
+    elif failure == "stock-missing":
+        del row["canonical_stock"]["isin"]
+    elif failure == "stock-digest":
+        row["canonical_stock"]["mapping_identity_sha256"] = "F" * 64
+    elif failure == "stock-substitution":
+        row["canonical_stock"]["effective_symbol"] = "SBIN"
+    else:
+        row["candidate"] = {"direction": "DOWN"}
+    raw = _sealed_age(value)
+    with pytest.raises((KeyError, TypeError, ValueError)):
+        api._check_installed_level_range(json.loads(raw), raw, "contains")
+
+
+@pytest.mark.parametrize(
+    "failure", ["extra", "direction", "event", "digest", "binding", "session"]
+)
+def test_level_range_candidate_rejects_resealed_causal_substitution(
+    monkeypatch, failure
+):
+    api = load(monkeypatch)
+    value = _level_range_output("replay")
+    row = value["previous"]
+    if failure == "extra":
+        row["candidate"]["private"] = "/synthetic/private/token"
+    elif failure == "direction":
+        row["candidate"]["direction"] = "DOWN"
+    elif failure == "event":
+        row["candidate"]["event"] = "CHOCH"
+    elif failure == "digest":
+        row["candidate"]["event_identity_sha256"] = "not-a-digest"
+    elif failure == "binding":
+        row["candidate_identity_sha256"] = "0" * 64
+    else:
+        row["candidate"]["event_session"] = "2026-08-26"
+    raw = _sealed_age(value)
+    with pytest.raises(ValueError):
+        api._check_installed_level_range(json.loads(raw), raw, "replay")
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "level_identity_sha256",
+        "witness",
+        "previous",
+        "current_observation_identity_sha256",
+    ],
+)
+def test_level_range_demo_rejects_changed_upstream_reference(monkeypatch, field):
+    monkeypatch.syspath_prepend(str(ROOT / "examples"))
+    import causal_setup_level_range_demo as demo  # noqa: PLC0415 - temporary example import path
+
+    value = _level_range_output("contains")
+    level = json.loads(_sealed_age(value))
+    level["result_identity_sha256"] = value["level_identity_sha256"]
+    demo._check_level_reference(value, level)
+    if field == "witness":
+        value[field] = dict(value[field], represented_high_identity_sha256="0" * 64)
+    elif field == "previous":
+        value[field] = dict(value[field], feature_source_identity_sha256="0" * 64)
+    else:
+        value[field] = "0" * 64
+    with pytest.raises(RuntimeError, match="level range"):
+        demo._check_level_reference(value, level)

@@ -407,6 +407,117 @@ def _verify_installed_level(
     return outcomes
 
 
+def _check_level_range_row(row: object, side: str, scenario: str) -> None:
+    """Close the redacted row for these fixed synthetic installed scenarios."""
+    unknown = side == "current" and scenario == "unknown"
+    later = side == "current" and scenario not in ("replay", "unknown")
+    status = "UNKNOWN" if unknown else "NO_MATCH" if later else "MATCH"
+    instant = (
+        "2026-08-26T04:16:00.000000Z"
+        if unknown
+        else "2026-08-27T04:15:00.000000Z"
+        if later
+        else "2026-08-26T04:15:00.000000Z"
+    )
+    scalars = {
+        "requested_symbol": "PNB",
+        "status": status,
+        "reason": "INSUFFICIENT_STRUCTURE"
+        if unknown
+        else "OBSERVED_COMPARABLE_STRUCTURE",
+        "research_status": "READY",
+        "research_stage": "complete",
+        "data_selection_time": instant,
+        "research_evidence_known_at": instant,
+        "feature_known_at": instant,
+        "session": "2026-08-26" if later else "2026-08-25",
+        "price_basis": "BHARATSTOCK_SOURCE_REPORTED_OHLC",
+        "feature_availability": "OBSERVED",
+        "feature_support": "SUPPORTED",
+        "feature_comparability": "SUPPORTED",
+        "source_profile": "BHARATSTOCK_CAPTURE_FORWARD_DAILY_V3",
+        "structure_state": "INSUFFICIENT_STRUCTURE" if unknown else "CONFIRMED",
+    }
+    digest_fields = {
+        "research_runtime_code_identity_sha256",
+        "research_result_identity_sha256",
+        "feature_source_identity_sha256",
+        "capture_revision_identity_sha256",
+        "schedule_identity_sha256",
+    }
+    if (
+        type(row) is not dict
+        or set(row)
+        != set(scalars)
+        | digest_fields
+        | {"canonical_stock", "candidate", "candidate_identity_sha256"}
+        or any(
+            type(row[key]) is not str or row[key] != expected
+            for key, expected in scalars.items()
+        )
+    ):
+        raise ValueError("level range redacted row invalid")
+    stock = row["canonical_stock"]
+    if (
+        type(stock) is not dict
+        or set(stock)
+        != {"isin", "exchange", "effective_symbol", "mapping_identity_sha256"}
+        or (stock["isin"], stock["exchange"], stock["effective_symbol"])
+        != ("INE160A01022", "NSE", "PNB")
+    ):
+        raise ValueError("level range stock invalid")
+    digests = [row[key] for key in digest_fields] + [stock["mapping_identity_sha256"]]
+    candidate = row["candidate"]
+    if status == "MATCH":
+        candidate_scalars = {
+            "event": "BOS",
+            "direction": "UP",
+            "prior_trend": "UPTREND",
+            "event_session": "2026-08-25",
+            "pivot_session": "2026-08-19",
+            "pivot_confirmation_session": "2026-08-21",
+        }
+        if (
+            type(candidate) is not dict
+            or set(candidate)
+            != set(candidate_scalars)
+            | {"event_identity_sha256", "pivot_identity_sha256"}
+            or any(
+                type(candidate[key]) is not str or candidate[key] != expected
+                for key, expected in candidate_scalars.items()
+            )
+        ):
+            raise ValueError("level range candidate invalid")
+        digests += [
+            candidate["event_identity_sha256"],
+            candidate["pivot_identity_sha256"],
+            row["candidate_identity_sha256"],
+        ]
+        bound = {
+            key: row[key]
+            for key in (
+                "canonical_stock",
+                "price_basis",
+                "source_profile",
+                "capture_revision_identity_sha256",
+                "feature_source_identity_sha256",
+                "candidate",
+            )
+        }
+        bound["criterion"] = "LATEST_COMPLETED_UPWARD_BOS@v1"
+        if (
+            row["candidate_identity_sha256"]
+            != hashlib.sha256(_interpretation_bytes(bound)).hexdigest()
+        ):
+            raise ValueError("level range candidate binding invalid")
+    elif candidate is not None or row["candidate_identity_sha256"] is not None:
+        raise ValueError("level range invented candidate")
+    if any(
+        type(d) is not str or re.fullmatch(r"[0-9a-f]{64}", d) is None for d in digests
+    ):
+        raise ValueError("level range row identity invalid")
+
+
 def _check_installed_level_range(value: dict, raw: bytes, scenario: str) -> None:
     observed = scenario in ("contains", "above", "below", "low-equal", "high-equal")
     status = "OBSERVED" if observed else scenario.upper()
@@ -457,11 +568,20 @@ def _check_installed_level_range(value: dict, raw: bytes, scenario: str) -> None
         or value["current"]["status"]
         != ("NO_MATCH" if observed else "MATCH" if scenario == "replay" else "UNKNOWN")
         or raw != _interpretation_bytes(value)
-        or type(value["limitations"]) is not list
-        or not value["limitations"]
-        or any(type(item) is not str or not item for item in value["limitations"])
+        or value["limitations"]
+        != [
+            "Inclusive low/high range of the latest completed post-event bar only; not first or any-bar contact.",
+            "Range inclusion does not prove an exact traded tick, intrabar ordering, a reclaim or a successful retest.",
+            "No confirmation, invalidation, validity, eligibility, recommendation, effectiveness or trade authorization is inferred.",
+            "Original unchanged causal high and completed bar must remain represented and fully admitted in the finite21-session window.",
+            "No tolerance, threshold, expiry, persistence, monitoring, new acquisition or external model.",
+        ]
     ):
         raise ValueError("level envelope invalid")
+    for side in ("previous", "current"):
+        _check_level_range_row(value[side], side, scenario)
+    if scenario == "replay" and value["previous"] != value["current"]:
+        raise ValueError("level range replay rows invalid")
     digests = [
         value[key]
         for key in (
