@@ -205,6 +205,192 @@ def _verify_cli(
     return outcomes
 
 
+def _interpretation_bytes(value: dict) -> bytes:
+    return (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
+
+
+def _check_installed_interpretation(value: dict, raw: bytes, scenario: str) -> None:
+    labels = {
+        "verification": "STRUCTURED_BINDING_ONLY",
+        "explanation_accuracy": "NOT_ASSESSED",
+        "external_authorship": "CALLER_SUPPLIED_NOT_AUTHENTICATED",
+        "actionable_recommendation": "NOT_ASSESSED",
+        "eligibility": "NOT_ASSESSED",
+        "effectiveness": "NOT_ASSESSED",
+    }
+    if (
+        set(value)
+        != set(labels)
+        | {
+            "contract_version",
+            "evidence",
+            "external_response",
+            "external_response_identity_sha256",
+            "runtime_code_identity_sha256",
+            "result_identity_sha256",
+            "limitations",
+        }
+        or value["contract_version"] != "external-setup-interpretation-check@v1"
+        or any(value[key] != expected for key, expected in labels.items())
+        or raw != _interpretation_bytes(value)
+        or type(value["limitations"]) is not list
+        or not value["limitations"]
+        or any(type(item) is not str or not item for item in value["limitations"])
+    ):
+        raise ValueError("interpretation envelope invalid")
+    evidence = value["evidence"]
+    _check_installed_evidence(
+        evidence,
+        _interpretation_bytes(evidence),
+        "same-event" if scenario == "no-trade" else scenario,
+    )
+    response = value["external_response"]
+    if (
+        set(response)
+        != {"schema", "evidence_identity_sha256", "disposition", "explanation", "facts"}
+        or response["schema"] != "external-setup-interpretation-request@v1"
+        or response["evidence_identity_sha256"] != evidence["result_identity_sha256"]
+        or response["disposition"]
+        != ("NO_TRADE" if scenario == "no-trade" else "RESEARCH_ONLY")
+        or response["explanation"]
+        != "Caller-authored synthetic research posture; facts unchanged, narrative accuracy and eligibility unassessed."
+        or set(response["facts"]) != {"continuity", "invalidation", "age"}
+    ):
+        raise ValueError("interpretation caller binding invalid")
+    for name in ("continuity", "invalidation", "age"):
+        facts = response["facts"][name]
+        keys = {"result_identity_sha256", "status"}
+        if name == "age":
+            keys.add("completed_sessions_elapsed")
+            count = facts["completed_sessions_elapsed"]
+            if count is not None and type(count) is not int:
+                raise ValueError("interpretation count invalid")
+        if set(facts) != keys or any(facts[key] != evidence[name][key] for key in keys):
+            raise ValueError("interpretation facts invalid")
+    unsigned = dict(value)
+    identity = unsigned.pop("result_identity_sha256")
+    if (
+        identity != hashlib.sha256(_interpretation_bytes(unsigned)).hexdigest()
+        or value["external_response_identity_sha256"]
+        != hashlib.sha256(_interpretation_bytes(response)).hexdigest()
+    ):
+        raise ValueError("interpretation digest invalid")
+    for key in (
+        "runtime_code_identity_sha256",
+        "result_identity_sha256",
+        "external_response_identity_sha256",
+    ):
+        digest = value[key]
+        if (
+            type(digest) is not str
+            or len(digest) != 64
+            or any(char not in "0123456789abcdef" for char in digest)
+        ):
+            raise ValueError("interpretation identity invalid")
+
+
+def _verify_installed_interpretation(
+    python: Path, scratch: Path
+) -> dict[str, dict[str, object]]:
+    """Qualify real installed SDK+CLI; the fixture asserts byte-for-byte equality."""
+    probe = "\n".join(
+        (
+            "import pathlib, runpy, sys",
+            "sys.dont_write_bytecode = True",
+            "import swing_trading_ai_assistant.research_comparison.setup_interpretation as sdk",
+            "import swing_trading_ai_assistant.research_comparison.setup_interpretation_cli as cli",
+            "for module in (sdk, cli):",
+            "    if not pathlib.Path(module.__file__).resolve().is_relative_to(pathlib.Path(sys.prefix).resolve()):",
+            "        raise RuntimeError('interpretation import escaped installed environment')",
+            "fixture, scenario = sys.argv[1:]",
+            "sys.argv = [fixture, '--scenario', scenario]",
+            "runpy.run_path(fixture, run_name='__main__')",
+        )
+    )
+    safe_env = {
+        "HOME": str(scratch),
+        "TMPDIR": str(scratch),
+        "PATH": "/usr/bin:/bin",
+        "LANG": "C.UTF-8",
+        "PYTHONDONTWRITEBYTECODE": "1",
+    }
+    outcomes = {}
+    for scenario in (
+        "same-event",
+        "invalidated",
+        "replay",
+        "unknown",
+        "no-trade",
+        "false-claim",
+    ):
+        observed = _run(
+            [
+                str(python),
+                "-I",
+                "-c",
+                probe,
+                str(ROOT / "examples/causal_setup_interpretation_demo.py"),
+                scenario,
+            ],
+            cwd=scratch,
+            env=safe_env,
+        )
+        code = 2 if scenario == "false-claim" else 1 if scenario == "unknown" else 0
+        if (
+            observed.returncode != code
+            or len(observed.stdout) > 1024 * 1024
+            or b"SYNTHETIC CALLER-AUTHORED" not in observed.stderr
+            or b"not current market data" not in observed.stderr
+            or any(
+                token in observed.stdout
+                for token in (
+                    b'"close"',
+                    b'"open"',
+                    b'"high"',
+                    b'"low"',
+                    b'"price"',
+                    b'"volume"',
+                    str(scratch).encode(),
+                )
+            )
+        ):
+            raise RuntimeError("installed interpretation execution failed")
+        if scenario == "false-claim":
+            if observed.stdout or not observed.stderr.endswith(
+                b"setup_interpretation_failed\n"
+            ):
+                raise RuntimeError("installed interpretation false claim accepted")
+            outcomes[scenario] = {
+                "exit": 2,
+                "rejected": True,
+                "stdout_sha256": hashlib.sha256(observed.stdout).hexdigest(),
+            }
+            continue
+        try:
+            value = json.loads(observed.stdout)
+            _check_installed_interpretation(value, observed.stdout, scenario)
+        except (KeyError, TypeError, ValueError) as error:
+            raise RuntimeError("installed interpretation result invalid") from error
+        evidence = value["evidence"]
+        outcomes[scenario] = {
+            "exit": code,
+            "continuity_status": evidence["continuity"]["status"],
+            "invalidation_status": evidence["invalidation"]["status"],
+            "age_status": evidence["age"]["status"],
+            "completed_sessions_elapsed": evidence["age"]["completed_sessions_elapsed"],
+            "disposition": value["external_response"]["disposition"],
+            "result_identity_sha256": value["result_identity_sha256"],
+            "runtime_code_identity_sha256": value["runtime_code_identity_sha256"],
+            "evidence_identity_sha256": evidence["result_identity_sha256"],
+            "external_response_identity_sha256": value[
+                "external_response_identity_sha256"
+            ],
+            "stdout_sha256": hashlib.sha256(observed.stdout).hexdigest(),
+            "imports": "SDK and injected CLI under installed sys.prefix with -I; actual outputs equal; no model evaluated",
+        }
+    return outcomes
+
+
 def _verify_installed_evidence(
     python: Path, scratch: Path
 ) -> dict[str, dict[str, object]]:
@@ -1239,6 +1425,7 @@ def verify(wheel: Path, receipt: Path | None, prior_commit: str) -> dict[str, ob
         invalidation = _verify_installed_invalidation(python, scratch)
         age = _verify_installed_age(python, scratch)
         evidence = _verify_installed_evidence(python, scratch)
+        interpretation = _verify_installed_interpretation(python, scratch)
         config = _run(
             [_engine(), "image", "inspect", image, "--format", "{{json .Config}}"]
         )
@@ -1282,6 +1469,7 @@ def verify(wheel: Path, receipt: Path | None, prior_commit: str) -> dict[str, ob
             "installed_setup_invalidation": invalidation,
             "installed_setup_age": age,
             "installed_setup_evidence": evidence,
+            "installed_setup_interpretation": interpretation,
             "mount_checks": "owner mapped, wrong UID, broad mode, read-only, symlink",
             "source_substitution": "rejected",
             "interrupted_build_and_run": "rejected; current image remained available",

@@ -655,3 +655,177 @@ def test_installed_evidence_rejects_plausible_wrong_or_mixed_reports(
     monkeypatch.setattr(api, "_run", run)
     with pytest.raises(RuntimeError, match="installed evidence"):
         api._verify_installed_evidence(tmp_path / "venv/bin/python", tmp_path)
+
+
+def _interpretation_output(scenario):
+    evidence = json.loads(
+        _sealed_age(
+            _evidence_output("same-event" if scenario == "no-trade" else scenario)
+        )
+    )
+    facts = {
+        name: {
+            "result_identity_sha256": evidence[name]["result_identity_sha256"],
+            "status": evidence[name]["status"],
+        }
+        for name in ("continuity", "invalidation", "age")
+    }
+    facts["age"]["completed_sessions_elapsed"] = evidence["age"][
+        "completed_sessions_elapsed"
+    ]
+    response = {
+        "schema": "external-setup-interpretation-request@v1",
+        "evidence_identity_sha256": evidence["result_identity_sha256"],
+        "disposition": "NO_TRADE" if scenario == "no-trade" else "RESEARCH_ONLY",
+        "explanation": "Caller-authored synthetic research posture; facts unchanged, narrative accuracy and eligibility unassessed.",
+        "facts": facts,
+    }
+    return {
+        "contract_version": "external-setup-interpretation-check@v1",
+        "evidence": evidence,
+        "external_response": response,
+        "external_response_identity_sha256": hashlib.sha256(
+            (
+                json.dumps(response, sort_keys=True, separators=(",", ":")) + "\n"
+            ).encode()
+        ).hexdigest(),
+        "runtime_code_identity_sha256": "b" * 64,
+        "verification": "STRUCTURED_BINDING_ONLY",
+        "external_authorship": "CALLER_SUPPLIED_NOT_AUTHENTICATED",
+        "explanation_accuracy": "NOT_ASSESSED",
+        "actionable_recommendation": "NOT_ASSESSED",
+        "eligibility": "NOT_ASSESSED",
+        "effectiveness": "NOT_ASSESSED",
+        "limitations": ["Only factual binding; no trade authorization."],
+    }
+
+
+def test_installed_interpretation_probes_six_isolated_sdk_cli_cases(
+    monkeypatch, tmp_path
+):
+    api = load(monkeypatch)
+    calls = []
+
+    def run(args, **kwargs):
+        calls.append((args, kwargs))
+        scenario = args[-1]
+        return subprocess.CompletedProcess(
+            args,
+            2 if scenario == "false-claim" else 1 if scenario == "unknown" else 0,
+            b""
+            if scenario == "false-claim"
+            else _sealed_age(_interpretation_output(scenario)),
+            b"SYNTHETIC CALLER-AUTHORED: not current market data.\n"
+            + (b"setup_interpretation_failed\n" if scenario == "false-claim" else b""),
+        )
+
+    monkeypatch.setattr(api, "_run", run)
+    outcomes = api._verify_installed_interpretation(
+        tmp_path / "venv/bin/python", tmp_path
+    )
+    assert set(outcomes) == {
+        "same-event",
+        "invalidated",
+        "replay",
+        "unknown",
+        "no-trade",
+        "false-claim",
+    }
+    assert outcomes["false-claim"]["exit"] == 2
+    assert outcomes["invalidated"]["invalidation_status"] == "INVALIDATED"
+    for args, kwargs in calls:
+        assert args[1:3] == ["-I", "-c"]
+        assert (
+            "setup_interpretation as sdk" in args[3]
+            and "setup_interpretation_cli as cli" in args[3]
+        )
+        assert "sys.prefix" in args[3] and "is_relative_to" in args[3]
+        assert kwargs["cwd"] == tmp_path
+        assert (
+            "PYTHONPATH" not in kwargs["env"]
+            and "BHARATSTOCK_API_KEY" not in kwargs["env"]
+        )
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        "reference",
+        "claim",
+        "omission",
+        "bool",
+        "label",
+        "authorship",
+        "actionable",
+        "digest",
+        "narrative",
+        "exit",
+        "false-claim",
+        "partial",
+        "noncanonical",
+        "overflow",
+        "private-path",
+    ],
+)
+def test_installed_interpretation_rejects_plausible_wrong_reports(
+    monkeypatch, tmp_path, failure
+):
+    api = load(monkeypatch)
+
+    def run(args, **kwargs):
+        scenario = args[-1]
+        code = 2 if scenario == "false-claim" else 1 if scenario == "unknown" else 0
+        stderr = b"SYNTHETIC CALLER-AUTHORED: not current market data.\n"
+        if scenario == "false-claim":
+            return subprocess.CompletedProcess(
+                args,
+                0 if failure == "false-claim" else code,
+                b"partial" if failure == "partial" else b"",
+                stderr + b"setup_interpretation_failed\n",
+            )
+        value = _interpretation_output(scenario)
+        mutations = {
+            "reference": (("external_response", "evidence_identity_sha256"), "0" * 64),
+            "claim": (
+                ("external_response", "facts", "invalidation", "status"),
+                "ACTIVE",
+            ),
+            "bool": (
+                ("external_response", "facts", "age", "completed_sessions_elapsed"),
+                True,
+            ),
+            "label": (("verification",), "AI_APPROVED"),
+            "authorship": (("external_authorship",), "VERIFIED"),
+            "actionable": (("external_response", "disposition"), "BUY"),
+            "narrative": (("external_response", "explanation"), "APPROVED"),
+            "private-path": (("external_response", "explanation"), str(tmp_path)),
+        }
+        if failure in mutations:
+            keys, replacement = mutations[failure]
+            target = value
+            for key in keys[:-1]:
+                target = target[key]
+            target[keys[-1]] = replacement
+        elif failure == "omission":
+            del value["external_response"]["facts"]["age"]
+        response = value["external_response"]
+        value["external_response_identity_sha256"] = hashlib.sha256(
+            (
+                json.dumps(response, sort_keys=True, separators=(",", ":")) + "\n"
+            ).encode()
+        ).hexdigest()
+        raw = _sealed_age(value)
+        if failure == "digest":
+            value["result_identity_sha256"] = "0" * 64
+            raw = json.dumps(value).encode()
+        elif failure == "noncanonical":
+            raw = json.dumps(value, indent=2).encode()
+        elif failure == "overflow":
+            raw += b" " * (1024 * 1024)
+        return subprocess.CompletedProcess(
+            args, 2 if failure == "exit" else code, raw, stderr
+        )
+
+    monkeypatch.setattr(api, "_run", run)
+    with pytest.raises(RuntimeError, match="installed interpretation"):
+        api._verify_installed_interpretation(tmp_path / "venv/bin/python", tmp_path)
