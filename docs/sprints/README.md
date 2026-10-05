@@ -1,5 +1,8 @@
 # Sprint records
 
+- [Sprint38: coherent candidate evidence](sprint-38.md) — Issue258/Plan52; pre-delivery checkpoint, live Issue owns final lifecycle.
+- Sprint37 is live-verified closed through PR257, main admission and private publication; earlier checkpoints below remain historical.
+
 - [Sprint37: candidate completed-session age](sprint-37.md) — Issue256, Plan51; pre-delivery checkpoint, live Issue owns final evidence.
 - Sprint36 is live-verified closed through PR255, exact main admission and private publication37265639697. Earlier pending/current wording is historical.
 

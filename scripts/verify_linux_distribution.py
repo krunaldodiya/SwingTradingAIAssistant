@@ -205,6 +205,234 @@ def _verify_cli(
     return outcomes
 
 
+def _verify_installed_evidence(
+    python: Path, scratch: Path
+) -> dict[str, dict[str, object]]:
+    """Check the coherent handoff from isolated installed SDK and actual CLI."""
+    probe = "\n".join(
+        (
+            "import pathlib, runpy, sys",
+            "sys.dont_write_bytecode = True",
+            "import swing_trading_ai_assistant.research_comparison.setup_evidence as sdk",
+            "import swing_trading_ai_assistant.research_comparison.setup_evidence_cli as cli",
+            "for module in (sdk, cli):",
+            "    if not pathlib.Path(module.__file__).resolve().is_relative_to(pathlib.Path(sys.prefix).resolve()):",
+            "        raise RuntimeError('evidence import escaped installed environment')",
+            "fixture, scenario = sys.argv[1:]",
+            "sys.argv = [fixture, '--scenario', scenario]",
+            "runpy.run_path(fixture, run_name='__main__')",
+        )
+    )
+    safe_env = {
+        "HOME": str(scratch),
+        "TMPDIR": str(scratch),
+        "PATH": "/usr/bin:/bin",
+        "LANG": "C.UTF-8",
+        "PYTHONDONTWRITEBYTECODE": "1",
+    }
+    outcomes = {}
+    for scenario in ("same-event", "invalidated", "replay", "unknown"):
+        observed = _run(
+            [
+                str(python),
+                "-I",
+                "-c",
+                probe,
+                str(ROOT / "examples/causal_setup_evidence_demo.py"),
+                scenario,
+            ],
+            cwd=scratch,
+            env=safe_env,
+        )
+        code = 1 if scenario == "unknown" else 0
+        if (
+            observed.returncode != code
+            or len(observed.stdout) > 1024 * 1024
+            or b"SYNTHETIC" not in observed.stderr
+            or b"not current market data" not in observed.stderr
+            or any(
+                token in observed.stdout
+                for token in (
+                    b'"close"',
+                    b'"open"',
+                    b'"high"',
+                    b'"low"',
+                    b'"price"',
+                    b'"volume"',
+                    str(scratch).encode(),
+                )
+            )
+        ):
+            raise RuntimeError("installed evidence execution failed")
+        try:
+            value = json.loads(observed.stdout)
+            _check_installed_evidence(value, observed.stdout, scenario)
+        except (KeyError, TypeError, ValueError) as error:
+            raise RuntimeError("installed evidence result invalid") from error
+        outcomes[scenario] = {
+            "exit": code,
+            "continuity_status": value["continuity"]["status"],
+            "invalidation_status": value["invalidation"]["status"],
+            "age_status": value["age"]["status"],
+            "completed_sessions_elapsed": value["age"]["completed_sessions_elapsed"],
+            "result_identity_sha256": value["result_identity_sha256"],
+            "runtime_code_identity_sha256": value["runtime_code_identity_sha256"],
+            "previous_observation_identity_sha256": value[
+                "previous_observation_identity_sha256"
+            ],
+            "current_observation_identity_sha256": value[
+                "current_observation_identity_sha256"
+            ],
+            "component_identities": {
+                name: value[name]["result_identity_sha256"]
+                for name in ("continuity", "invalidation", "age")
+            },
+            "stdout_sha256": hashlib.sha256(observed.stdout).hexdigest(),
+            "imports": "SDK and injected CLI under installed sys.prefix with -I; exactly one admitted pair",
+        }
+    return outcomes
+
+
+def _check_installed_evidence(value: dict, raw: bytes, scenario: str) -> None:
+    """Falsify mixed revisions, fabricated facts and plausible-but-wrong bundles."""
+    expected_versions = {
+        "continuity": "causal-setup-event-continuity@v1",
+        "invalidation": "causal-setup-invalidation@v1",
+        "age": "causal-setup-age@v1",
+    }
+    if (
+        set(value)
+        != {
+            "contract_version",
+            "criterion",
+            "runtime_code_identity_sha256",
+            "previous_observation_identity_sha256",
+            "current_observation_identity_sha256",
+            "continuity",
+            "invalidation",
+            "age",
+            "limitations",
+            "result_identity_sha256",
+        }
+        or value["contract_version"] != "causal-setup-evidence@v1"
+        or value["criterion"] != "LATEST_COMPLETED_UPWARD_BOS@v1"
+        or raw
+        != (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    ):
+        raise ValueError("evidence envelope disagrees with contract")
+    for report in (value, *(value[name] for name in expected_versions)):
+        unsigned = dict(report)
+        identity = unsigned.pop("result_identity_sha256")
+        if (
+            identity
+            != hashlib.sha256(
+                (
+                    json.dumps(unsigned, sort_keys=True, separators=(",", ":")) + "\n"
+                ).encode()
+            ).hexdigest()
+        ):
+            raise ValueError("evidence result identity invalid")
+        for field in (
+            "result_identity_sha256",
+            "runtime_code_identity_sha256",
+            "previous_observation_identity_sha256",
+            "current_observation_identity_sha256",
+        ):
+            digest = report[field]
+            if (
+                not isinstance(digest, str)
+                or len(digest) != 64
+                or any(c not in "0123456789abcdef" for c in digest)
+            ):
+                raise ValueError("evidence digest invalid")
+    continuity, invalidation, age = (value[name] for name in expected_versions)
+    for name, version in expected_versions.items():
+        report = value[name]
+        if (
+            report["contract_version"] != version
+            or any(
+                report[field] != value[field]
+                for field in (
+                    "previous_observation_identity_sha256",
+                    "current_observation_identity_sha256",
+                )
+            )
+            or any(report[side] != continuity[side] for side in ("previous", "current"))
+        ):
+            raise ValueError("evidence pair binding invalid")
+    if any(
+        value[name]["continuity_identity_sha256"]
+        != continuity["result_identity_sha256"]
+        for name in ("age", "invalidation")
+    ):
+        raise ValueError("evidence continuity binding invalid")
+    expected = {
+        "same-event": (
+            "SAME_EVENT",
+            "NO_CONTRADICTION_OBSERVED",
+            "OBSERVED",
+            1,
+            "NO_MATCH",
+        ),
+        "invalidated": ("SAME_EVENT", "INVALIDATED", "OBSERVED", 1, "NO_MATCH"),
+        "replay": ("REPLAY", "REPLAY", "REPLAY", 0, "MATCH"),
+        "unknown": ("UNKNOWN", "UNKNOWN", "UNKNOWN", None, "UNKNOWN"),
+    }[scenario]
+    if (
+        continuity["status"],
+        invalidation["status"],
+        age["status"],
+        age["completed_sessions_elapsed"],
+        age["current"]["status"],
+    ) != expected or (
+        expected[3] is not None and type(age["completed_sessions_elapsed"]) is not int
+    ):
+        raise ValueError("evidence facts disagree with contract")
+    _check_evidence_witness(invalidation, scenario)
+
+
+def _check_evidence_witness(invalidation: dict, scenario: str) -> None:
+    """Bind the observed contradiction to the original causal supporting low."""
+    witness = invalidation["contradiction"]
+    if scenario == "invalidated":
+        original, current_low = (
+            invalidation["original_supporting_low"],
+            invalidation["current_supporting_low"],
+        )
+        if (
+            witness is None
+            or witness["event"] != "CHOCH"
+            or witness["direction"] != "DOWN"
+            or witness["prior_trend"] != "UPTREND"
+            or original["kind"] != "SWING_LOW"
+            or original["relation"] != "HL"
+            or not original["pivot_session"]
+            < original["pivot_confirmation_session"]
+            < invalidation["previous"]["candidate"]["event_session"]
+            < witness["event_session"]
+            or any(
+                original[key] != current_low[key]
+                for key in (
+                    "kind",
+                    "relation",
+                    "pivot_session",
+                    "pivot_confirmation_session",
+                )
+            )
+            or any(
+                witness[key] != current_low[key]
+                for key in (
+                    "pivot_session",
+                    "pivot_confirmation_session",
+                    "pivot_identity_sha256",
+                )
+            )
+        ):
+            raise ValueError("evidence contradiction witness invalid")
+    elif witness is not None:
+        raise ValueError("evidence invented contradiction")
+
+
 def _verify_installed_age(python: Path, scratch: Path) -> dict[str, dict[str, object]]:
     """Exercise installed age SDK/CLI and retain exact public-output evidence."""
     probe = "\n".join(
@@ -1010,6 +1238,7 @@ def verify(wheel: Path, receipt: Path | None, prior_commit: str) -> dict[str, ob
         continuity = _verify_installed_continuity(python, scratch)
         invalidation = _verify_installed_invalidation(python, scratch)
         age = _verify_installed_age(python, scratch)
+        evidence = _verify_installed_evidence(python, scratch)
         config = _run(
             [_engine(), "image", "inspect", image, "--format", "{{json .Config}}"]
         )
@@ -1052,6 +1281,7 @@ def verify(wheel: Path, receipt: Path | None, prior_commit: str) -> dict[str, ob
             "installed_setup_event_continuity": continuity,
             "installed_setup_invalidation": invalidation,
             "installed_setup_age": age,
+            "installed_setup_evidence": evidence,
             "mount_checks": "owner mapped, wrong UID, broad mode, read-only, symlink",
             "source_substitution": "rejected",
             "interrupted_build_and_run": "rejected; current image remained available",
