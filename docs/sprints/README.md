@@ -1,5 +1,7 @@
 # Sprint records
 
+- [Sprint41](sprint-41.md): additive coherent level-aware evidence and checked external response v2, governed by Issue264/Plan55; live tracker owns delivery state.
+
 - [Sprint38: coherent candidate evidence](sprint-38.md) — Issue258/Plan52; pre-delivery checkpoint, live Issue owns final lifecycle.
 - Sprint37 is live-verified closed through PR257, main admission and private publication; earlier checkpoints below remain historical.
 
