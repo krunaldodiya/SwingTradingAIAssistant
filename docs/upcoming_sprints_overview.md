@@ -1,5 +1,22 @@
 # Upcoming Sprints Overview
 
+## Sprint 40 — original broken-high relation, October 5, 2026
+
+[Sprint40](sprints/sprint-40.md), [Issue262](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/262)
+and [Plan54](plans/54-candidate-broken-level-relation.md) govern one descriptive
+ABOVE/AT/BELOW relation of the latest later completed close to the original
+unchanged causally broken high. Complete typed admission precedes prices;
+missing/revised/window/replay states remain independent. This is a pre-delivery
+checkpoint; the live Issue owns exact reviews, full hosted/installed gates,
+normal merge/main admission/private publication and tracker closeout.
+No confirmation/eligibility/invalidation policy or overall signal-phase completion.
+
+Sprint39 is live-verified complete: PR261 merged exact main
+`5f2eacc2f448c3d3ff5df017ee787a6099e8c075`, reviewed tree
+`ef721bd7ba0f944a424b578d3e903f10d9ba31ad`; quality37289207925,
+admission37295785690 and private publication37295812875 succeeded;
+Issue260/ProjectDone/milestone31closed zeroopen. Earlier records remain history.
+
 ## Sprint 39 — checked external interpretation, October 5, 2026
 
 [Sprint39](sprints/sprint-39.md), [Issue260](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/260)
