@@ -1,5 +1,23 @@
 # Initial Roadmap
 
+## Sprint 39 — checked external interpretation, October 5, 2026
+
+[Sprint39](sprints/sprint-39.md), [Issue260](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/260)
+and [Plan53](plans/53-external-setup-interpretation-contract.md) govern one closed
+caller response checked against the exact regenerated Plan52 pair. All three
+statuses, component identities and descriptive age remain intact; false claims
+are terminal. Caller explanation/authorship and market eligibility remain
+unassessed. Research-only and caller no-trade are postures, not tool recommendations.
+This is the pre-delivery checkpoint; live Issue260 owns exact independent review,
+full hosted acceptance, normal merge/main admission/private publication and
+tracker closeout. All eight Plan47 obligations and Future exclusions remain.
+
+Sprint38 is live-verified closed: PR259 merged main
+`e585f7951abed166a3dbefefe934c3fa6a0e29d8`, reviewed tree
+`8c2d1efc37346d511243528d858612acbc521ff1`; admission37283379343 and private
+publication37283403489 succeeded; Issue258/ProjectDone/milestone30closed zeroopen.
+Its earlier checkpoints remain historical and are not reopened.
+
 ## Sprint 38 — coherent candidate evidence, October 5, 2026
 
 [Sprint38](sprints/sprint-38.md), [Issue258](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/258)
