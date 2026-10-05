@@ -1,5 +1,7 @@
 # Sprint records
 
+- [Sprint 35: candidate event continuity](sprint-35.md) — Issue #252, Plan49; implementation/review pending.
+
 Current bounded delivery: [Sprint 32 — Loss Beyond the Stop Price](sprint-32.md),
 [Issue #244](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/244),
 [Plan 46](../plans/46-loss-scenario-assumed-exit.md). Earlier entries remain historical.

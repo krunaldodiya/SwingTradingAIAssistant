@@ -1,5 +1,21 @@
 # Initial Roadmap
 
+## Sprint 35 — candidate event continuity, October 3, 2026
+
+[Sprint 35](sprints/sprint-35.md), [Issue #252](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/252)
+and [Plan 49](plans/49-candidate-event-continuity.md) govern one prior-event
+representation check across two admitted observations. An old upward BOS can
+remain represented after the latest-bar screen reports NO_MATCH. This is factual
+continuity, not validity, expiry, invalidation, eligibility or effectiveness.
+All eight Plan 47 baseline outcomes remain visible; every Future issue is
+excluded and signal/research precedes money/risk/capital/position expansion.
+
+Sprint 34 is live-verified closed: PR #249 merged 90f6b182; Issue #248 closed,
+Project Done, milestone 26 closed. Hosted CI migration PR #251 merged current
+main 3ef1c304; main admission 37133286177 and private publication 37133300408
+succeeded. #250 follow-ups remain separate. Sprint 35 implementation/review
+and hosted acceptance are pending; no automatic merge/new release authority.
+
 ## Sprint 34 — candidate comparison, October 3, 2026
 
 [Issue 248](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/248)

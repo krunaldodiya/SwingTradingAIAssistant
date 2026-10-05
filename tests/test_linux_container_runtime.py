@@ -1,6 +1,7 @@
 """Distribution checks retain isolation and ownership across engines."""
 
 import importlib.util
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -154,3 +155,70 @@ def test_job_engine_already_restarted_fails_before_build(monkeypatch, tmp_path):
     monkeypatch.setenv("CONTAINER_HOST", "unix:///ci/podman.sock")
     with pytest.raises(RuntimeError, match="before interruption"):
         api._verify_interrupted_build(["podman", "build", "--tag", "test", "."], "test")
+
+
+def test_installed_continuity_requires_new_behavior(monkeypatch, tmp_path):
+    api = load(monkeypatch)
+    calls = []
+
+    def run(args, **kwargs):
+        calls.append((args, kwargs))
+        scenario = args[-1]
+        value = {
+            "contract_version": "causal-setup-event-continuity@v1",
+            "status": "SAME_EVENT" if scenario == "same-event" else "UNKNOWN",
+            "current": {
+                "status": "NO_MATCH" if scenario == "same-event" else "UNKNOWN"
+            },
+            "result_identity_sha256": "a" * 64,
+            "runtime_code_identity_sha256": "b" * 64,
+        }
+        return subprocess.CompletedProcess(
+            args,
+            0 if scenario == "same-event" else 1,
+            json.dumps(value).encode(),
+            b"SYNTHETIC: not current market data.\n",
+        )
+
+    monkeypatch.setattr(api, "_run", run)
+    python = tmp_path / "venv/bin/python"
+    outcomes = api._verify_installed_continuity(python, tmp_path)
+    assert set(outcomes) == {"same-event", "unknown"}
+    for args, kwargs in calls:
+        assert args[:3] == [str(python), "-I", "-c"]
+        assert "is_relative_to" in args[3] and "sys.prefix" in args[3]
+        assert kwargs["cwd"] == tmp_path
+        assert "PYTHONPATH" not in kwargs["env"]
+        assert "BHARATSTOCK_API_KEY" not in kwargs["env"]
+
+
+@pytest.mark.parametrize(
+    "failure", ["wrong-status", "wrong-exit", "leak", "bad-digest", "wrong-contract"]
+)
+def test_installed_continuity_rejects_plausible_wrong_output(
+    monkeypatch, tmp_path, failure
+):
+    api = load(monkeypatch)
+
+    def run(args, **kwargs):
+        value = {
+            "contract_version": "wrong"
+            if failure == "wrong-contract"
+            else "causal-setup-event-continuity@v1",
+            "status": "NOT_REPRESENTED" if failure == "wrong-status" else "SAME_EVENT",
+            "current": {"status": "NO_MATCH"},
+            "result_identity_sha256": "short" if failure == "bad-digest" else "a" * 64,
+            "runtime_code_identity_sha256": "b" * 64,
+        }
+        if failure == "leak":
+            value["close"] = 100
+        return subprocess.CompletedProcess(
+            args,
+            2 if failure == "wrong-exit" else 0,
+            json.dumps(value).encode(),
+            b"SYNTHETIC: not current market data.\n",
+        )
+
+    monkeypatch.setattr(api, "_run", run)
+    with pytest.raises(RuntimeError, match="continuity"):
+        api._verify_installed_continuity(tmp_path / "venv/bin/python", tmp_path)
