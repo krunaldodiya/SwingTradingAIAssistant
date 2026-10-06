@@ -11,11 +11,16 @@ Nifty 100 selection or supported explicit stock list: trustworthy research facts
 explainable externally reasoned signals/suggestions or NO_TRADE, then observation
 and demonstrated improvements.
 
-**Sprint 47 is next:** reconcile delivered contracts and exact evidence against
-the roadmap's eight first-use outcomes, then freeze the smallest missing working
-path. Produce a finite required before use / after first use / needing owner disposition
-gap map and observable acceptance criteria. Further implementation closes those
-gaps rather than automatically extending the descriptive-fact catalogue.
+**Sprint 47 is in progress:** [Issue #278](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/278)
+and [Plan 61](plans/61-first-use-gap-reconciliation.md) contain the prepared
+reconciliation and next-path contract. The baseline is **12 distinct open
+outcomes**, not 12 promised sprints: six primarily before use, four needing owner
+disposition, two after research use. Reviews and ordinary delivery remain pending.
+
+Next implementation: connect current research and existing causal candidate
+facts from the same admitted observations. G01 delivery would reduce the baseline
+to 11; planning alone does not. Further work closes these observable gaps rather
+than automatically extending the descriptive-fact catalogue.
 
 | Order | Sprint outcome to select | Boundary |
 | --- | --- | --- |
@@ -34,8 +39,8 @@ Sprint 46 is fully delivered through PR #275 / main
 `c7abb3a3128f15f340e080857bbebafc9a14ba4e`: both reviews, 8400 tests / 87.84%
 branch coverage, exact main/private publication and complete tracker/receipt
 closeout passed. See the [verified delivery record](roadmap.md#latest-verified-delivery-sprint-46)
-for its bounded claim and retained failure/fixture exception. Sprint 47 is a next
-planning priority, not a started or completed implementation sprint.
+for its bounded claim and retained failure/fixture exception. Sprint 47 is active
+planning/reconciliation; the next runtime implementation has not started.
 
 ## Historical delivery context
 

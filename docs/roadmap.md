@@ -61,11 +61,18 @@ these outcomes finished or approve their unspecified implementation details.
 
 ### Priority order and next sprint
 
-**Next: Sprint 47 reconciles this checklist against actual delivered contracts and
-freezes the smallest missing working path with finite acceptance criteria.**
-It must identify what is already proven, what is required before first use, what
-follows first use, and which open obligation needs an owner disposition. It must
-not default to another optional descriptive-fact sprint.
+**Sprint 47 is in progress:** [Issue #278](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/278)
+and [Plan 61](plans/61-first-use-gap-reconciliation.md) reconcile this checklist
+and freeze the next working path. The prepared baseline has **12 distinct open
+outcomes**, with dependencies and observable closure evidence: six primarily
+before use, four needing owner disposition, two after research use. These are
+not 12 promised sprints; planning completion does not close a behavior gap.
+
+The next implementation joins current research and existing causal candidate
+facts from the same admitted observations, without another calculation or trading
+rule. Delivery of that G01 path would reduce the baseline to 11. Both independent
+reviews and normal Sprint 47 delivery remain pending; the next runtime sprint
+has not started. Plan 61 preserves every first-use and signal-phase obligation.
 
 | Priority | Outcome | Dependency and completion rule |
 | --- | --- | --- |
