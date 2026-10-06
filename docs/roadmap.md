@@ -1,5 +1,21 @@
 # Initial Roadmap
 
+## Sprint46 current checkpoint (2026-10-06)
+
+[Issue274](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/274)
+and [Plan60](plans/60-first-inclusion-close.md) govern one descriptive fact:
+ABOVE/AT/BELOW for the final close of the earliest admitted post-event range-
+including session against the original broken high; explicit NO_INCLUSION
+retains the finite-window boundary. Genuine actual-producer RED then GREEN,
+working SDK/CLI and94 focused cases pass. Complete matrix/reviews/hosted release
+and closeout remain pending; native Goal active and live tracker governs.
+Sprint45 is verified delivered at main `f8dc5a439da0e6c419e6f50e8ce733f947cafe21`
+through PR273,8138tests/87.83%, both reviews, quality37448764279,
+main37454496636/privatepub37454525025 and Issue272/ProjectDone/milestone37closed.
+Preserve prior historical checkpoints. All eight Plan47 outcomes remain distinct
+and incomplete; no new trading/expiry/eligibility/provider/Future/money scope.
+
+
 ## Sprint45 current checkpoint (2026-10-06)
 
 [Issue272](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/272)
