@@ -186,16 +186,20 @@ assertions and compare equivalent workloads. Fast-first stages favor early
 failure detection; parallel slow work can favor completion time on healthy
 candidates. Choose deliberately and retain all applicable acceptance checks.
 
-Pure documentation updates follow only `git diff --check`, not this executable
-validation sequence. Include small related workflow updates in the existing
-Issue/PR and its normal review; do not create an extra delivery track for them.
+Pure documentation updates require local `git diff --check` and proportionate
+lightweight verification under the canonical policy, including permitted
+lightweight GitGuardian. They do not trigger the long-running executable
+quality/build/release pipeline merely for prose. Include small related workflow
+updates in the existing Issue/PR and its normal review; do not create an extra
+delivery track for them.
 
 ## Review the exact candidate
 
 1. Stabilize the candidate and stop prospective writers. For executable changes,
    format owned files, refresh affected manifests, and run applicable focused
-   behavior checks. For documentation-only changes, inspect prose and run only
-   `git diff --check` under the canonical policy.
+   behavior checks. For documentation-only changes, inspect prose, run local
+   `git diff --check`, and apply any relevant lightweight verification permitted
+   by the canonical policy; a lightweight GitGuardian App needs no per-PR exception.
 2. Commit the candidate. Record base, full commit SHA, tree, and clean status.
    Supply one review package containing governing sources, the complete
    base-to-candidate change, observed checks and limits, and known findings.

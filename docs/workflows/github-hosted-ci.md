@@ -37,7 +37,10 @@ failed, timed-out, cancelled and skipped outcomes; queueing is not unlimited
 capacity and does not guarantee publication success.
 No schedule, matrix, automatic retry, setup-uv cache or Actions artifact upload
 is introduced. Markdown-only events retain their native path exclusions and
-local `git diff --check` policy. Large/indeterminate GitHub path comparisons and
+local `git diff --check` policy. The owner's October 6 clarification permits
+lightweight GitGuardian, including the existing hosted App, without a per-PR
+exception; this does not start the long-running CI/CD pipeline for Markdown.
+Large/indeterminate GitHub path comparisons and
 required-check conflicts still require explicit handling; path filters are not
 proof that every change was classified correctly.
 
