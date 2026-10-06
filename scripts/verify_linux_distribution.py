@@ -2928,6 +2928,694 @@ def _verify_installed_range_inclusion(
     return outcomes
 
 
+_V4_REFERENCE_KEYS = {
+    "age": {
+        "completed_sessions_elapsed",
+        "continuity_identity_sha256",
+        "continuity_status",
+        "contract_version",
+        "criterion",
+        "current",
+        "current_completed_session",
+        "current_observation_identity_sha256",
+        "limitations",
+        "original_event_session",
+        "previous",
+        "previous_observation_identity_sha256",
+        "reason",
+        "result_identity_sha256",
+        "runtime_code_identity_sha256",
+        "schedules",
+        "status",
+    },
+    "continuity": {
+        "comparison_identity_sha256",
+        "comparison_status",
+        "contract_version",
+        "criterion",
+        "current",
+        "current_observation_identity_sha256",
+        "current_representation",
+        "limitations",
+        "previous",
+        "previous_observation_identity_sha256",
+        "reason",
+        "result_identity_sha256",
+        "runtime_code_identity_sha256",
+        "status",
+    },
+    "invalidation": {
+        "continuity_identity_sha256",
+        "continuity_status",
+        "contract_version",
+        "contradiction",
+        "criterion",
+        "current",
+        "current_observation_identity_sha256",
+        "current_supporting_low",
+        "limitations",
+        "original_supporting_low",
+        "previous",
+        "previous_observation_identity_sha256",
+        "reason",
+        "result_identity_sha256",
+        "runtime_code_identity_sha256",
+        "status",
+    },
+    "v1": {
+        "age",
+        "continuity",
+        "contract_version",
+        "criterion",
+        "current_observation_identity_sha256",
+        "invalidation",
+        "limitations",
+        "previous_observation_identity_sha256",
+        "result_identity_sha256",
+        "runtime_code_identity_sha256",
+    },
+}
+
+_V4_FIXED_LIMITATIONS = {
+    "age": [
+        "Age is a descriptive count under the current admitted schedule; not expiry, "
+        "validity, active status or holding horizon.",
+        "Age does not reverse invalidation or establish eligibility, recommendation "
+        "or effectiveness.",
+        "Count requires unchanged original event and anchor representation in the "
+        "finite admitted window.",
+        "No calendar-day substitution, future evidence, persistence or monitoring.",
+    ],
+    "continuity": [
+        "Event representation is not validity, invalidation, expiry or a new "
+        "trading opportunity.",
+        "Rolling-window loss and missing evidence do not establish event "
+        "removal or publisher correction lineage.",
+        "No persistence, monitoring, eligibility, recommendation or "
+        "effectiveness claim.",
+    ],
+    "interpretation": [
+        "Only structured claims and exact admitted evidence references are "
+        "checked; success grants no trade authorization.",
+        "Explanation is untrusted caller text; its truth, usefulness and "
+        "external model authorship are not verified.",
+        "Caller research-only/no-trade posture is preserved without a tool "
+        "recommendation, eligibility, effectiveness or expiry policy.",
+        "Continuity, invalidation, age, close, latest range and earliest "
+        "completed inclusion remain independent; inclusion within the "
+        "finite admitted window proves no exact tick, lifetime first "
+        "contact, successful retest or confirmation; age/ABOVE cannot "
+        "override contradiction/missing evidence.",
+    ],
+    "invalidation": [
+        "INVALIDATED contradicts only this original upward continuation "
+        "premise; the historical BOS remains a fact.",
+        "Absence of this witness never establishes validity, trade "
+        "eligibility or profitability.",
+        "Revisions, unknown evidence and rolling-window absence do not "
+        "establish contradiction.",
+        "No expiry, persistence, monitoring, recommendation or effectiveness claim.",
+    ],
+    "v1": [
+        "The deterministic tool owns admitted facts, timing, identities and "
+        "provenance; the external AI owns contextual recommendation or no-trade "
+        "reasoning.",
+        "The AI must not invent or recompute market facts, mint provenance or override "
+        "integrity failures.",
+        "Continuity and age do not imply validity or override observed structural "
+        "contradiction.",
+        "Actionable recommendation, eligibility and effectiveness are not assessed; no "
+        "active or tradable candidate verdict is produced.",
+        "Optional analytical context must not become hidden hard filters without an "
+        "accepted strategy contract.",
+        "No expiry, persistence, monitoring or broker-order authority is granted.",
+    ],
+}
+
+
+def _v4_sealed(value: dict, keys: set[str]) -> None:
+    if type(value) is not dict or set(value) != keys:
+        raise ValueError("v4 original closed envelope invalid")
+    unsigned = dict(value)
+    identity = unsigned.pop("result_identity_sha256")
+    if identity != hashlib.sha256(_interpretation_bytes(unsigned)).hexdigest():
+        raise ValueError("v4 original unsigned identity invalid")
+    for key, digest in value.items():
+        if (
+            key.endswith("sha256")
+            and digest is not None
+            and (
+                type(digest) is not str or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+            )
+        ):
+            raise ValueError("v4 original digest invalid")
+
+
+def _check_v4_original_continuity(
+    continuity, latest, scenario, status, reason, observed
+):
+    if (
+        continuity["criterion"],
+        continuity["status"],
+        continuity["reason"],
+        continuity["comparison_status"],
+    ) != (
+        "LATEST_COMPLETED_UPWARD_BOS@v1",
+        status,
+        reason,
+        "UNKNOWN"
+        if scenario == "unknown"
+        else "REPLAY"
+        if scenario == "replay"
+        else "ABSENT"
+        if observed
+        else "SAME_EVENT",
+    ):
+        raise ValueError("v4 original continuity semantics invalid")
+    representation = continuity["current_representation"]
+    candidate = latest["previous"]["candidate"]
+    if scenario == "unknown":
+        if representation is not None:
+            raise ValueError("v4 unknown representation invented")
+    elif (
+        type(representation) is not dict
+        or set(representation) != set(candidate)
+        or any(
+            representation[key] != candidate[key]
+            for key in candidate
+            if not key.endswith("sha256")
+        )
+        or any(
+            re.fullmatch(r"[0-9a-f]{64}", representation[key]) is None
+            for key in candidate
+            if key.endswith("sha256")
+        )
+    ):
+        raise ValueError("v4 original representation invalid")
+    elif (
+        observed
+        and (
+            representation["event_identity_sha256"]
+            != latest["witness"]["represented_event_identity_sha256"]
+            or representation["pivot_identity_sha256"]
+            != latest["witness"]["represented_high_identity_sha256"]
+        )
+        or scenario == "replay"
+        and representation != candidate
+    ):
+        raise ValueError("v4 original represented anchor invalid")
+
+
+def _check_v4_original_invalidation(invalidation, scenario, status, reason):
+    invalid_status = (
+        "INVALIDATED"
+        if scenario == "invalidated"
+        else "NO_CONTRADICTION_OBSERVED"
+        if status == "SAME_EVENT"
+        else status
+    )
+    invalid_reason = (
+        "LATER_DOWN_CHOCH_OF_ORIGINAL_CONFIRMED_HL"
+        if scenario == "invalidated"
+        else "NO_LATER_CHOCH_OF_ORIGINAL_HL"
+        if status == "SAME_EVENT"
+        else reason
+    )
+    if (invalidation["criterion"], invalidation["status"], invalidation["reason"]) != (
+        "LATER_DOWN_CHOCH_OF_ORIGINAL_CONFIRMED_HL@v1",
+        invalid_status,
+        invalid_reason,
+    ):
+        raise ValueError("v4 independent invalidation semantics invalid")
+    low_keys = {
+        "kind",
+        "relation",
+        "pivot_session",
+        "pivot_confirmation_session",
+        "pivot_identity_sha256",
+    }
+    for key in ("original_supporting_low", "current_supporting_low"):
+        low = invalidation[key]
+        if status != "SAME_EVENT":
+            if low is not None:
+                raise ValueError("v4 inconclusive low invented")
+        elif (
+            type(low) is not dict
+            or set(low) != low_keys
+            or (
+                low["kind"],
+                low["relation"],
+                low["pivot_session"],
+                low["pivot_confirmation_session"],
+            )
+            != ("SWING_LOW", "HL", "2026-08-14", "2026-08-18")
+            or re.fullmatch(r"[0-9a-f]{64}", low["pivot_identity_sha256"]) is None
+        ):
+            raise ValueError("v4 original supporting low invalid")
+    _check_evidence_witness(
+        invalidation, "invalidated" if scenario == "invalidated" else "same-event"
+    )
+    if scenario == "invalidated":
+        witness = invalidation["contradiction"]
+        if (
+            set(witness)
+            != {
+                "event",
+                "direction",
+                "prior_trend",
+                "event_session",
+                "pivot_session",
+                "pivot_confirmation_session",
+                "event_identity_sha256",
+                "pivot_identity_sha256",
+            }
+            or witness["event_session"] != "2026-08-26"
+            or any(
+                re.fullmatch(r"[0-9a-f]{64}", witness[key]) is None
+                for key in witness
+                if key.endswith("sha256")
+            )
+        ):
+            raise ValueError("v4 original contradiction closed witness invalid")
+
+
+def _check_v4_original_age(age, latest, scenario, status, reason):
+    count = (
+        None if scenario == "unknown" else 0 if scenario in ("replay", "refresh") else 2
+    )
+    if (
+        (
+            age["criterion"],
+            age["status"],
+            age["reason"],
+            age["completed_sessions_elapsed"],
+        )
+        != (
+            "ADMITTED_COMPLETED_SESSIONS_SINCE_ORIGINAL_UPWARD_BOS@v1",
+            "OBSERVED" if status == "SAME_EVENT" else status,
+            "COMPLETED_SESSIONS_SINCE_ORIGINAL_EVENT"
+            if status == "SAME_EVENT"
+            else reason,
+            count,
+        )
+        or count is not None
+        and type(age["completed_sessions_elapsed"]) is not int
+    ):
+        raise ValueError("v4 original age semantics invalid")
+    _verify_age_endpoints(age, count)
+    if count is not None:
+        if age["current_completed_session"] != latest["current"]["session"]:
+            raise ValueError("v4 original age latest endpoint invalid")
+        for side, schedule in age["schedules"].items():
+            if (
+                type(schedule) is not dict
+                or set(schedule)
+                != {
+                    "source",
+                    "source_release",
+                    "evidence_identity_sha256",
+                    "schedule_identity_sha256",
+                    "feature_known_at",
+                }
+                or (
+                    schedule["source"] != "nse-upstox-composed-calendar"
+                    or type(schedule["source_release"]) is not str
+                    or re.fullmatch(
+                        r"composed-calendar@v1=[0-9a-f]{64}", schedule["source_release"]
+                    )
+                    is None
+                    or schedule["feature_known_at"] != latest[side]["feature_known_at"]
+                    or schedule["schedule_identity_sha256"]
+                    != latest[side]["schedule_identity_sha256"]
+                )
+            ):
+                raise ValueError("v4 original schedule metadata invalid")
+
+
+def _check_v4_original_evidence(
+    original: dict, scenario: str, inclusion_refs: dict
+) -> None:
+    """Close original three-fact envelopes independently of candidate seals."""
+    latest = inclusion_refs["latest_range"]
+    observed = scenario not in ("replay", "unknown", "refresh")
+    status = (
+        "UNKNOWN"
+        if scenario == "unknown"
+        else "REPLAY"
+        if scenario == "replay"
+        else "SAME_EVENT"
+    )
+    reason = (
+        "CURRENT_STRUCTURE_UNKNOWN"
+        if scenario == "unknown"
+        else "IDENTICAL_ADMITTED_OBSERVATION"
+        if scenario == "replay"
+        else "SAME_ADMITTED_EVENT_AND_ANCHOR"
+    )
+    common = {
+        key: latest[key]
+        for key in (
+            "previous",
+            "current",
+            "previous_observation_identity_sha256",
+            "current_observation_identity_sha256",
+        )
+    }
+    continuity, invalidation, age = (
+        original[name] for name in ("continuity", "invalidation", "age")
+    )
+    for name in ("continuity", "invalidation", "age"):
+        report = original[name]
+        _v4_sealed(report, _V4_REFERENCE_KEYS[name])
+        if (
+            any(report[key] != expected for key, expected in common.items())
+            or report["limitations"] != _V4_FIXED_LIMITATIONS[name]
+        ):
+            raise ValueError("v4 original pair or limitations invalid")
+        if (
+            report["contract_version"]
+            != "causal-setup-"
+            + ("event-continuity" if name == "continuity" else name)
+            + "@v1"
+        ):
+            raise ValueError("v4 original version invalid")
+    _check_v4_original_continuity(
+        continuity, latest, scenario, status, reason, observed
+    )
+    for report in (invalidation, age):
+        if (
+            report["continuity_identity_sha256"] != continuity["result_identity_sha256"]
+            or report["continuity_status"] != status
+        ):
+            raise ValueError("v4 original continuity reference invalid")
+    _check_v4_original_invalidation(invalidation, scenario, status, reason)
+    _check_v4_original_age(age, latest, scenario, status, reason)
+    _v4_sealed(original, _V4_REFERENCE_KEYS["v1"])
+    if (
+        original["contract_version"] != "causal-setup-evidence@v1"
+        or original["criterion"] != "LATEST_COMPLETED_UPWARD_BOS@v1"
+        or original["limitations"] != _V4_FIXED_LIMITATIONS["v1"]
+        or any(original[key] != common[key] for key in common if key.endswith("sha256"))
+    ):
+        raise ValueError("v4 original bundle envelope invalid")
+
+
+def _check_installed_evidence_v4(
+    value: dict, raw: bytes, scenario: str, references: dict
+) -> None:
+    if set(references) != {
+        "legacy_v1",
+        "legacy_v2",
+        "legacy_v3",
+        "inclusion_references",
+        "evidence_runtime",
+        "interpretation_runtime",
+    }:
+        raise ValueError("v4 independent reference inventory invalid")
+    actual = (
+        "earlier"
+        if scenario in ("no-trade", "false-claim", "false-session")
+        else scenario
+    )
+    inclusion_refs = references["inclusion_references"]
+    inclusion = value["level_range_inclusion"]
+    _check_installed_range_inclusion(
+        inclusion, _interpretation_bytes(inclusion), actual, inclusion_refs
+    )
+    v1, v2, v3 = (references[name] for name in ("legacy_v1", "legacy_v2", "legacy_v3"))
+    _check_v4_original_evidence(v1, actual, inclusion_refs)
+    expected = dict(v1)
+    expected.pop("result_identity_sha256")
+    expected.update(
+        contract_version="causal-setup-evidence@v2",
+        legacy_evidence_identity_sha256=v1["result_identity_sha256"],
+        level=inclusion_refs["level"],
+        runtime_code_identity_sha256=v2["runtime_code_identity_sha256"],
+        limitations=[
+            *v1["limitations"],
+            "ABOVE/AT/BELOW is a descriptive completed-close relation; ABOVE does not confirm validity or eligibility and BELOW does not establish structural invalidation.",
+        ],
+    )
+    expected["result_identity_sha256"] = hashlib.sha256(
+        _interpretation_bytes(expected)
+    ).hexdigest()
+    if _interpretation_bytes(v2) != _interpretation_bytes(expected):
+        raise ValueError("v4 original v2 reference invalid")
+    expected.pop("result_identity_sha256")
+    expected.update(
+        contract_version="causal-setup-evidence@v3",
+        legacy_evidence_v2_identity_sha256=v2["result_identity_sha256"],
+        level_range=inclusion_refs["latest_range"],
+        runtime_code_identity_sha256=v3["runtime_code_identity_sha256"],
+        limitations=[
+            *v2["limitations"],
+            "Inclusive latest low/high containment is descriptive; it proves no exact traded tick, successful retest, confirmation, validity or eligibility.",
+        ],
+    )
+    expected["result_identity_sha256"] = hashlib.sha256(
+        _interpretation_bytes(expected)
+    ).hexdigest()
+    if _interpretation_bytes(v3) != _interpretation_bytes(expected):
+        raise ValueError("v4 original v3 reference invalid")
+    expected.pop("result_identity_sha256")
+    expected.update(
+        contract_version="causal-setup-evidence@v4",
+        legacy_evidence_v3_identity_sha256=v3["result_identity_sha256"],
+        level_range_inclusion=inclusion,
+        runtime_code_identity_sha256=references["evidence_runtime"],
+        limitations=[
+            *v3["limitations"],
+            "Earliest inclusive completed range only in the admitted post-event window; no first lifetime contact, exact traded tick, successful retest, confirmation, validity or eligibility is established.",
+        ],
+    )
+    expected["result_identity_sha256"] = hashlib.sha256(
+        _interpretation_bytes(expected)
+    ).hexdigest()
+    if (
+        len(raw) > 1024 * 1024
+        or raw != _interpretation_bytes(value)
+        or raw != _interpretation_bytes(expected)
+    ):
+        raise ValueError("v4 exact six-fact evidence invalid")
+
+
+def _check_installed_interpretation_v4(
+    value: dict, raw: bytes, scenario: str, references: dict
+) -> None:
+    evidence = value["evidence"]
+    _check_installed_evidence_v4(
+        evidence, _interpretation_bytes(evidence), scenario, references
+    )
+    additional = {
+        "age": ("completed_sessions_elapsed",),
+        "level": ("relation",),
+        "level_range": ("range_relation",),
+        "level_range_inclusion": ("inclusion_observed", "first_inclusion"),
+    }
+    response = {
+        "schema": "external-setup-interpretation-request@v4",
+        "evidence_identity_sha256": evidence["result_identity_sha256"],
+        "disposition": "NO_TRADE" if scenario == "no-trade" else "RESEARCH_ONLY",
+        "explanation": "Caller-authored synthetic research posture; facts unchanged, narrative accuracy and eligibility unassessed.",
+        "facts": {
+            name: {
+                key: evidence[name][key]
+                for key in (
+                    "result_identity_sha256",
+                    "status",
+                    *additional.get(name, ()),
+                )
+            }
+            for name in (
+                "continuity",
+                "invalidation",
+                "age",
+                "level",
+                "level_range",
+                "level_range_inclusion",
+            )
+        },
+    }
+    expected = {
+        "contract_version": "external-setup-interpretation-check@v4",
+        "evidence": evidence,
+        "external_response": response,
+        "external_response_identity_sha256": hashlib.sha256(
+            _interpretation_bytes(response)
+        ).hexdigest(),
+        "runtime_code_identity_sha256": references["interpretation_runtime"],
+        "verification": "STRUCTURED_BINDING_ONLY",
+        "explanation_accuracy": "NOT_ASSESSED",
+        "external_authorship": "CALLER_SUPPLIED_NOT_AUTHENTICATED",
+        "actionable_recommendation": "NOT_ASSESSED",
+        "eligibility": "NOT_ASSESSED",
+        "effectiveness": "NOT_ASSESSED",
+        "limitations": _V4_FIXED_LIMITATIONS["interpretation"],
+    }
+    expected["result_identity_sha256"] = hashlib.sha256(
+        _interpretation_bytes(expected)
+    ).hexdigest()
+    if (
+        len(raw) > 1024 * 1024
+        or raw != _interpretation_bytes(value)
+        or raw != _interpretation_bytes(expected)
+    ):
+        raise ValueError("v4 exact checked interpretation invalid")
+
+
+def _verify_installed_inclusion_interpretation_v4(
+    python: Path, scratch: Path
+) -> dict[str, dict[str, object]]:
+    """Actual isolated installed execution with independent original component receipts."""
+    probe = "\n".join(
+        (
+            "import json, os, pathlib, runpy, sys",
+            "sys.dont_write_bytecode = True",
+            "from swing_trading_ai_assistant.research_comparison import setup_interpretation_v4 as sdk, setup_interpretation_v4_cli as cli, setup_evidence_v4 as bundle, setup_evidence_v4_cli as bundle_cli, setup_evidence_v2 as old, setup_evidence as v1, setup_level as level, setup_level_range as level_range",
+            "for name, module in tuple(sys.modules.items()):",
+            "    if name.startswith('swing_trading_ai_assistant') and getattr(module, '__file__', None) and not pathlib.Path(module.__file__).resolve().is_relative_to(pathlib.Path(sys.prefix).resolve()):",
+            "        raise RuntimeError('v4 import escaped installed environment')",
+            "fixture, scenario, reference = sys.argv[1:]",
+            "sys.argv = [fixture, '--scenario', scenario]",
+            "namespace = runpy.run_path(fixture, run_name='installed_qualification')",
+            "code = namespace['main']()",
+            "references = namespace['main'].__globals__['QUALIFICATION_REFERENCES']",
+            "descriptor = os.open(reference, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)",
+            "with os.fdopen(descriptor, 'w', encoding='utf-8') as stream:",
+            "    stream.write(json.dumps(references, sort_keys=True, separators=(',', ':')) + '\\n')",
+            "raise SystemExit(code)",
+        )
+    )
+    safe_env = {
+        "HOME": str(scratch),
+        "TMPDIR": str(scratch),
+        "PATH": "/usr/bin:/bin",
+        "LANG": "C.UTF-8",
+        "PYTHONDONTWRITEBYTECODE": "1",
+    }
+    outcomes: dict[str, dict[str, object]] = {}
+    for scenario in (
+        "earlier",
+        "none",
+        "latest",
+        "multiple",
+        "low-equal",
+        "high-equal",
+        "nearest-above",
+        "nearest-below",
+        "event-only",
+        "invalidated",
+        "replay",
+        "unknown",
+        "refresh",
+        "no-trade",
+        "false-claim",
+        "false-session",
+    ):
+        reference = scratch / ("v4-original-references-" + scenario + ".json")
+        observed = _run(
+            [
+                str(python),
+                "-I",
+                "-c",
+                probe,
+                str(ROOT / "examples/causal_setup_inclusion_interpretation_v4_demo.py"),
+                scenario,
+                str(reference),
+            ],
+            cwd=scratch,
+            env=safe_env,
+        )
+        code = (
+            2
+            if scenario in ("false-claim", "false-session")
+            else 1
+            if scenario == "unknown"
+            else 0
+        )
+        if (
+            observed.returncode != code
+            or len(observed.stdout) > 1024 * 1024
+            or b"SYNTHETIC CALLER-AUTHORED" not in observed.stderr
+            or b"not current market data" not in observed.stderr
+            or any(
+                token in observed.stdout
+                for token in (
+                    b'"close"',
+                    b'"open"',
+                    b'"high"',
+                    b'"low"',
+                    b'"price"',
+                    b'"volume"',
+                    b'"bars"',
+                    b'"body"',
+                    b'"api_key"',
+                    str(scratch).encode(),
+                )
+            )
+        ):
+            raise RuntimeError("installed v4 execution failed")
+        if scenario in ("false-claim", "false-session"):
+            if observed.stdout or not observed.stderr.endswith(
+                b"setup_interpretation_failed\n"
+            ):
+                raise RuntimeError("installed v4 false range accepted")
+            outcomes[scenario] = {
+                "exit": 2,
+                "rejected": True,
+                "stdout_sha256": hashlib.sha256(observed.stdout).hexdigest(),
+            }
+            continue
+        try:
+            references = json.loads(reference.read_bytes())
+            value = json.loads(observed.stdout)
+            _check_installed_interpretation_v4(
+                value, observed.stdout, scenario, references
+            )
+        except (OSError, KeyError, TypeError, ValueError) as error:
+            raise RuntimeError("installed v4 result invalid") from error
+        evidence = value["evidence"]
+        outcomes[scenario] = {
+            "exit": code,
+            "statuses": {
+                name: evidence[name]["status"]
+                for name in (
+                    "continuity",
+                    "invalidation",
+                    "age",
+                    "level",
+                    "level_range",
+                    "level_range_inclusion",
+                )
+            },
+            "relation": evidence["level"]["relation"],
+            "range_relation": evidence["level_range"]["range_relation"],
+            "inclusion_observed": evidence["level_range_inclusion"][
+                "inclusion_observed"
+            ],
+            "first_inclusion": evidence["level_range_inclusion"]["first_inclusion"],
+            "legacy_evidence_v3_identity_sha256": evidence[
+                "legacy_evidence_v3_identity_sha256"
+            ],
+            "completed_sessions_elapsed": evidence["age"]["completed_sessions_elapsed"],
+            "disposition": value["external_response"]["disposition"],
+            "result_identity_sha256": value["result_identity_sha256"],
+            "runtime_code_identity_sha256": value["runtime_code_identity_sha256"],
+            "evidence_identity_sha256": evidence["result_identity_sha256"],
+            "legacy_evidence_v2_identity_sha256": evidence[
+                "legacy_evidence_v2_identity_sha256"
+            ],
+            "level_identity_sha256": evidence["level"]["result_identity_sha256"],
+            "range_identity_sha256": evidence["level_range"]["result_identity_sha256"],
+            "original_references_sha256": hashlib.sha256(
+                reference.read_bytes()
+            ).hexdigest(),
+            "stdout_sha256": hashlib.sha256(observed.stdout).hexdigest(),
+            "imports": "Installed SDK and both injected CLIs with -I; original v1/v2/Plan54/Plan56 APIs independently regenerated; all nested canonical bytes exact; no model evaluated",
+        }
+    return outcomes
+
+
 def verify(wheel: Path, receipt: Path | None, prior_commit: str) -> dict[str, object]:
     global _RUNTIME, _PODMAN_ROOTLESS  # noqa: PLW0603 -- fixed for one verifier invocation
     _RUNTIME = select_runtime(allow_job_engine=True)
@@ -3068,6 +3756,9 @@ def verify(wheel: Path, receipt: Path | None, prior_commit: str) -> dict[str, ob
             python, scratch
         )
         range_inclusion = _verify_installed_range_inclusion(python, scratch)
+        inclusion_interpretation_v4 = _verify_installed_inclusion_interpretation_v4(
+            python, scratch
+        )
         config = _run(
             [_engine(), "image", "inspect", image, "--format", "{{json .Config}}"]
         )
@@ -3117,6 +3808,7 @@ def verify(wheel: Path, receipt: Path | None, prior_commit: str) -> dict[str, ob
             "installed_setup_level_interpretation_v2": level_interpretation,
             "installed_setup_range_interpretation_v3": range_interpretation_v3,
             "installed_setup_level_range_inclusion": range_inclusion,
+            "installed_setup_inclusion_interpretation_v4": inclusion_interpretation_v4,
             "mount_checks": "owner mapped, wrong UID, broad mode, read-only, symlink",
             "source_substitution": "rejected",
             "interrupted_build_and_run": "rejected; current image remained available",
