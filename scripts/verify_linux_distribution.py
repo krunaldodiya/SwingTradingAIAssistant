@@ -3628,6 +3628,209 @@ def _verify_installed_inclusion_interpretation_v4(
     return outcomes
 
 
+def _check_installed_first_inclusion_close(
+    value: dict, raw: bytes, scenario: str, references: dict
+) -> None:
+    """Bind every new field to the exact admitted original inclusion chain."""
+    if set(references) != {
+        "range_inclusion",
+        "inclusion_references",
+        "runtime_code_identity_sha256",
+    }:
+        raise ValueError("first inclusion close reference inventory invalid")
+    base_scenario = (
+        "earlier"
+        if scenario
+        in ("first-below", "first-at", "close-nearest-below", "close-nearest-above")
+        else scenario
+    )
+    original = references["range_inclusion"]
+    _check_installed_range_inclusion(
+        original,
+        _interpretation_bytes(original),
+        base_scenario,
+        references["inclusion_references"],
+    )
+    runtime = references["runtime_code_identity_sha256"]
+    if type(runtime) is not str or re.fullmatch(r"[0-9a-f]{64}", runtime) is None:
+        raise ValueError("first inclusion close reference runtime invalid")
+    relation = {
+        "earlier": "ABOVE",
+        "first-below": "BELOW",
+        "first-at": "AT",
+        "close-nearest-below": "BELOW",
+        "close-nearest-above": "ABOVE",
+        "latest": "ABOVE",
+        "multiple": "ABOVE",
+        "low-equal": "ABOVE",
+        "high-equal": "BELOW",
+        "invalidated": "BELOW",
+        "none": None,
+        "nearest-above": None,
+        "nearest-below": None,
+        "event-only": None,
+        "replay": None,
+        "unknown": None,
+        "refresh": None,
+    }[scenario]
+    expected = dict(original)
+    expected.pop("result_identity_sha256")
+    expected.update(
+        contract_version="causal-setup-first-inclusion-close@v1",
+        criterion="EARLIEST_COMPLETED_RANGE_INCLUSION_CLOSE_VS_ORIGINAL_BROKEN_HIGH@v1",
+        runtime_code_identity_sha256=runtime,
+        range_inclusion_identity_sha256=original["result_identity_sha256"],
+        first_close_relation=relation,
+        limitations=[
+            "Exact final close of the earliest range-including completed session in the admitted post-event window only; not first lifetime contact.",
+            "No intrabar ordering, exact traded tick, reclaim, successful retest or confirmation is established.",
+            "ABOVE/AT/BELOW and NO_INCLUSION imply no validity, eligibility, recommendation, effectiveness, expiry or trade authorization; structural invalidation is independent.",
+            "Original unchanged causal high/event and all source rows must remain represented and fully admitted in the finite21-session window; missing evidence is not NO_INCLUSION.",
+            "No tolerance, threshold, history store, persistence, monitoring, new acquisition or external model.",
+        ],
+    )
+    if original["status"] == "OBSERVED":
+        expected.update(
+            status="OBSERVED" if relation is not None else "NO_INCLUSION",
+            reason="FIRST_RANGE_INCLUSION_COMPLETED_CLOSE_COMPARED_WITH_ORIGINAL_BROKEN_HIGH"
+            if relation is not None
+            else "NO_COMPLETED_POST_EVENT_RANGE_INCLUSION_OBSERVED",
+        )
+    expected["result_identity_sha256"] = hashlib.sha256(
+        _interpretation_bytes(expected)
+    ).hexdigest()
+    if (
+        len(raw) > 1024 * 1024
+        or raw != _interpretation_bytes(value)
+        or raw != _interpretation_bytes(expected)
+    ):
+        raise ValueError("first inclusion close exact installed result invalid")
+
+
+def _verify_installed_first_inclusion_close(
+    python: Path, scratch: Path
+) -> dict[str, dict[str, object]]:
+    """Actual -I installed SDK/CLI and original transitive component closure."""
+    probe = "\n".join(
+        (
+            "import json, os, pathlib, runpy, sys",
+            "sys.dont_write_bytecode = True",
+            "from swing_trading_ai_assistant.research_comparison import setup_first_inclusion_close as sdk, setup_first_inclusion_close_cli as cli, setup_level_range as original_range, setup_level as original_level",
+            "for name, module in tuple(sys.modules.items()):",
+            "    if name.startswith('swing_trading_ai_assistant') and getattr(module, '__file__', None):",
+            "        if not pathlib.Path(module.__file__).resolve().is_relative_to(pathlib.Path(sys.prefix).resolve()):",
+            "            raise RuntimeError('inclusion import escaped installed environment')",
+            "fixture, scenario, reference = sys.argv[1:]",
+            "sys.argv = [fixture, '--scenario', scenario]",
+            "namespace = runpy.run_path(fixture, run_name='installed_qualification')",
+            "code = namespace['main']()",
+            "references = namespace['main'].__globals__['QUALIFICATION_REFERENCES']",
+            "descriptor = os.open(reference, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)",
+            "with os.fdopen(descriptor, 'w', encoding='utf-8') as stream:",
+            "    stream.write(json.dumps(references, sort_keys=True, separators=(',', ':')) + '\\n')",
+            "raise SystemExit(code)",
+        )
+    )
+    safe_env = {
+        "HOME": str(scratch),
+        "TMPDIR": str(scratch),
+        "PATH": "/usr/bin:/bin",
+        "LANG": "C.UTF-8",
+        "PYTHONDONTWRITEBYTECODE": "1",
+    }
+    outcomes: dict[str, dict[str, object]] = {}
+    for scenario in (
+        "earlier",
+        "first-below",
+        "first-at",
+        "close-nearest-below",
+        "close-nearest-above",
+        "none",
+        "latest",
+        "multiple",
+        "low-equal",
+        "high-equal",
+        "nearest-above",
+        "nearest-below",
+        "event-only",
+        "invalidated",
+        "replay",
+        "unknown",
+        "refresh",
+    ):
+        reference = scratch / (
+            "first-inclusion-close-original-references-" + scenario + ".json"
+        )
+        observed = _run(
+            [
+                str(python),
+                "-I",
+                "-c",
+                probe,
+                str(ROOT / "examples/causal_setup_first_inclusion_close_demo.py"),
+                scenario,
+                str(reference),
+            ],
+            cwd=scratch,
+            env=safe_env,
+        )
+        code = 1 if scenario == "unknown" else 0
+        if (
+            observed.returncode != code
+            or len(observed.stdout) > 1024 * 1024
+            or b"SYNTHETIC FIRST INCLUSION CLOSE" not in observed.stderr
+            or b"not current market data" not in observed.stderr
+            or any(
+                token in observed.stdout
+                for token in (
+                    b'"close"',
+                    b'"open"',
+                    b'"high"',
+                    b'"low"',
+                    b'"price"',
+                    b'"volume"',
+                    b'"bars"',
+                    b'"body"',
+                    b'"api_key"',
+                    str(scratch).encode(),
+                )
+            )
+        ):
+            raise RuntimeError("installed first inclusion close execution failed")
+        try:
+            references = json.loads(reference.read_bytes())
+            value = json.loads(observed.stdout)
+            _check_installed_first_inclusion_close(
+                value, observed.stdout, scenario, references
+            )
+        except (OSError, KeyError, TypeError, ValueError) as error:
+            raise RuntimeError(
+                "installed first inclusion close result invalid"
+            ) from error
+        outcomes[scenario] = {
+            "exit": code,
+            "status": value["status"],
+            "inclusion_observed": value["inclusion_observed"],
+            "first_close_relation": value["first_close_relation"],
+            "first_inclusion": value["first_inclusion"],
+            "evaluated_post_event_bars": value["evaluated_post_event_bars"],
+            "result_identity_sha256": value["result_identity_sha256"],
+            "runtime_code_identity_sha256": value["runtime_code_identity_sha256"],
+            "range_inclusion_identity_sha256": value["range_inclusion_identity_sha256"],
+            "latest_range_identity_sha256": value["latest_range_identity_sha256"],
+            "level_identity_sha256": value["level_identity_sha256"],
+            "previous_observation_identity_sha256": value[
+                "previous_observation_identity_sha256"
+            ],
+            "current_observation_identity_sha256": value[
+                "current_observation_identity_sha256"
+            ],
+            "stdout_sha256": hashlib.sha256(observed.stdout).hexdigest(),
+            "imports": "-I installed SDK/CLI/transitive runtime under sys.prefix; exact SDK/CLI equality; strict original Plan54/58 nested closure; first completed close only",
+        }
+    return outcomes
+
+
 def verify(wheel: Path, receipt: Path | None, prior_commit: str) -> dict[str, object]:
     global _RUNTIME, _PODMAN_ROOTLESS  # noqa: PLW0603 -- fixed for one verifier invocation
     _RUNTIME = select_runtime(allow_job_engine=True)
@@ -3771,6 +3974,7 @@ def verify(wheel: Path, receipt: Path | None, prior_commit: str) -> dict[str, ob
         inclusion_interpretation_v4 = _verify_installed_inclusion_interpretation_v4(
             python, scratch
         )
+        first_inclusion_close = _verify_installed_first_inclusion_close(python, scratch)
         config = _run(
             [_engine(), "image", "inspect", image, "--format", "{{json .Config}}"]
         )
@@ -3821,6 +4025,7 @@ def verify(wheel: Path, receipt: Path | None, prior_commit: str) -> dict[str, ob
             "installed_setup_range_interpretation_v3": range_interpretation_v3,
             "installed_setup_level_range_inclusion": range_inclusion,
             "installed_setup_inclusion_interpretation_v4": inclusion_interpretation_v4,
+            "installed_setup_first_inclusion_close": first_inclusion_close,
             "mount_checks": "owner mapped, wrong UID, broad mode, read-only, symlink",
             "source_substitution": "rejected",
             "interrupted_build_and_run": "rejected; current image remained available",
