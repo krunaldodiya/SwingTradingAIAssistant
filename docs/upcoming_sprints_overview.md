@@ -1,5 +1,48 @@
 # Upcoming Sprints Overview
 
+## Current priority: first usable stock research release
+
+The [current roadmap](roadmap.md#current-priority-first-usable-stock-research-release)
+owns the finite first-use checklist and dependency order under the October 6
+[accepted owner direction](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/274#issuecomment-6018542831)
+and [Issue #276](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/276).
+The immediate outcome is a qualified working tool for an admitted point-in-time
+Nifty 100 selection or supported explicit stock list: trustworthy research facts,
+explainable externally reasoned signals/suggestions or NO_TRADE, then observation
+and demonstrated improvements.
+
+**Sprint 47 is next:** reconcile delivered contracts and exact evidence against
+the roadmap's eight first-use outcomes, then freeze the smallest missing working
+path. Produce a finite required before use / after first use / needing owner disposition
+gap map and observable acceptance criteria. Further implementation closes those
+gaps rather than automatically extending the descriptive-fact catalogue.
+
+| Order | Sprint outcome to select | Boundary |
+| --- | --- | --- |
+| 1 | First-use gap reconciliation and bounded working-path contract | Reuse proven delivery and name exact remaining gaps; no invented sprint countdown. |
+| 2 | Necessary selection/eligibility, candidate/external-AI and lifecycle gaps | Follow dependency and safety order; no unspecified threshold, source, strategy or persistence approval. |
+| 3 | Practical end-to-end research and explained suggestion workflow | Nifty 100 and explicit lists share admitted contracts; prove success and negative/unknown paths, plus actual workflow/source qualification. |
+| 4 | Qualified first use, observation and applicable effectiveness research | Preserve independent reviews, every applicable gate and claim-specific point-in-time/execution/cost/AI evidence. |
+| Later | Optional facts and risk/capital/read-only portfolio expansion | Separate scoped needs; all five Future issues remain excluded. |
+
+The eight [Plan 47 signal-phase obligations](plans/47-causal-setup-detection.md#signal-phase-completion-baseline-and-ordered-gaps)
+remain distinct and unfinished as a phase. Required evidence is not removed by
+first-use ordering. Completed outcomes must decrease the finite remaining gap
+list; added work must explain its source and reason before estimates change.
+
+Sprint 46 is fully delivered through PR #275 / main
+`c7abb3a3128f15f340e080857bbebafc9a14ba4e`: both reviews, 8400 tests / 87.84%
+branch coverage, exact main/private publication and complete tracker/receipt
+closeout passed. See the [verified delivery record](roadmap.md#latest-verified-delivery-sprint-46)
+for its bounded claim and retained failure/fixture exception. Sprint 47 is a next
+planning priority, not a started or completed implementation sprint.
+
+## Historical delivery context
+
+The dated checkpoints and earlier programmes below retain their original
+planning-time states. The current priority and verified Sprint46 record above
+supersede their then-active sequencing/status wording; live tracking governs.
+
 ## Sprint46 current checkpoint (2026-10-06)
 
 [Issue274](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/274)

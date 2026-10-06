@@ -1,5 +1,111 @@
 # Initial Roadmap
 
+## Current priority: first usable stock research release
+
+Accepted owner direction, October 6, 2026: finish a usable swing-research tool for
+an admitted point-in-time Nifty 100 selection or an explicitly supplied supported
+stock list, then use it, observe its behavior and improve demonstrated gaps.
+[The retained owner decision](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/274#issuecomment-6018542831)
+and [roadmap delivery Issue #276](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/276)
+govern this priority update.
+
+Delivered research facts and causal setup building blocks count as progress.
+Further sprints must close a demonstrated gap in that usable workflow rather
+than automatically add another descriptive fact or interpretation version.
+[Plan 34](plans/34-swing-research-feature-map.md) still requires a concrete unmet
+question and the smallest adequate, non-duplicative slice.
+
+### Finite first-use checklist
+
+Sprint 47 must map each outcome below to delivered contracts, exact evidence and
+remaining gaps. This checklist defines what to reconcile; it does not declare
+these outcomes finished or approve their unspecified implementation details.
+
+1. **Choose stocks:** support the exact point-in-time default Nifty 100 selection
+   and an explicit supported canonical list, preserving order, identity and
+   selection provenance. Respect existing processing bounds; any necessary
+   orchestration must preserve whole-list semantics. Never silently omit stocks
+   or substitute membership for eligibility.
+2. **Produce coherent current research:** reuse admitted completed-session data
+   and necessary Structure, Price Action, Volume and Relative Strength facts,
+   with applicable market/Industry/event context, timing, provenance and explicit
+   unsupported or insufficient outcomes. Optional context remains additive.
+3. **Identify explainable candidates:** reuse causal detection and delivered
+   comparison/continuity/invalidation/age/level facts. Specify only the missing
+   generation, confirmation, validity and correction/duplicate semantics needed
+   by the chosen working path; facts alone do not establish an active signal.
+4. **Meet safety and eligibility requirements:** define the objective versioned
+   capability, history, mapping, data-quality, liquidity/turnover, price-integrity
+   and event-risk evidence required before actionable suggestions. Mandatory
+   failures remain closed. This roadmap invents no threshold or source authority.
+5. **Return understandable AI-assisted output:** the external compatible agent
+   explains versioned tool facts and gives supported suggestions or NO_TRADE.
+   Freeze the required structured response/evidence contract and check unsupported
+   claims. The deterministic core continues to own calculations and validation;
+   it does not become an LLM or make autonomous trading decisions.
+6. **Run a practical end-to-end workflow:** provide a clear entry point and
+   first-use instructions for default selection and explicit lists. Demonstrate
+   actual success, no-match/no-trade and unknown/failure paths within the declared
+   data and acquisition authority; synthetic checks alone do not prove live use.
+7. **Qualify the first usable release:** retain independent exact-current reviews,
+   every applicable safety/test/coverage/build/installed/private-release gate,
+   exact receipts and tracker closeout. Distinguish deterministic correctness,
+   real source/workflow qualification and AI interpretation evidence. First use
+   cannot carry an unqualified performance claim.
+8. **Observe and improve after qualified first use:** establish the smallest
+   authorized observation path for versioned research/AI decisions, opportunity
+   retention, no-trade behavior and later outcomes. Preserve point-in-time
+   knowledge, execution, costs/slippage, out-of-sample and walk-forward rules for
+   the claims they support. Broader accepted historical/AI/effectiveness work
+   remains explicit; operational correctness is not evidence of profitability.
+
+### Priority order and next sprint
+
+**Next: Sprint 47 reconciles this checklist against actual delivered contracts and
+freezes the smallest missing working path with finite acceptance criteria.**
+It must identify what is already proven, what is required before first use, what
+follows first use, and which open obligation needs an owner disposition. It must
+not default to another optional descriptive-fact sprint.
+
+| Priority | Outcome | Dependency and completion rule |
+| --- | --- | --- |
+| 1 | Reconcile the finite first-use checklist and freeze the smallest usable path | Count remaining evidence-backed gaps, not modules or document volume. |
+| 2 | Close required selection/safety, candidate/external-AI and lifecycle gaps | Order by actual dependencies; reuse delivered facts and specify persistence only if the path needs it. |
+| 3 | Connect and qualify the usable Nifty 100 / explicit-list research and suggestion workflow | Complete working success and negative/unknown paths with all applicable current gates. |
+| 4 | Observe use, correct measured gaps and finish applicable research/AI/effectiveness qualification | Keep claim-specific evidence mandatory; observation can add calendar time. |
+| Later | Additional analytical facts and risk/capital/read-only portfolio expansion | Separately scope demonstrated needs; preserve existing accepted capabilities. |
+
+All eight [Plan 47 phase outcomes](plans/47-causal-setup-detection.md#signal-phase-completion-baseline-and-ordered-gaps)
+remain individually tracked. This order neither marks the signal phase complete
+nor silently removes analytical, lifecycle or research obligations. All five
+issues marked Future remain excluded. No new provider, threshold, trading
+strategy, recommendation rule or persistence model is approved by this map.
+
+Remaining-sprint estimates must come from the reconciled finite gap list and
+bounded slice allocation. Completed outcomes reduce that list; additions name
+their source and reason. Earlier broad forecasts are historical assumptions,
+not a current countdown or a reason to keep the same estimate after delivery.
+
+### Latest verified delivery: Sprint 46
+
+[Issue #274](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/274) /
+[Plan 60](plans/60-first-inclusion-close.md) is fully delivered through
+[PR #275](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/275), main
+`c7abb3a3128f15f340e080857bbebafc9a14ba4e`. Both independent current reviews,
+8400 selected tests / 87.84% aggregate branch coverage, installed/native OCI and
+prior-wheel recovery passed. Exact main admission and private publication,
+fresh tag/digest pulls, full retained receipts, all 33 acceptance rows,
+Issue/Project/milestone closeout and ancestry-safe local main agree. The original
+failed run and approved fixture exception remain retained. This completes that
+bounded descriptive fact, not the signal phase or the first usable whole tool.
+
+## Historical delivery context
+
+The dated checkpoints and earlier programmes below preserve their original
+planning-time evidence, including then-active or pending states. The current
+priority and verified delivery above supersede their sequencing/status wording;
+live GitHub tracking and accepted scoped contracts remain authoritative.
+
 ## Sprint46 current checkpoint (2026-10-06)
 
 [Issue274](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/274)
