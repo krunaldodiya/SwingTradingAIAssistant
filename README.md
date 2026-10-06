@@ -143,6 +143,46 @@ context or a local long-window failure makes only its dependent question/fact
 not ready. V2 emits readiness facts, not a recommendation; it preserves the
 invocation selection time separately from later evidence acquisition time.
 
+## Same-observation research and candidate facts (Sprint 48)
+
+[Issue #282](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/282)
+implements [Plan 61 G01](docs/plans/61-first-use-gap-reconciliation.md) through
+the additive public command below. Its delivery gates and release remain pending
+in the live Issue.
+
+```bash
+market-data setup-research-current --symbol PNB --symbol RELIANCE \
+  --storage-root /absolute/private/research-root --output json
+```
+
+Supply 1–10 distinct symbols and an absolute private storage root. For each stock,
+one serial `INTEGRATED_CURRENT_RESEARCH` observation supplies both the unchanged
+compact current-research report under `research` and the existing causal latest
+upward-BOS candidate facts under `members`. The SDK is
+`market_data.agent_setup_research.run_agent_setup_research_current(symbols,
+storage_root, *, research)`; production CLI dispatch uses the existing V2 producer.
+The command adds no refresh, provider, retained context or candidate store.
+
+Candidate rows are MATCH, NO_MATCH or UNKNOWN. Missing candle geometry or
+previous-close comparison does not hide independently admitted Structure facts.
+Exit 0 means all required price/Structure projections are available; exit 1
+returns a complete report with missing facts; exit 2 returns a fixed diagnostic
+and no partial report. An all-NO_MATCH report can exit 0. Detection and availability
+do not assess eligibility, entry confirmation, validity/expiry, persistent
+lifecycle, AI interpretation quality or market effectiveness. Comparability
+retains the existing contracts' separate scopes, with no shared acquisition
+cutoff or inferred list membership.
+
+For a deterministic demonstration without a live source call:
+
+```bash
+python examples/current_setup_research_demo.py --scenario positive
+```
+
+The demonstration explicitly labels its fixed synthetic evidence. It also covers
+negative, insufficient, geometry-missing, comparison-missing, interrupted,
+corrupt and invalid-request scenarios. It cannot qualify actual market use.
+
 ## Current raw price context (Issue #188 delivered)
 
 The additive `current-price-context@v1` command, delivered through PR #197,

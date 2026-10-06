@@ -61,6 +61,7 @@ from .agent_research_run import (
     run_agent_research_current,
     run_agent_swing_research_current,
 )
+from .agent_setup_research import run_agent_setup_research_current
 from .bounded_nifty50_workflow import (
     BoundedNifty50DownloadReportV1,
     BoundedNifty50DownloadRequestV1,
@@ -620,6 +621,18 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="ABSOLUTE_OWNER_PRIVATE_ROOT",
     )
     setup.add_argument("--output", choices=("json",), required=True)
+    setup_research = commands.add_parser(
+        "setup-research-current",
+        help="combine current research and causal candidate facts from the same observation",
+    )
+    setup_research.add_argument("--symbol", action="append", required=True)
+    setup_research.add_argument(
+        "--storage-root",
+        type=Path,
+        required=True,
+        metavar="ABSOLUTE_OWNER_PRIVATE_ROOT",
+    )
+    setup_research.add_argument("--output", choices=("json",), required=True)
     watchlist = commands.add_parser(
         "watchlist-screen-current",
         help="screen an explicit bounded stock list using admitted V2 price facts",
@@ -751,6 +764,8 @@ def main(  # noqa: C901 - command dispatch remains explicit.
             )
         if args.command == "setup-screen-current":
             return _run_setup_screen_command(args, current_stock_research_v2)
+        if args.command == "setup-research-current":
+            return _run_setup_research_command(args, current_stock_research_v2)
         if args.command == "watchlist-screen-current":
             return _run_watchlist_screen_command(args, current_stock_research_v2)
         if args.command == "research-run-current":
@@ -780,6 +795,36 @@ def main(  # noqa: C901 - command dispatch remains explicit.
     except Exception:
         sys.stderr.write("internal_error\n")
         return 2
+
+
+def _run_setup_research_command(
+    args: argparse.Namespace, service: CurrentStockResearchPortV2 | None
+) -> int:
+    try:
+        report = run_agent_setup_research_current(
+            tuple(args.symbol),
+            args.storage_root,
+            research=research_current_stock_v2 if service is None else service,
+        )
+        payload = (
+            json.dumps(report, sort_keys=True, separators=(",", ":")) + "\n"
+        ).encode()
+        members = cast(list[dict[str, object]], report["members"])
+        research = cast(dict[str, object], report["research"])
+        base_members = cast(list[dict[str, object]], research["members"])
+        available = all(row["status"] != "UNKNOWN" for row in members) and all(
+            feature["fact"] is not None
+            for row in base_members
+            for feature in cast(dict[str, dict[str, object]], row["features"]).values()
+        )
+    except CurrentStockResearchInputError:
+        sys.stderr.write("request_invalid\n")
+        return 2
+    except (Exception, KeyboardInterrupt):
+        sys.stderr.write("setup_research_failed\n")
+        return 2
+    sys.stdout.buffer.write(payload)
+    return 0 if available else 1
 
 
 def _run_setup_screen_command(
