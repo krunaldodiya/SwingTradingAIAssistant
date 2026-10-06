@@ -1058,6 +1058,291 @@ def _verify_installed_level_interpretation_v2(
     return outcomes
 
 
+def _check_installed_evidence_v3(
+    value: dict, raw: bytes, scenario: str, references: dict
+) -> None:
+    """Compare all nested bytes with separately regenerated, source-closed APIs."""
+    if set(references) != {
+        "legacy_v1",
+        "legacy_v2",
+        "level",
+        "level_range",
+        "evidence_runtime",
+        "interpretation_runtime",
+    }:
+        raise ValueError("v3 independent references invalid")
+    legacy, original, level, level_range = (
+        references[name] for name in ("legacy_v2", "legacy_v1", "level", "level_range")
+    )
+    level_scenario = {
+        "contains": "above",
+        "low-equal": "above",
+        "high-equal": "below",
+        "invalidated": "below",
+        "no-trade": "above",
+    }.get(scenario, scenario)
+    range_scenario = {"invalidated": "below", "no-trade": "contains"}.get(
+        scenario, scenario
+    )
+    old_scenario = (
+        scenario if scenario in ("invalidated", "replay", "unknown") else "same-event"
+    )
+    _check_installed_level(level, _interpretation_bytes(level), level_scenario)
+    _check_installed_level_range(
+        level_range, _interpretation_bytes(level_range), range_scenario
+    )
+    _check_installed_evidence_v2(
+        legacy,
+        _interpretation_bytes(legacy),
+        "invalidated" if scenario == "invalidated" else level_scenario,
+    )
+    _check_installed_evidence(original, _interpretation_bytes(original), old_scenario)
+    # Preserve original Plan54 AND Plan56 references, not a resealed candidate projection.
+    if (
+        _interpretation_bytes(legacy["level"]) != _interpretation_bytes(level)
+        or legacy["legacy_evidence_identity_sha256"]
+        != original["result_identity_sha256"]
+        or any(
+            _interpretation_bytes(legacy[name]) != _interpretation_bytes(original[name])
+            for name in ("continuity", "invalidation", "age")
+        )
+        or level_range["level_identity_sha256"] != level["result_identity_sha256"]
+        or any(
+            level_range[key] != level[key]
+            for key in (
+                "previous",
+                "current",
+                "previous_observation_identity_sha256",
+                "current_observation_identity_sha256",
+                "continuity_identity_sha256",
+                "continuity_status",
+                "status",
+                "witness",
+            )
+        )
+    ):
+        raise ValueError("v3 independent upstream reference invalid")
+    for name in ("continuity", "invalidation", "age", "level"):
+        for side in ("previous", "current"):
+            _check_level_range_row(legacy[name][side], side, range_scenario)
+    expected = dict(legacy)
+    expected.pop("result_identity_sha256")
+    expected.update(
+        contract_version="causal-setup-evidence@v3",
+        legacy_evidence_v2_identity_sha256=legacy["result_identity_sha256"],
+        level_range=level_range,
+        runtime_code_identity_sha256=references["evidence_runtime"],
+        limitations=[
+            *legacy["limitations"],
+            "Inclusive latest low/high containment is descriptive; it proves no exact traded tick, successful retest, confirmation, validity or eligibility.",
+        ],
+    )
+    expected["result_identity_sha256"] = hashlib.sha256(
+        _interpretation_bytes(expected)
+    ).hexdigest()
+    if raw != _interpretation_bytes(value) or raw != _interpretation_bytes(expected):
+        raise ValueError("v3 exact nested evidence invalid")
+
+
+def _check_installed_interpretation_v3(
+    value: dict, raw: bytes, scenario: str, references: dict
+) -> None:
+    """Falsify a resealed mutation at any nested depth without trusting its seal."""
+    evidence = value["evidence"]
+    _check_installed_evidence_v3(
+        evidence, _interpretation_bytes(evidence), scenario, references
+    )
+    facts = {
+        name: {
+            key: evidence[name][key]
+            for key in (
+                "result_identity_sha256",
+                "status",
+                *(
+                    ("completed_sessions_elapsed",)
+                    if name == "age"
+                    else ("relation",)
+                    if name == "level"
+                    else ("range_relation",)
+                    if name == "level_range"
+                    else ()
+                ),
+            )
+        }
+        for name in ("continuity", "invalidation", "age", "level", "level_range")
+    }
+    response = {
+        "schema": "external-setup-interpretation-request@v3",
+        "evidence_identity_sha256": evidence["result_identity_sha256"],
+        "disposition": "NO_TRADE" if scenario == "no-trade" else "RESEARCH_ONLY",
+        "explanation": "Caller-authored synthetic research posture; facts unchanged, narrative accuracy and eligibility unassessed.",
+        "facts": facts,
+    }
+    expected = {
+        "contract_version": "external-setup-interpretation-check@v3",
+        "evidence": evidence,
+        "external_response": response,
+        "external_response_identity_sha256": hashlib.sha256(
+            _interpretation_bytes(response)
+        ).hexdigest(),
+        "runtime_code_identity_sha256": references["interpretation_runtime"],
+        "verification": "STRUCTURED_BINDING_ONLY",
+        "explanation_accuracy": "NOT_ASSESSED",
+        "external_authorship": "CALLER_SUPPLIED_NOT_AUTHENTICATED",
+        "actionable_recommendation": "NOT_ASSESSED",
+        "eligibility": "NOT_ASSESSED",
+        "effectiveness": "NOT_ASSESSED",
+        "limitations": [
+            "Only structured claims and exact admitted evidence references are checked; success grants no trade authorization.",
+            "Explanation is untrusted caller text; its truth, usefulness and external model authorship are not verified.",
+            "Caller research-only/no-trade posture is preserved without a tool recommendation, eligibility, effectiveness or expiry policy.",
+            "Continuity, invalidation, age, close and range remain independent; range inclusion proves no exact traded tick, successful retest or confirmation; age or ABOVE cannot override contradiction/missing evidence and BELOW does not establish structural invalidation.",
+        ],
+    }
+    expected["result_identity_sha256"] = hashlib.sha256(
+        _interpretation_bytes(expected)
+    ).hexdigest()
+    if (
+        len(raw) > 1024 * 1024
+        or raw != _interpretation_bytes(value)
+        or raw != _interpretation_bytes(expected)
+    ):
+        raise ValueError("v3 exact interpretation invalid")
+
+
+def _verify_installed_range_interpretation_v3(
+    python: Path, scratch: Path
+) -> dict[str, dict[str, object]]:
+    """Actual isolated installed execution with independent original component receipts."""
+    probe = "\n".join(
+        (
+            "import json, os, pathlib, runpy, sys",
+            "sys.dont_write_bytecode = True",
+            "from swing_trading_ai_assistant.research_comparison import setup_interpretation_v3 as sdk, setup_interpretation_v3_cli as cli, setup_evidence_v3 as bundle, setup_evidence_v3_cli as bundle_cli, setup_evidence_v2 as old, setup_evidence as v1, setup_level as level, setup_level_range as level_range",
+            "for module in (sdk, cli, bundle, bundle_cli, old, v1, level, level_range):",
+            "    if not pathlib.Path(module.__file__).resolve().is_relative_to(pathlib.Path(sys.prefix).resolve()):",
+            "        raise RuntimeError('v3 import escaped installed environment')",
+            "fixture, scenario, reference = sys.argv[1:]",
+            "sys.argv = [fixture, '--scenario', scenario]",
+            "namespace = runpy.run_path(fixture, run_name='installed_qualification')",
+            "code = namespace['main']()",
+            "references = namespace['main'].__globals__['QUALIFICATION_REFERENCES']",
+            "descriptor = os.open(reference, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)",
+            "with os.fdopen(descriptor, 'w', encoding='utf-8') as stream:",
+            "    stream.write(json.dumps(references, sort_keys=True, separators=(',', ':')) + '\\n')",
+            "raise SystemExit(code)",
+        )
+    )
+    safe_env = {
+        "HOME": str(scratch),
+        "TMPDIR": str(scratch),
+        "PATH": "/usr/bin:/bin",
+        "LANG": "C.UTF-8",
+        "PYTHONDONTWRITEBYTECODE": "1",
+    }
+    outcomes: dict[str, dict[str, object]] = {}
+    for scenario in (
+        "contains",
+        "above",
+        "below",
+        "low-equal",
+        "high-equal",
+        "invalidated",
+        "replay",
+        "unknown",
+        "no-trade",
+        "false-claim",
+    ):
+        reference = scratch / ("v3-original-references-" + scenario + ".json")
+        observed = _run(
+            [
+                str(python),
+                "-I",
+                "-c",
+                probe,
+                str(ROOT / "examples/causal_setup_range_interpretation_v3_demo.py"),
+                scenario,
+                str(reference),
+            ],
+            cwd=scratch,
+            env=safe_env,
+        )
+        code = 2 if scenario == "false-claim" else 1 if scenario == "unknown" else 0
+        if (
+            observed.returncode != code
+            or len(observed.stdout) > 1024 * 1024
+            or b"SYNTHETIC CALLER-AUTHORED" not in observed.stderr
+            or b"not current market data" not in observed.stderr
+            or any(
+                token in observed.stdout
+                for token in (
+                    b'"close"',
+                    b'"open"',
+                    b'"high"',
+                    b'"low"',
+                    b'"price"',
+                    b'"volume"',
+                    b'"bars"',
+                    b'"body"',
+                    b'"api_key"',
+                    str(scratch).encode(),
+                )
+            )
+        ):
+            raise RuntimeError("installed v3 execution failed")
+        if scenario == "false-claim":
+            if observed.stdout or not observed.stderr.endswith(
+                b"setup_interpretation_failed\n"
+            ):
+                raise RuntimeError("installed v3 false range accepted")
+            outcomes[scenario] = {
+                "exit": 2,
+                "rejected": True,
+                "stdout_sha256": hashlib.sha256(observed.stdout).hexdigest(),
+            }
+            continue
+        try:
+            references = json.loads(reference.read_bytes())
+            value = json.loads(observed.stdout)
+            _check_installed_interpretation_v3(
+                value, observed.stdout, scenario, references
+            )
+        except (OSError, KeyError, TypeError, ValueError) as error:
+            raise RuntimeError("installed v3 result invalid") from error
+        evidence = value["evidence"]
+        outcomes[scenario] = {
+            "exit": code,
+            "statuses": {
+                name: evidence[name]["status"]
+                for name in (
+                    "continuity",
+                    "invalidation",
+                    "age",
+                    "level",
+                    "level_range",
+                )
+            },
+            "relation": evidence["level"]["relation"],
+            "range_relation": evidence["level_range"]["range_relation"],
+            "completed_sessions_elapsed": evidence["age"]["completed_sessions_elapsed"],
+            "disposition": value["external_response"]["disposition"],
+            "result_identity_sha256": value["result_identity_sha256"],
+            "runtime_code_identity_sha256": value["runtime_code_identity_sha256"],
+            "evidence_identity_sha256": evidence["result_identity_sha256"],
+            "legacy_evidence_v2_identity_sha256": evidence[
+                "legacy_evidence_v2_identity_sha256"
+            ],
+            "level_identity_sha256": evidence["level"]["result_identity_sha256"],
+            "range_identity_sha256": evidence["level_range"]["result_identity_sha256"],
+            "original_references_sha256": hashlib.sha256(
+                reference.read_bytes()
+            ).hexdigest(),
+            "stdout_sha256": hashlib.sha256(observed.stdout).hexdigest(),
+            "imports": "Installed SDK and both injected CLIs with -I; original v1/v2/Plan54/Plan56 APIs independently regenerated; all nested canonical bytes exact; no model evaluated",
+        }
+    return outcomes
+
+
 def _interpretation_bytes(value: dict) -> bytes:
     return (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
 
@@ -2284,6 +2569,9 @@ def verify(wheel: Path, receipt: Path | None, prior_commit: str) -> dict[str, ob
             python, scratch
         )
         level_range = _verify_installed_level_range(python, scratch)
+        range_interpretation_v3 = _verify_installed_range_interpretation_v3(
+            python, scratch
+        )
         config = _run(
             [_engine(), "image", "inspect", image, "--format", "{{json .Config}}"]
         )
@@ -2331,6 +2619,7 @@ def verify(wheel: Path, receipt: Path | None, prior_commit: str) -> dict[str, ob
             "installed_setup_level": level,
             "installed_setup_level_range": level_range,
             "installed_setup_level_interpretation_v2": level_interpretation,
+            "installed_setup_range_interpretation_v3": range_interpretation_v3,
             "mount_checks": "owner mapped, wrong UID, broad mode, read-only, symlink",
             "source_substitution": "rejected",
             "interrupted_build_and_run": "rejected; current image remained available",
