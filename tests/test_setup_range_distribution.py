@@ -2,13 +2,10 @@
 
 from __future__ import annotations
 
-import copy
 import hashlib
-import importlib.util
-import io
 import json
+import subprocess
 import sys
-from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
 import pytest
@@ -19,41 +16,51 @@ ROOT = Path(__file__).resolve().parents[1]
 
 @pytest.fixture(scope="module")
 def actual_reports():
-    spec = importlib.util.spec_from_file_location(
-        "range_interpretation_demo",
-        ROOT / "examples/causal_setup_range_interpretation_v3_demo.py",
+    # Keep the original demonstration's irreversible audit guard in its own
+    # process so later archive fixtures retain their legitimate filesystem access.
+    program = """
+import copy, importlib.util, io, json, sys
+from contextlib import redirect_stderr, redirect_stdout
+from pathlib import Path
+root = Path(sys.argv[1])
+sys.path.insert(0, str(root / "src"))
+spec = importlib.util.spec_from_file_location(
+    "range_interpretation_demo",
+    root / "examples/causal_setup_range_interpretation_v3_demo.py",
+)
+assert spec is not None and spec.loader is not None
+demo = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(demo)
+result = {}
+for scenario in (
+    "contains", "above", "below", "low-equal", "high-equal",
+    "invalidated", "replay", "unknown", "no-trade", "false-claim",
+):
+    stream = io.BytesIO()
+    output, errors = io.TextIOWrapper(stream, encoding="utf-8"), io.StringIO()
+    sys.argv = [str(spec.origin), "--scenario", scenario]
+    with redirect_stdout(output), redirect_stderr(errors):
+        code = demo.main()
+    output.flush()
+    result[scenario] = [
+        code, stream.getvalue().hex(), errors.getvalue(),
+        copy.deepcopy(demo.QUALIFICATION_REFERENCES),
+    ]
+sys.stdout.write(json.dumps(result))
+"""
+    completed = subprocess.run(  # noqa: S603 - fixed guarded project producer
+        [sys.executable, "-c", program, str(ROOT)],
+        cwd=ROOT,
+        capture_output=True,
+        check=True,
+        timeout=180,
     )
-    assert spec is not None and spec.loader is not None
-    demo = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(demo)
-    result = {}
-    for scenario in (
-        "contains",
-        "above",
-        "below",
-        "low-equal",
-        "high-equal",
-        "invalidated",
-        "replay",
-        "unknown",
-        "no-trade",
-        "false-claim",
-    ):
-        stream = io.BytesIO()
-        output, errors = io.TextIOWrapper(stream, encoding="utf-8"), io.StringIO()
-        with pytest.MonkeyPatch.context() as patch:
-            patch.setattr(sys, "argv", [str(spec.origin), "--scenario", scenario])
-            with redirect_stdout(output), redirect_stderr(errors):
-                code = demo.main()
-        output.flush()
-        raw = stream.getvalue()
-        result[scenario] = (
-            code,
-            raw,
-            errors.getvalue(),
-            copy.deepcopy(demo.QUALIFICATION_REFERENCES),
-        )
-    return result
+    return {
+        scenario: (code, bytes.fromhex(raw), errors, references)
+        for scenario, (code, raw, errors, references) in json.loads(
+            completed.stdout
+        ).items()
+    }
 
 
 @pytest.mark.parametrize(
