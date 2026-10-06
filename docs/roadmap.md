@@ -1,5 +1,18 @@
 # Initial Roadmap
 
+## Sprint45 current checkpoint (2026-10-06)
+
+[Issue272](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/272)
+tracks accepted [Plan59](plans/59-inclusion-aware-setup-interpretation.md): one
+coherent six-fact same-pair packet and checked external inclusion/earliest-session
+claims. The working path passes; complete matrix, independent review and hosted
+release remain pending. Goal active. Live tracking governs this checkpoint.
+Sprint44 is delivered at main `5a7c265c4d1d518b387537cdfa61f60f303d5a46`.
+All eight Plan47 outcomes remain distinct; signal-phase and product qualification
+are incomplete. No expiry, eligibility, confirmation, new source/model, Future
+issue or money/risk/capital scope is admitted by this sprint.
+
+
 ## Sprint 44 — earliest completed range inclusion, October 6, 2026
 
 [Sprint44](sprints/sprint-44.md), [Issue270](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/270)
