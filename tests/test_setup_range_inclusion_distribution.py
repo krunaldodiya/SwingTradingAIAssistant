@@ -4,12 +4,9 @@ from __future__ import annotations
 
 import copy
 import hashlib
-import importlib.util
-import io
 import json
 import subprocess
 import sys
-from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
 import pytest
@@ -20,31 +17,48 @@ ROOT = Path(__file__).resolve().parents[1]
 
 @pytest.fixture(scope="module")
 def actual_reports():
-    spec = importlib.util.spec_from_file_location(
-        "inclusion_demo", ROOT / "examples/causal_setup_level_range_inclusion_demo.py"
+    # Older source-mode demonstrations share mutable clocks and import-time
+    # constants. Run this real producer in its own process, as installed probes
+    # do, preserving its original bytes and independently regenerated references.
+    program = """
+import copy, importlib.util, io, json, sys
+from contextlib import redirect_stderr, redirect_stdout
+from pathlib import Path
+root = Path(sys.argv[1])
+sys.path.insert(0, str(root / "src"))
+spec = importlib.util.spec_from_file_location(
+    "inclusion_demo", root / "examples/causal_setup_level_range_inclusion_demo.py"
+)
+assert spec is not None and spec.loader is not None
+demo = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(demo)
+result = {}
+for scenario in demo.SCENARIOS:
+    output, errors = demo._Output(), io.StringIO()
+    sys.argv = ["demo", "--scenario", scenario]
+    with redirect_stdout(output), redirect_stderr(errors):
+        code = demo.main()
+    result[scenario] = {
+        "raw": output.buffer.getvalue().hex(),
+        "references": copy.deepcopy(demo.QUALIFICATION_REFERENCES),
+        "code": code,
+        "errors": errors.getvalue(),
+    }
+sys.stdout.write(json.dumps(result))
+"""
+    completed = subprocess.run(  # noqa: S603 - fixed project producer and bounded scenarios
+        [sys.executable, "-c", program, str(ROOT)],
+        cwd=ROOT,
+        capture_output=True,
+        check=True,
+        timeout=180,
     )
-    assert spec is not None and spec.loader is not None
-    demo = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(demo)
     result = {}
-    original_argv = sys.argv
-    try:
-        for scenario in demo.SCENARIOS:
-            output, errors = demo._Output(), io.StringIO()
-            sys.argv = ["demo", "--scenario", scenario]
-            with redirect_stdout(output), redirect_stderr(errors):
-                code = demo.main()
-            raw = output.buffer.getvalue()
-            result[scenario] = (
-                json.loads(raw),
-                raw,
-                copy.deepcopy(demo.QUALIFICATION_REFERENCES),
-                code,
-            )
-            assert code == (1 if scenario == "unknown" else 0)
-            assert "not current market data" in errors.getvalue()
-    finally:
-        sys.argv = original_argv
+    for scenario, report in json.loads(completed.stdout).items():
+        raw = bytes.fromhex(report["raw"])
+        result[scenario] = (json.loads(raw), raw, report["references"], report["code"])
+        assert report["code"] == (1 if scenario == "unknown" else 0)
+        assert "not current market data" in report["errors"]
     return result
 
 

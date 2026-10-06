@@ -215,27 +215,28 @@ def _observation(
     structure_pattern: str | None = None,
 ) -> CurrentStockResearchResultV2:
     root.mkdir(mode=0o700, exist_ok=True)
-    demo.NOW = instant
-    sources = (
-        demo.SyntheticOfficialSources("complete")
-        if symbol == "PNB"
-        else _AlternateStockSources("complete")
-    )
-    return research_current_stock_v2(
-        symbol,
-        root,
-        question=cast(object, question),  # type: ignore[arg-type]
-        refresh=False,
-        clock=demo.SyntheticClock(),
-        calendar_transport=sources,
-        snapshot_transport=sources,
-        price_client=cast(
-            BharatStockClient,
-            _StructurePrices(structure_pattern)
-            if structure_pattern is not None
-            else _Prices(close, one_session=one_session),
-        ),
-    )
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(demo, "NOW", instant)
+        sources = (
+            demo.SyntheticOfficialSources("complete")
+            if symbol == "PNB"
+            else _AlternateStockSources("complete")
+        )
+        return research_current_stock_v2(
+            symbol,
+            root,
+            question=cast(object, question),  # type: ignore[arg-type]
+            refresh=False,
+            clock=demo.SyntheticClock(),
+            calendar_transport=sources,
+            snapshot_transport=sources,
+            price_client=cast(
+                BharatStockClient,
+                _StructurePrices(structure_pattern)
+                if structure_pattern is not None
+                else _Prices(close, one_session=one_session),
+            ),
+        )
 
 
 def _with_admitted_adjusted_basis(
@@ -1266,3 +1267,22 @@ def test_interrupted_first_observation_prevents_second_and_returns_typed_result(
     )
     assert captured.err == "observation_interrupted\n"
     assert tuple(tmp_path.iterdir()) == ()
+
+
+@pytest.mark.parametrize("interrupted", [False, True])
+def test_observation_restores_shared_demo_clock(tmp_path, monkeypatch, interrupted):
+    original = demo.NOW
+    requested = original + timedelta(minutes=1)
+    if interrupted:
+
+        def fail(*args, **kwargs):
+            assert requested == demo.NOW
+            raise InterruptedError("synthetic observation interrupted")
+
+        monkeypatch.setitem(globals(), "research_current_stock_v2", fail)
+        with pytest.raises(InterruptedError, match="synthetic observation interrupted"):
+            _observation(tmp_path / "interrupted", requested)
+    else:
+        result = _observation(tmp_path / "complete", requested)
+        assert result.data_selection_time == requested
+    assert original == demo.NOW

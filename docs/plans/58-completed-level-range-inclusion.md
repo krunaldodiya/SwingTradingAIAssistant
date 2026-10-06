@@ -117,3 +117,59 @@ new source/model/provider/strategy, Future issues, effectiveness, broker and
 money/risk/capital/position expansion. Windows/private_source historical cases
 and local CI retirement remain separately governed. No countdown or phase
 completion claim follows from this bounded range fact.
+
+
+## Accepted compatibility recovery — October 6, 2026
+
+Owner Krunal Dodiya explicitly approved the prepared recovery and one additional
+full CI run in this sprint's conversation: “Approve repair and one additional
+run.” Approved patch SHA256:
+`ae819b096333c30b59d7bf2bbcd702459a354c6320a73576bbb06e2f5d4f766a`.
+
+The initial actual hosted run37420163533/attempt1 completed all7774 selected
+tests:7765passed,9older v3 qualification cases failed, branchcoverage87.79%.
+Static checks passed; distribution/admission/release did not run. Complete
+failed logs and diagnosis are retained in sprint44-evidence. A deterministic
+sequence reproduces all9 failures without the new sprint's tests: the older
+`_observation` helper leaves its shared synthetic clock advanced, and a later
+example import captures that value as its fixed baseline. Two cleanup
+regressions fail before correction; external focused intervention passes200
+cases. These are diagnosis/prototype receipts, not full acceptance.
+
+This accepted correction supersedes only R11/A6/M11's prior-byte preservation
+for `tests/market_data/test_current_stock_observation_comparison.py`: execute
+the existing real producer in `pytest.MonkeyPatch.context` so the shared clock
+is restored on success and exception, and add exactly two cleanup regression
+cases. All existing assertions and the other33 existing definitions remain
+unchanged; all7774 existing tests, nine installed maps, product/runtime source,
+manifests, schemas, workflows, dependencies and prior receipts/checkouts are
+preserved. The complete projected selection is7776 with those two new cases.
+No research calculation, trading policy, provider or gate is changed.
+
+The initially consumed qualification allowance is extended by exactly one new
+full hosted qualification for the stable correction, only after both fresh
+independent exact-current reviews and all required fresh whole-account
+zero-spend/capacity checks. The90-minute limit, >=87% aggregate branchcoverage,
+all release gates, >=300-minute included reserve, Actions AND Packages$0
+StopusageYes and no-active/no-error inventory remain required. No automatic
+subsequent rerun, cap increase or paid/settings/self-hosted workaround is
+authorized. All original R1–R13/A1–A8/M1–M12 remain acceptance obligations with
+this precise preservation exception; earlier reviews/failed CI cannot approve
+a later revision. Standing normal gated merge/main/private publication and
+full tracker/localmain closeout authority is unchanged.
+
+
+The bounded reverse-order challenge also exposed R10/R11/M11 source-fixture
+isolation dependence: older v3 demo first, then new inclusion qualification,
+fails the new fixed-row check (1failed/1passed,63.16s). Within the already owned
+new test file, run all13 actual producer scenarios in one fresh subprocess,
+preserving original raw bytes and separate independently regenerated reference
+snapshots. This removes import-time clock and audit-hook sharing with older
+tests. The actual example, SDK/CLI/manifests, installed verifier, all147 existing
+qualification cases and assertions remain unchanged; this adds no new cases or
+provider/storage/policy surface. The only added cases remain the owner's two
+approved helper cleanup regressions, so full selection is7776 (source collection
+verified;4private_source cases remain deselected under the unchanged gate).
+The reverse-order failure and first mutable-reference aliasing feedback remain
+retained; neither is acceptance. Fresh exact-current focused feedback/reviews
+and the owner's one further hosted run remain necessary.

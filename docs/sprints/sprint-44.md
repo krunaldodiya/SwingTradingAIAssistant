@@ -1,6 +1,7 @@
 # Sprint 44: completed range inclusion
 
-Status: specification frozen; implementation and all delivery gates pending.
+Initial freeze checkpoint: specification accepted; implementation and delivery
+gates were pending. Live Issue270/Project/milestone own current status.
 Owner: Krunal Dodiya. Risk R3. [Plan58](../plans/58-completed-level-range-inclusion.md)
 governs the original13 requirements,8 acceptance criteria and12 matrix rows.
 Governing [Issue270](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/270),
@@ -28,3 +29,19 @@ from latest-only behavior; minimal usable SDK/CLI, then complete full13/8/12
 matrix/static/demo/installed qualifier, stable reviews, one included-capacity
 hosted qualification, normal gated full release/tracker/localmain closeout.
 No current trading-policy or overall product completion claim.
+
+
+October6 recovery checkpoint: the initial full hosted run37420163533/attempt1
+failed9older v3 compatibility cases after running all7774 tests;7765passed,
+branchcoverage87.79%. Complete failed archive and deterministic shared-clock
+diagnosis are retained. Owner approved the exact one-helper cleanup patch and
+two regression cases plus one additional full run after both fresh reviews
+and required zero-spend checks; see Plan58's accepted recovery addendum.
+PR271 is draft; implementation correction, reviews and hosted acceptance are
+in progress. No distribution/admission/merge/release/phase completion claim.
+
+The reverse demo order revealed a second shared-state fixture dependency. The
+new13-scenario producer fixture now runs in one fresh process and snapshots
+original references per scenario; all existing147 cases/assertions remain.
+This is a bounded correction within R10/R11/M11, not a research-logic change.
+Source collection verifies7776selected plus4private_source deselected.
