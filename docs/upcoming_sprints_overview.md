@@ -1,5 +1,25 @@
 # Upcoming Sprints Overview
 
+## Sprint 44 — earliest completed range inclusion, October 6, 2026
+
+[Sprint44](sprints/sprint-44.md), [Issue270](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/270)
+and [Plan58](plans/58-completed-level-range-inclusion.md) govern one optional
+bounded descriptive fact: earliest completed post-event range including the
+original broken high within the current admitted21-session window. There is no
+successful-retest, exact-tick, eligibility, expiry or recommendation policy.
+This is a pre-delivery checkpoint; live Issue270 owns reviews/full gates/merge/
+main/private publication/tracker/Goal closeout. Preserve historical checkpoints.
+
+Sprint43 is verified complete through PR269/main
+`c21ad5c6b4253abc59e3a977f1d06b844fd4be7d`, tree
+`415c161a52013c591fc22974b0f95bada19a0fd5`, quality37411919905,
+main admission37415365320 and private publication37415383219. Actual7530 tests/
+87.78% aggregate branchcoverage, both independent exact reviews, private digest
+fresh pulls/logout and full retained receipts passed; Issue268/privateProjectDone/
+milestone35closed and localmain agree. Sprint44 preserves all nine prior
+installed maps and the exact90-minute compact hosted workflow. Overall signal
+phase and product qualification remain incomplete.
+
 ## Sprint 43 — coherent range-aware interpretation, October 6, 2026
 
 [Sprint43](sprints/sprint-43.md), [Issue268](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/268)

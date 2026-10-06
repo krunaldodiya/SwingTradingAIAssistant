@@ -2433,6 +2433,501 @@ def _verify_rollback(prior_commit: str, uv: str, scratch: Path) -> tuple[str, st
     return _sha256(prior_wheels[0]), _sha256(prior_requirements)
 
 
+def _check_inclusion_reference_row(row: object, side: str, scenario: str) -> None:
+    """Close the redacted row for these fixed synthetic installed scenarios."""
+    unknown = side == "current" and scenario == "unknown"
+    later = side == "current" and scenario not in ("replay", "unknown", "refresh")
+    status = "UNKNOWN" if unknown else "NO_MATCH" if later else "MATCH"
+    instant = (
+        "2026-08-26T04:16:00.000000Z"
+        if unknown or side == "current" and scenario == "refresh"
+        else "2026-08-28T04:15:00.000000Z"
+        if later
+        else "2026-08-26T04:15:00.000000Z"
+    )
+    scalars = {
+        "requested_symbol": "PNB",
+        "status": status,
+        "reason": "INSUFFICIENT_STRUCTURE"
+        if unknown
+        else "OBSERVED_COMPARABLE_STRUCTURE",
+        "research_status": "READY",
+        "research_stage": "complete",
+        "data_selection_time": instant,
+        "research_evidence_known_at": instant,
+        "feature_known_at": instant,
+        "session": "2026-08-27" if later else "2026-08-25",
+        "price_basis": "BHARATSTOCK_SOURCE_REPORTED_OHLC",
+        "feature_availability": "OBSERVED",
+        "feature_support": "SUPPORTED",
+        "feature_comparability": "SUPPORTED",
+        "source_profile": "BHARATSTOCK_CAPTURE_FORWARD_DAILY_V3",
+        "structure_state": "INSUFFICIENT_STRUCTURE" if unknown else "CONFIRMED",
+    }
+    digest_fields = {
+        "research_runtime_code_identity_sha256",
+        "research_result_identity_sha256",
+        "feature_source_identity_sha256",
+        "capture_revision_identity_sha256",
+        "schedule_identity_sha256",
+    }
+    if (
+        type(row) is not dict
+        or set(row)
+        != set(scalars)
+        | digest_fields
+        | {"canonical_stock", "candidate", "candidate_identity_sha256"}
+        or any(
+            type(row[key]) is not str or row[key] != expected
+            for key, expected in scalars.items()
+        )
+    ):
+        raise ValueError("level range redacted row invalid")
+    stock = row["canonical_stock"]
+    if (
+        type(stock) is not dict
+        or set(stock)
+        != {"isin", "exchange", "effective_symbol", "mapping_identity_sha256"}
+        or (stock["isin"], stock["exchange"], stock["effective_symbol"])
+        != ("INE160A01022", "NSE", "PNB")
+    ):
+        raise ValueError("level range stock invalid")
+    digests = [row[key] for key in digest_fields] + [stock["mapping_identity_sha256"]]
+    candidate = row["candidate"]
+    if status == "MATCH":
+        candidate_scalars = {
+            "event": "BOS",
+            "direction": "UP",
+            "prior_trend": "UPTREND",
+            "event_session": "2026-08-25",
+            "pivot_session": "2026-08-19",
+            "pivot_confirmation_session": "2026-08-21",
+        }
+        if (
+            type(candidate) is not dict
+            or set(candidate)
+            != set(candidate_scalars)
+            | {"event_identity_sha256", "pivot_identity_sha256"}
+            or any(
+                type(candidate[key]) is not str or candidate[key] != expected
+                for key, expected in candidate_scalars.items()
+            )
+        ):
+            raise ValueError("level range candidate invalid")
+        digests += [
+            candidate["event_identity_sha256"],
+            candidate["pivot_identity_sha256"],
+            row["candidate_identity_sha256"],
+        ]
+        bound = {
+            key: row[key]
+            for key in (
+                "canonical_stock",
+                "price_basis",
+                "source_profile",
+                "capture_revision_identity_sha256",
+                "feature_source_identity_sha256",
+                "candidate",
+            )
+        }
+        bound["criterion"] = "LATEST_COMPLETED_UPWARD_BOS@v1"
+        if (
+            row["candidate_identity_sha256"]
+            != hashlib.sha256(_interpretation_bytes(bound)).hexdigest()
+        ):
+            raise ValueError("level range candidate binding invalid")
+    elif candidate is not None or row["candidate_identity_sha256"] is not None:
+        raise ValueError("level range invented candidate")
+    if any(
+        type(d) is not str or re.fullmatch(r"[0-9a-f]{64}", d) is None for d in digests
+    ):
+        raise ValueError("level range row identity invalid")
+
+
+def _check_inclusion_latest_reference(value: dict, raw: bytes, scenario: str) -> None:
+    observed = scenario not in ("replay", "unknown", "refresh")
+    status = (
+        "OBSERVED"
+        if observed
+        else "NO_LATER_SESSION"
+        if scenario == "refresh"
+        else scenario.upper()
+    )
+    reason = (
+        "LATEST_COMPLETED_RANGE_COMPARED_WITH_ORIGINAL_BROKEN_HIGH"
+        if observed
+        else "IDENTICAL_ADMITTED_OBSERVATION"
+        if scenario == "replay"
+        else "NO_COMPLETED_SESSION_AFTER_ORIGINAL_EVENT"
+        if scenario == "refresh"
+        else "CURRENT_STRUCTURE_UNKNOWN"
+    )
+    if (
+        set(value)
+        != {
+            "contract_version",
+            "criterion",
+            "runtime_code_identity_sha256",
+            "previous_observation_identity_sha256",
+            "current_observation_identity_sha256",
+            "level_identity_sha256",
+            "continuity_identity_sha256",
+            "continuity_status",
+            "previous",
+            "current",
+            "status",
+            "reason",
+            "range_relation",
+            "witness",
+            "limitations",
+            "result_identity_sha256",
+        }
+        or value["contract_version"] != "causal-setup-level-range@v1"
+        or value["criterion"] != "LATEST_COMPLETED_RANGE_VS_ORIGINAL_BROKEN_HIGH@v1"
+        or (value["status"], value["reason"]) != (status, reason)
+        or value["continuity_status"]
+        != ("SAME_EVENT" if observed or scenario == "refresh" else status)
+        or value["range_relation"]
+        != (
+            (
+                "CONTAINS_LEVEL"
+                if scenario in ("latest", "multiple", "invalidated")
+                else "ENTIRELY_ABOVE"
+            )
+            if observed
+            else None
+        )
+        or value["previous"]["status"] != "MATCH"
+        or value["current"]["status"]
+        != (
+            "NO_MATCH"
+            if observed
+            else "MATCH"
+            if scenario in ("replay", "refresh")
+            else "UNKNOWN"
+        )
+        or raw != _interpretation_bytes(value)
+        or value["limitations"]
+        != [
+            "Inclusive low/high range of the latest completed post-event bar only; not first or any-bar contact.",
+            "Range inclusion does not prove an exact traded tick, intrabar ordering, a reclaim or a successful retest.",
+            "No confirmation, invalidation, validity, eligibility, recommendation, effectiveness or trade authorization is inferred.",
+            "Original unchanged causal high and completed bar must remain represented and fully admitted in the finite21-session window.",
+            "No tolerance, threshold, expiry, persistence, monitoring, new acquisition or external model.",
+        ]
+    ):
+        raise ValueError("level envelope invalid")
+    for side in ("previous", "current"):
+        _check_inclusion_reference_row(value[side], side, scenario)
+    if scenario == "replay" and value["previous"] != value["current"]:
+        raise ValueError("level range replay rows invalid")
+    digests = [
+        value[key]
+        for key in (
+            "runtime_code_identity_sha256",
+            "previous_observation_identity_sha256",
+            "current_observation_identity_sha256",
+            "level_identity_sha256",
+            "continuity_identity_sha256",
+            "result_identity_sha256",
+        )
+    ]
+    witness = value["witness"]
+    if observed:
+        candidate = value["previous"]["candidate"]
+        if (
+            type(witness) is not dict
+            or set(witness)
+            != {
+                "original_event_session",
+                "original_high_pivot_session",
+                "original_high_confirmation_session",
+                "original_event_identity_sha256",
+                "original_high_identity_sha256",
+                "represented_event_identity_sha256",
+                "represented_high_identity_sha256",
+                "current_completed_session",
+                "current_bar_identity_sha256",
+            }
+            or any(
+                witness[key] != candidate[source]
+                for key, source in (
+                    ("original_event_session", "event_session"),
+                    ("original_high_pivot_session", "pivot_session"),
+                    (
+                        "original_high_confirmation_session",
+                        "pivot_confirmation_session",
+                    ),
+                    ("original_event_identity_sha256", "event_identity_sha256"),
+                    ("original_high_identity_sha256", "pivot_identity_sha256"),
+                )
+            )
+            or not witness["original_high_pivot_session"]
+            < witness["original_high_confirmation_session"]
+            < witness["original_event_session"]
+            < witness["current_completed_session"]
+            or witness["original_event_session"] != value["previous"]["session"]
+            or witness["current_completed_session"] != value["current"]["session"]
+        ):
+            raise ValueError("level witness invalid")
+        digests += [witness[key] for key in witness if key.endswith("sha256")]
+    elif witness is not None:
+        raise ValueError("level invented witness")
+    if any(
+        type(d) is not str
+        or len(d) != 64
+        or any(c not in "0123456789abcdef" for c in d)
+        for d in digests
+    ):
+        raise ValueError("level identity invalid")
+    if (
+        scenario == "replay"
+        and value["previous_observation_identity_sha256"]
+        != value["current_observation_identity_sha256"]
+    ):
+        raise ValueError("level replay identity invalid")
+    unsigned = dict(value)
+    identity = unsigned.pop("result_identity_sha256")
+    if identity != hashlib.sha256(_interpretation_bytes(unsigned)).hexdigest():
+        raise ValueError("level result digest invalid")
+
+
+def _check_installed_range_inclusion(
+    value: dict, raw: bytes, scenario: str, references: dict
+) -> None:
+    """Close all fields against original independently regenerated Plan54/56 APIs."""
+    if set(references) != {
+        "level",
+        "latest_range",
+        "evaluated_post_event_bars",
+        "first_inclusion",
+        "runtime_code_identity_sha256",
+    }:
+        raise ValueError("range inclusion reference inventory invalid")
+    level, latest = references["level"], references["latest_range"]
+    _check_inclusion_latest_reference(latest, _interpretation_bytes(latest), scenario)
+    observed = scenario not in ("replay", "unknown", "refresh")
+    expected_level = dict(latest)
+    expected_level.pop("range_relation")
+    expected_level.pop("level_identity_sha256")
+    expected_level.pop("result_identity_sha256")
+    expected_level.update(
+        contract_version="causal-setup-level@v1",
+        criterion="LATEST_COMPLETED_CLOSE_VS_ORIGINAL_BROKEN_HIGH@v1",
+        runtime_code_identity_sha256=level["runtime_code_identity_sha256"],
+        reason="LATEST_COMPLETED_CLOSE_COMPARED_WITH_ORIGINAL_BROKEN_HIGH"
+        if observed
+        else latest["reason"],
+        relation=("BELOW" if scenario == "invalidated" else "ABOVE")
+        if observed
+        else None,
+        limitations=[
+            "Exact completed-close relation only; no intrabar path, touch or retest claim.",
+            "ABOVE is not confirmation, validity, eligibility, recommendation, effectiveness or trade authorization.",
+            "BELOW is not structural invalidation; Plan50 remains an independent fact.",
+            "The original unchanged causal high must remain represented in the finite admitted window.",
+            "No tolerance, threshold, expiry, persistence, monitoring or external model.",
+        ],
+    )
+    expected_level["result_identity_sha256"] = hashlib.sha256(
+        _interpretation_bytes(expected_level)
+    ).hexdigest()
+    if (
+        _interpretation_bytes(level) != _interpretation_bytes(expected_level)
+        or latest["level_identity_sha256"] != level["result_identity_sha256"]
+    ):
+        raise ValueError("range inclusion original level reference invalid")
+    for identity in (
+        level["runtime_code_identity_sha256"],
+        references["runtime_code_identity_sha256"],
+    ):
+        if type(identity) is not str or re.fullmatch(r"[0-9a-f]{64}", identity) is None:
+            raise ValueError("range inclusion reference runtime invalid")
+    evaluated = references["evaluated_post_event_bars"]
+    first = references["first_inclusion"]
+    if observed:
+        if (
+            type(evaluated) is not list
+            or len(evaluated) != 2
+            or any(
+                type(row) is not dict or set(row) != {"session", "bar_identity_sha256"}
+                for row in evaluated
+            )
+            or [row["session"] for row in evaluated] != ["2026-08-26", "2026-08-27"]
+            or any(
+                type(row["bar_identity_sha256"]) is not str
+                or re.fullmatch(r"[0-9a-f]{64}", row["bar_identity_sha256"]) is None
+                for row in evaluated
+            )
+            or evaluated[-1]["bar_identity_sha256"]
+            != latest["witness"]["current_bar_identity_sha256"]
+        ):
+            raise ValueError("range inclusion admitted reference bars invalid")
+        index = {
+            "earlier": 0,
+            "none": None,
+            "latest": 1,
+            "multiple": 0,
+            "low-equal": 0,
+            "high-equal": 0,
+            "nearest-above": None,
+            "nearest-below": None,
+            "event-only": None,
+            "invalidated": 0,
+        }[scenario]
+        if first != (evaluated[index] if index is not None else None):
+            raise ValueError("range inclusion first reference invalid")
+    elif evaluated is not None or first is not None:
+        raise ValueError("range inclusion invented reference facts")
+    expected = dict(latest)
+    expected.pop("range_relation")
+    expected.pop("result_identity_sha256")
+    expected.update(
+        contract_version="causal-setup-level-range-inclusion@v1",
+        criterion="EARLIEST_COMPLETED_POST_EVENT_RANGE_INCLUSION@v1",
+        runtime_code_identity_sha256=references["runtime_code_identity_sha256"],
+        latest_range_identity_sha256=latest["result_identity_sha256"],
+        reason="COMPLETED_POST_EVENT_RANGE_INCLUSION_EVALUATED"
+        if observed
+        else latest["reason"],
+        inclusion_observed=(first is not None) if observed else None,
+        evaluated_post_event_bars=evaluated,
+        first_inclusion=first,
+        limitations=[
+            "Earliest inclusive completed-bar range only within the fully admitted current post-event window; not first lifetime contact.",
+            "Range inclusion proves no exact traded tick, intrabar ordering, reclaim, successful retest or confirmation.",
+            "No validity, eligibility, recommendation, effectiveness, expiry or trade authorization is inferred; structural invalidation remains independent.",
+            "Original unchanged causal high and event must remain represented in the finite21-session window; missing evidence is not a negative finding.",
+            "No tolerance, threshold, history store, persistence, monitoring, new acquisition or external model.",
+        ],
+    )
+    expected["result_identity_sha256"] = hashlib.sha256(
+        _interpretation_bytes(expected)
+    ).hexdigest()
+    if (
+        len(raw) > 1024 * 1024
+        or raw != _interpretation_bytes(value)
+        or raw != _interpretation_bytes(expected)
+    ):
+        raise ValueError("range inclusion exact installed result invalid")
+
+
+def _verify_installed_range_inclusion(
+    python: Path, scratch: Path
+) -> dict[str, dict[str, object]]:
+    """Actual -I installed SDK/CLI and original transitive component closure."""
+    probe = "\n".join(
+        (
+            "import json, os, pathlib, runpy, sys",
+            "sys.dont_write_bytecode = True",
+            "from swing_trading_ai_assistant.research_comparison import setup_level_range_inclusion as sdk, setup_level_range_inclusion_cli as cli, setup_level_range as original_range, setup_level as original_level",
+            "for name, module in tuple(sys.modules.items()):",
+            "    if name.startswith('swing_trading_ai_assistant') and getattr(module, '__file__', None):",
+            "        if not pathlib.Path(module.__file__).resolve().is_relative_to(pathlib.Path(sys.prefix).resolve()):",
+            "            raise RuntimeError('inclusion import escaped installed environment')",
+            "fixture, scenario, reference = sys.argv[1:]",
+            "sys.argv = [fixture, '--scenario', scenario]",
+            "namespace = runpy.run_path(fixture, run_name='installed_qualification')",
+            "code = namespace['main']()",
+            "references = namespace['main'].__globals__['QUALIFICATION_REFERENCES']",
+            "descriptor = os.open(reference, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)",
+            "with os.fdopen(descriptor, 'w', encoding='utf-8') as stream:",
+            "    stream.write(json.dumps(references, sort_keys=True, separators=(',', ':')) + '\\n')",
+            "raise SystemExit(code)",
+        )
+    )
+    safe_env = {
+        "HOME": str(scratch),
+        "TMPDIR": str(scratch),
+        "PATH": "/usr/bin:/bin",
+        "LANG": "C.UTF-8",
+        "PYTHONDONTWRITEBYTECODE": "1",
+    }
+    outcomes: dict[str, dict[str, object]] = {}
+    for scenario in (
+        "earlier",
+        "none",
+        "latest",
+        "multiple",
+        "low-equal",
+        "high-equal",
+        "nearest-above",
+        "nearest-below",
+        "event-only",
+        "invalidated",
+        "replay",
+        "unknown",
+        "refresh",
+    ):
+        reference = scratch / (
+            "range-inclusion-original-references-" + scenario + ".json"
+        )
+        observed = _run(
+            [
+                str(python),
+                "-I",
+                "-c",
+                probe,
+                str(ROOT / "examples/causal_setup_level_range_inclusion_demo.py"),
+                scenario,
+                str(reference),
+            ],
+            cwd=scratch,
+            env=safe_env,
+        )
+        code = 1 if scenario == "unknown" else 0
+        if (
+            observed.returncode != code
+            or len(observed.stdout) > 1024 * 1024
+            or b"SYNTHETIC RANGE INCLUSION" not in observed.stderr
+            or b"not current market data" not in observed.stderr
+            or any(
+                token in observed.stdout
+                for token in (
+                    b'"close"',
+                    b'"open"',
+                    b'"high"',
+                    b'"low"',
+                    b'"price"',
+                    b'"volume"',
+                    b'"bars"',
+                    b'"body"',
+                    b'"api_key"',
+                    str(scratch).encode(),
+                )
+            )
+        ):
+            raise RuntimeError("installed range inclusion execution failed")
+        try:
+            references = json.loads(reference.read_bytes())
+            value = json.loads(observed.stdout)
+            _check_installed_range_inclusion(
+                value, observed.stdout, scenario, references
+            )
+        except (OSError, KeyError, TypeError, ValueError) as error:
+            raise RuntimeError("installed range inclusion result invalid") from error
+        outcomes[scenario] = {
+            "exit": code,
+            "status": value["status"],
+            "inclusion_observed": value["inclusion_observed"],
+            "first_inclusion": value["first_inclusion"],
+            "evaluated_post_event_bars": value["evaluated_post_event_bars"],
+            "result_identity_sha256": value["result_identity_sha256"],
+            "runtime_code_identity_sha256": value["runtime_code_identity_sha256"],
+            "latest_range_identity_sha256": value["latest_range_identity_sha256"],
+            "level_identity_sha256": value["level_identity_sha256"],
+            "previous_observation_identity_sha256": value[
+                "previous_observation_identity_sha256"
+            ],
+            "current_observation_identity_sha256": value[
+                "current_observation_identity_sha256"
+            ],
+            "stdout_sha256": hashlib.sha256(observed.stdout).hexdigest(),
+            "imports": "-I installed SDK/CLI/transitive runtime under sys.prefix; exact SDK/CLI equality; strict original Plan54/56 nested closure; synthetic descriptive fact only",
+        }
+    return outcomes
+
+
 def verify(wheel: Path, receipt: Path | None, prior_commit: str) -> dict[str, object]:
     global _RUNTIME, _PODMAN_ROOTLESS  # noqa: PLW0603 -- fixed for one verifier invocation
     _RUNTIME = select_runtime(allow_job_engine=True)
@@ -2572,6 +3067,7 @@ def verify(wheel: Path, receipt: Path | None, prior_commit: str) -> dict[str, ob
         range_interpretation_v3 = _verify_installed_range_interpretation_v3(
             python, scratch
         )
+        range_inclusion = _verify_installed_range_inclusion(python, scratch)
         config = _run(
             [_engine(), "image", "inspect", image, "--format", "{{json .Config}}"]
         )
@@ -2620,6 +3116,7 @@ def verify(wheel: Path, receipt: Path | None, prior_commit: str) -> dict[str, ob
             "installed_setup_level_range": level_range,
             "installed_setup_level_interpretation_v2": level_interpretation,
             "installed_setup_range_interpretation_v3": range_interpretation_v3,
+            "installed_setup_level_range_inclusion": range_inclusion,
             "mount_checks": "owner mapped, wrong UID, broad mode, read-only, symlink",
             "source_substitution": "rejected",
             "interrupted_build_and_run": "rejected; current image remained available",
