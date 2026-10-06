@@ -1,5 +1,25 @@
 # Initial Roadmap
 
+## Sprint 43 — coherent range-aware interpretation, October 6, 2026
+
+[Sprint43](sprints/sprint-43.md), [Issue268](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/268)
+and [Plan57](plans/57-range-aware-setup-interpretation.md) govern additive v3
+same-pair evidence and checked external responses: unchanged continuity,
+invalidation, age and close plus the delivered inclusive range relation.
+There is no new calculation, retest/confirmation/eligibility policy or signal
+phase completion. This is a pre-delivery checkpoint; live Issue268 owns exact
+reviews, full gates, normal merge/main/private publication and tracker/Goal
+closeout. Earlier checkpoints preserve their original evidence.
+
+Sprint42 is verified complete through PR267, main
+`6415ff7e0bf5584458f2e9065f25196245377614`, tree
+`e13aeea1e2f7ffd4691af8e80dc23894f1938e19`, quality37401520238,
+main admission37406963931 and private publication37406982790;
+Issue266/privateProjectDone/milestone34closed0open. Full7,250 tests and87.73%
+aggregate branch coverage passed; retained original13/8/12 closeout evidence
+remains under the Sprint42 receipt directory. Sprint43 preserves the accepted
+90-minute compact CI workflow and eight prior installed maps.
+
 ## Sprint 42 — latest completed level range, October 5, 2026
 
 [Sprint42](sprints/sprint-42.md), [Issue266](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/266)
