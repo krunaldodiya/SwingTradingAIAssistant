@@ -140,3 +140,37 @@ All original 13 requirements, eight criteria and twelve matrix rows remain requi
 The new stable complete candidate requires both independent exact-candidate reviews expanded to CI/admission/privacy. Exactly one initial measured qualification execution is authorized after fresh whole-account included capacity (reserve >=300 minutes for quality90/main-fallback90/publication60 and rounding) and Actions AND Packages $0 Stop-usage-Yes budgets. No automatic rerun, paid/public/access/settings/heavy-local/self-hosted fallback or lowered gate. If it cannot finish within90minutes, retain diagnostics and stop the dependent release until an evidenced correction or additional owner direction exists. Review the diagnostic/resource exception after the measured run; its retained 90-minute resource cap remains the explicit scoped owner decision, not retry authority.
 
 The amended Plan56 appendix records the same accepted exception. Original accepted freeze below is retained verbatim as historical baseline and superseded only for these four workflow lines.
+
+## Accepted compact CI diagnostics amendment (2026-10-06)
+
+The owner directly answered "Approve proposed recovery" to the prepared exact
+two-line correction after run37356966260/1 exceeded the approved90-minute
+limit. In both existing complete pytest invocations, replace
+`-vv --durations=0 --durations-min=0` with
+`-q --durations=20 --durations-min=1`. Both job limits remain90minutes.
+This supersedes only the earlier diagnostic flags: compact progress and the
+20slowest recorded setup/call/teardown phases taking at least1second replace
+full test names and exhaustive phase printing. Timing output depends on
+actual test completion. Output amplification is measured; the timeout root
+cause, speed improvement and full-run success remain unproven.
+
+Preserve the original13requirements, eight Issue criteria and twelve matrix
+rows; this is solely another explicit workflow-byte diagnostic exception.
+All7,250 selected tests, two workers, dependencies, old runtime/manifests and
+seven old installed maps, static/87%branchcoverage/build/installed/nativeOCI/
+adversarial/interruption/priorwheel/admission/private-publication gates and
+permissions remain required. Both old full cancelled archives and the new
+empty archive plus partial individual-job response remain failed evidence,
+never full acceptance. The run-level archive for37356966260/1 is empty and
+its recovered individual-job response is incomplete; do not claim complete
+phase measurements or complete archived logs for that attempt.
+
+After both fresh independent exact-candidate reviews and bounded diagnostic
+positive/failure/private-exclusion checks, authorize exactly ONE new complete
+qualification with fresh whole-account included capacity (reserve>=300minutes)
+and Actions AND Packages$0 StopusageYes checks before the trigger and merge.
+No automatic rerun, longer cap, lowered gate, paid/public/settings/access/
+heavy-local/self-hosted fallback. Preserve all earlier decisions and freezes.
+If it cannot complete, retain actual evidence and stop dependent release for
+a separately evidenced correction or owner direction. Full main/private
+publication/tracker/localmain closeout and all original scope remain required.
