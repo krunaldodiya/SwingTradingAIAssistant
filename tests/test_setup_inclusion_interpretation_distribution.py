@@ -105,6 +105,78 @@ def _seal(value):
     ).hexdigest()
 
 
+def _reseal_legacy_continuity_chain(references, field):
+    original = references["legacy_v1"]
+    original["continuity"][field] = "0" * 64
+    _seal(original["continuity"])
+    for name in ("invalidation", "age"):
+        original[name]["continuity_identity_sha256"] = original["continuity"][
+            "result_identity_sha256"
+        ]
+        _seal(original[name])
+    _seal(original)
+    for version in ("legacy_v2", "legacy_v3"):
+        bundle = references[version]
+        for name in ("continuity", "invalidation", "age"):
+            bundle[name] = copy.deepcopy(original[name])
+        bundle["legacy_evidence_identity_sha256"] = original["result_identity_sha256"]
+        if version == "legacy_v3":
+            bundle["legacy_evidence_v2_identity_sha256"] = references["legacy_v2"][
+                "result_identity_sha256"
+            ]
+        _seal(bundle)
+
+
+def _rebind_resealed_legacy_claims(forged, references):
+    evidence = forged["evidence"]
+    for name in ("continuity", "invalidation", "age"):
+        evidence[name] = copy.deepcopy(references["legacy_v1"][name])
+    for field, version in (
+        ("legacy_evidence_identity_sha256", "legacy_v1"),
+        ("legacy_evidence_v2_identity_sha256", "legacy_v2"),
+        ("legacy_evidence_v3_identity_sha256", "legacy_v3"),
+    ):
+        evidence[field] = references[version]["result_identity_sha256"]
+    _seal(evidence)
+    response = forged["external_response"]
+    response["evidence_identity_sha256"] = evidence["result_identity_sha256"]
+    for name in ("continuity", "invalidation", "age"):
+        response["facts"][name]["result_identity_sha256"] = evidence[name][
+            "result_identity_sha256"
+        ]
+    forged["external_response_identity_sha256"] = hashlib.sha256(
+        (json.dumps(response, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    ).hexdigest()
+    _seal(forged)
+
+
+@pytest.mark.parametrize("scenario", ["earlier", "replay", "unknown", "refresh"])
+@pytest.mark.parametrize(
+    "field", ["comparison_identity_sha256", "runtime_code_identity_sha256"]
+)
+def test_jointly_resealed_legacy_chain_must_join_original_range_references(
+    verifier, actual_scenarios, scenario, field
+):
+    original = actual_scenarios[scenario]
+    raw = bytes.fromhex(original["raw"])
+    references = copy.deepcopy(original["references"])
+    forged = json.loads(raw)
+    verifier._check_installed_interpretation_v4(forged, raw, scenario, references)
+    independent_range_chain = copy.deepcopy(references["inclusion_references"])
+    _reseal_legacy_continuity_chain(references, field)
+    _rebind_resealed_legacy_claims(forged, references)
+    assert references["inclusion_references"] == independent_range_chain
+    for name in ("level", "level_range", "level_range_inclusion"):
+        assert (
+            forged["evidence"][name]["continuity_identity_sha256"]
+            != forged["evidence"]["continuity"]["result_identity_sha256"]
+        )
+    with pytest.raises(ValueError, match="continuity reference"):
+        verifier._check_installed_interpretation_v4(
+            forged, verifier._interpretation_bytes(forged), scenario, references
+        )
+
+
 @pytest.mark.parametrize(
     "path,value",
     [

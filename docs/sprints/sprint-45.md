@@ -21,3 +21,33 @@ installed-wheel acceptance. Both full independent reviews and all hosted,
 installed/nativeOCI, security, merge/main/private release and closeout remain
 pending; Goal active and Issue In Progress. All12 prior checkouts and507 prior
 indexed receipts were rechecked unchanged before review preparation.
+
+## Independent review and bounded qualification correction
+
+Both initial full-source reviews completed on candidate
+`27132f37ba5c130f773caeeda9d54c062d5a3fc5`, tree
+`2cd596dda32229f1f46b7b5c37e9b43f23457aa2`, with immutable source and ignored
+bytes verified. Functional/domain review passed; security/privacy/provenance
+review reproduced P45-PROV-01: the new installed qualifier accepted a jointly
+resealed legacy continuity chain that disagreed with the original level,
+latest-range and inclusion references. This violated R11/A5/M10 and the
+R2/A2/M6 composition invariant. No public SDK bypass was demonstrated.
+
+Eight new durable cases reproduced the missing rejection before repair across
+ordinary, replay, unknown and refresh states, changing either the comparison
+or runtime continuity identity and recalculating every affected legacy bundle
+and caller claim. The qualifier now checks original continuity identity/status
+against all three original range-chain components before reconstructing v2/v3/v4.
+All58 source-qualifier cases pass after repair. Existing SDKs, manifests,
+calculations, old verifier functions and ten old installed maps remain unchanged.
+Two owned formatter caches updated during root correction after the initial
+reviews; the other460 snapshotted ignored files remain exact. The current entire
+ignored inventory will be frozen for fresh correction review.
+
+Initial verdicts are historical context, not approval of the correction. Both
+new exact-current verdicts, full selected hosted87%/security/static/build,
+actual installed/nativeOCI/recovery and the entire merge/release/closeout remain
+pending. The initial hosted run allowance is still unused; all33 accepted
+obligations remain required. Retained evidence includes complete original
+reports, `full-review-consolidation.json`, `correction-join-red.txt`,
+`correction-qualifier-green.txt` and `correction-source-impact.json`.

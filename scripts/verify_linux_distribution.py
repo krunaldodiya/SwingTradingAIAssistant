@@ -3344,6 +3344,18 @@ def _check_installed_evidence_v4(
     )
     v1, v2, v3 = (references[name] for name in ("legacy_v1", "legacy_v2", "legacy_v3"))
     _check_v4_original_evidence(v1, actual, inclusion_refs)
+    continuity = v1["continuity"]
+    for component in (
+        inclusion_refs["level"],
+        inclusion_refs["latest_range"],
+        inclusion,
+    ):
+        if (
+            component["continuity_identity_sha256"]
+            != continuity["result_identity_sha256"]
+            or component["continuity_status"] != continuity["status"]
+        ):
+            raise ValueError("v4 original range continuity reference invalid")
     expected = dict(v1)
     expected.pop("result_identity_sha256")
     expected.update(
