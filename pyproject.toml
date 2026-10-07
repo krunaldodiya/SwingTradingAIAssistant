@@ -34,6 +34,7 @@ historical-validation-gate = "swing_trading_ai_assistant.entrypoints.historical_
 capture-forward-adjusted-ohlcv = "swing_trading_ai_assistant.entrypoints.capture_forward_adjusted_ohlcv:main"
 efficient-current-nifty100-adjusted-capture = "swing_trading_ai_assistant.entrypoints.efficient_current_nifty100_adjusted_capture:main"
 equity-data-download = "equity_data_downloader.cli:main"
+stock-observations = "swing_trading_ai_assistant.entrypoints.stock_observations:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/equity_data_downloader", "src/swing_trading_ai_assistant"]
