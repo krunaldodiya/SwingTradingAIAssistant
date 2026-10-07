@@ -61,14 +61,37 @@ these outcomes finished or approve their unspecified implementation details.
 
 ### Priority order and next sprint
 
-**Sprint50 is in progress:** [Issue288](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/288)
-and [Plan63](plans/63-stock-eligibility-safety-readiness.md) answer the required
-safety/eligibility readiness question using current contracts and narrow official
-documentation. This design distinguishes missing listing/liquidity/event/source
-evidence from existing descriptive readiness, and identifies the G05 production
-observation selector prerequisite. It adopts no source, threshold, eligibility
-algorithm or persistence model. Exact reviews and documentation delivery remain
-pending; G03–G12 remain ten open outcomes, with no behavior-gap closure.
+**Sprint51 is in progress:** [Issue290](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/290)
+and [Plan64](plans/64-retained-stock-observation-workflow.md) combine current
+observation recording, exact retained readback, comparison, negative/recovery
+paths and installed instructions in one working delivery. Software and actual
+source/session evidence remain separate; G03–G12 stay open until each named
+closure condition is proven.
+
+October7 accepted owner course correction: related tasks belong in usable
+delivery groups, with independent work in the same group allowed in parallel.
+This reorganizes execution without changing the original gap count or evidence.
+
+| Delivery group | Combined remaining outcomes | Usable result / dependency |
+| --- | --- | --- |
+| Practical research workflow | G05, G08, descriptive portion of G10 | Record/revisit/compare observations with actual-source qualification and instructions; no actionable claim. Sprint51 is the first working slice. |
+| Supported signal decisions | G03, G04, G07 | Accepted safety evidence, causal policy and necessary analytical coverage; implement only after their real source/criteria prerequisites. |
+| Complete suggestions release | G06, G09, final G10 | Checked AI interpretation, required historical/AI evidence and integrated default/explicit-list release after affected safety/policy dependencies. |
+| Observation and phase audit | G11, G12 | Authorized paper observations, measured improvement and complete phase evidence after qualified first use. |
+
+These are four delivery groups, not four promised sprints. G10 has intermediate
+and final acceptance in two groups and is counted only once. Working-path
+design, implementation, tests, instructions and applicable qualification stay
+together when they serve one outcome. Preparation alone closes no behavior gap.
+Capital/portfolio work and five Future issues remain separately excluded.
+
+**Sprint50 design is delivered:** [Issue288](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/288)
+/ [PR289](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/289) /
+main `0bba1769619cad7c6159c986e8c42c690f04d3b7`. Plan63 reconciles the safety
+evidence and G05 prerequisites with both complete independent reviews and
+lightweight documentation/security delivery. It closes no behavior gap or
+runtime qualification; G03–G12 remain ten. Its dated preparation checkpoint
+is superseded for status by the live final Issue and retained closeout receipts.
 
 October7: **[Sprint49 G02 is delivered](sprints/sprint-49.md)** through
 [Issue285](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/285) /

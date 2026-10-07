@@ -64,6 +64,13 @@ above is reusable; the named gap's closure evidence supplies the missing claim.
 
 ## Finite remaining outcomes
 
+October7 Sprint51 checkpoint: Issue290 / Plan64 implements the accepted
+combined observation-record/readback/comparison working path and instructions.
+The roadmap now groups related tasks into four delivery groups; no original
+closure predicate or dependency is weakened, and G10 is counted only once.
+Software/synthetic and actual-source/chronological-session evidence remain
+separate. G03–G12 remain ten open outcomes until their full named evidence passes.
+
 October7 next-sprint checkpoint: [Sprint50](../sprints/sprint-50.md) /
 [Plan63](63-stock-eligibility-safety-readiness.md) / Issue288 reconciles the
 existing and missing G03 safety evidence and the independent G05 observation

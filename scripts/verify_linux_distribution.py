@@ -4153,6 +4153,135 @@ def _verify_installed_selection_research(
     return outcomes
 
 
+def _verify_installed_stock_observations(
+    python: Path, scratch: Path
+) -> dict[str, object]:
+    """Exercise the new console command using only wheel-admitted synthetic records."""
+    root = scratch / "stock-observation-evidence"
+    root.mkdir(mode=0o700)
+    safe_env = {
+        "HOME": str(scratch),
+        "TMPDIR": str(scratch),
+        "PATH": "/usr/bin:/bin",
+        "LANG": "C.UTF-8",
+        "PYTHONDONTWRITEBYTECODE": "1",
+    }
+    probe = "\n".join(
+        (
+            "import sys, json, pathlib, hashlib",
+            "from datetime import UTC, datetime",
+            "import swing_trading_ai_assistant._examples.single_stock_research_demo as demo",
+            "from swing_trading_ai_assistant.market_data.current_stock_research_v2 import research_current_stock_v2",
+            "from swing_trading_ai_assistant.market_data.stock_observations import record_stock_observation_v1",
+            "def deny_network(event, args):",
+            "    if event.startswith('socket.'): raise RuntimeError('synthetic installed probe denies network')",
+            "sys.addaudithook(deny_network)",
+            "root = pathlib.Path(sys.argv[1]); values = []",
+            "for day in (26, 27):",
+            "    demo.NOW = datetime(2026, 8, day, 4, 15, tzinfo=UTC)",
+            "    source = demo.SyntheticOfficialSources('complete')",
+            "    result = research_current_stock_v2('PNB', root, question='PRICE_BEHAVIOR', refresh=False, clock=demo.SyntheticClock(), calendar_transport=source, snapshot_transport=source, price_client=demo.SyntheticPrices('complete'))",
+            "    handle = record_stock_observation_v1(root, result)",
+            "    values.append({'handle': handle, 'result': json.loads(result.canonical_json_bytes())})",
+            "for name, module in tuple(sys.modules.items()):",
+            "    if name.startswith('swing_trading_ai_assistant') and getattr(module, '__file__', None):",
+            "        if not pathlib.Path(module.__file__).resolve().is_relative_to(pathlib.Path(sys.prefix).resolve()): raise RuntimeError('observation import escaped installed wheel')",
+            "print(json.dumps(values, sort_keys=True, separators=(',', ':')))",
+        )
+    )
+    created = _run(
+        [str(python), "-I", "-c", probe, str(root)], cwd=scratch, env=safe_env
+    )
+    _require_success(created, "installed synthetic observation records")
+    originals = json.loads(created.stdout)
+    command = python.parent / "stock-observations"
+    for original in originals:
+        read = _run(
+            [
+                str(command),
+                "read",
+                "--storage-root",
+                str(root),
+                "--observation",
+                original["handle"],
+                "--output",
+                "json",
+            ],
+            cwd=scratch,
+            env=safe_env,
+        )
+        _require_success(read, "installed exact observation readback")
+        output = json.loads(read.stdout)
+        if (
+            output["status"] != "READ"
+            or output["observation_identity_sha256"] != original["handle"]
+            or output["research"] != original["result"]
+        ):
+            raise RuntimeError("installed original observation changed")
+    compared = _run(
+        [
+            str(command),
+            "compare",
+            "--storage-root",
+            str(root),
+            "--previous",
+            originals[0]["handle"],
+            "--current",
+            originals[1]["handle"],
+            "--output",
+            "json",
+        ],
+        cwd=scratch,
+        env=safe_env,
+    )
+    _require_success(compared, "installed retained comparison")
+    comparison_result = json.loads(compared.stdout)
+    if (
+        comparison_result["status"] != "COMPARABLE"
+        or comparison_result["previous_observation_identity_sha256"]
+        != originals[0]["handle"]
+        or comparison_result["current_observation_identity_sha256"]
+        != originals[1]["handle"]
+    ):
+        raise RuntimeError("installed comparison handle substitution")
+    missing = _run(
+        [
+            str(command),
+            "read",
+            "--storage-root",
+            str(root),
+            "--observation",
+            "a" * 64,
+            "--output",
+            "json",
+        ],
+        cwd=scratch,
+        env=safe_env,
+    )
+    if missing.returncode != 1 or json.loads(missing.stdout) != {
+        "contract_version": "stock-observations@v1",
+        "status": "UNAVAILABLE",
+        "code": "OBSERVATION_RECORD_UNAVAILABLE",
+    }:
+        raise RuntimeError("installed missing baseline was not explicit")
+    help_result = _run([str(command), "--help"], cwd=scratch, env=safe_env)
+    _require_success(help_result, "installed observation help")
+    for output in (created.stdout, compared.stdout, missing.stdout):
+        if any(
+            token in output
+            for token in (str(root).encode(), b'"source_bars"', b'"api_key"')
+        ):
+            raise RuntimeError("installed observation privacy boundary failed")
+    return {
+        "synthetic_only": True,
+        "recorded": 2,
+        "original_readback": "exact",
+        "console_comparison": "COMPARABLE",
+        "missing_baseline": "explicit",
+        "installed_imports": "isolated wheel",
+    }
+
+
 def verify(wheel: Path, receipt: Path | None, prior_commit: str) -> dict[str, object]:
     global _RUNTIME, _PODMAN_ROOTLESS  # noqa: PLW0603 -- fixed for one verifier invocation
     _RUNTIME = select_runtime(allow_job_engine=True)
@@ -4299,6 +4428,7 @@ def verify(wheel: Path, receipt: Path | None, prior_commit: str) -> dict[str, ob
         first_inclusion_close = _verify_installed_first_inclusion_close(python, scratch)
         setup_research = _verify_installed_setup_research(python, scratch)
         selection_research = _verify_installed_selection_research(python, scratch)
+        stock_observations = _verify_installed_stock_observations(python, scratch)
         config = _run(
             [_engine(), "image", "inspect", image, "--format", "{{json .Config}}"]
         )
@@ -4352,6 +4482,7 @@ def verify(wheel: Path, receipt: Path | None, prior_commit: str) -> dict[str, ob
             "installed_setup_first_inclusion_close": first_inclusion_close,
             "installed_current_setup_research": setup_research,
             "installed_whole_selection_research": selection_research,
+            "installed_stock_observations": stock_observations,
             "mount_checks": "owner mapped, wrong UID, broad mode, read-only, symlink",
             "source_substitution": "rejected",
             "interrupted_build_and_run": "rejected; current image remained available",

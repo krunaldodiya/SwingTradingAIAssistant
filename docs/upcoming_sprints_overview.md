@@ -27,12 +27,19 @@ private publication/pulls passed. Qualified code main is
 `92da97564c11ab956427851154dee94124547b12`; Issue/Project/milestone are closed/Done.
 See the [Sprint 48 delivery record](sprints/sprint-48.md) for exact receipts.
 
-**Sprint50 is in progress:** [Issue288](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/288)
-and [Plan63](plans/63-stock-eligibility-safety-readiness.md) reconcile current
-versus missing safety/eligibility evidence and the G05 retained-observation
-access prerequisite. This is a bounded design sprint with exact reviews and
-documentation delivery pending. It adopts no eligibility threshold, source,
-strategy or persistence implementation; G03–G12 remain ten open outcomes.
+**Sprint51 is in progress:** [Issue290](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/290)
+and [Plan64](plans/64-retained-stock-observation-workflow.md) combine recording,
+exact retained readback, comparison, failure/recovery paths and installed
+instructions. The owner accepted grouping related work into four usable
+delivery groups; the [roadmap table](roadmap.md#priority-order-and-next-sprint)
+owns the groups and dependencies. These are not four promised sprints.
+Original closure predicates/counting remain unchanged; G03–G12 remain open.
+
+**Sprint50 design is delivered** through Issue288/PR289/main
+`0bba1769619cad7c6159c986e8c42c690f04d3b7`, with both complete independent
+reviews, proportionate security and live tracker/milestone closeout. Plan63
+clarifies evidence requirements; it closes no working gap or runtime claim.
+The live final Issue supersedes its dated preparation-state pending wording.
 
 **[Sprint49 G02 is delivered](sprints/sprint-49.md)** under
 [Plan62](plans/62-exact-selection-whole-list-research.md), Issue285 and PR286,
