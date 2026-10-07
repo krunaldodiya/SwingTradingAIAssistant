@@ -14,16 +14,25 @@ and demonstrated improvements.
 **Sprint 47 is delivered** through PR #281 / main
 `15c007111b4706d5a4fea2627d15766cde9f0698`; Issue #278 is closed/completed.
 [Plan 61](plans/61-first-use-gap-reconciliation.md) contains the accepted
-reconciliation and next-path contract. The baseline is **12 distinct open
-outcomes**, not 12 promised sprints: six primarily before use, four needing owner
-disposition, two after research use. Planning closes no working-behavior gap.
+reconciliation and next-path contract. Its original baseline was **12 distinct
+open outcomes**, not 12 promised sprints. Sprint 48 closes one actual behavior
+gap; the current remaining count is below. Planning closed no working gap.
 
-**Sprint 48 is in progress:** [Issue #282](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/282)
-connects current research and existing causal candidate facts from the same
-admitted observations. Focused checks pass; both independent reviews and full
-hosted qualification/delivery remain pending. G01 delivery would reduce the baseline
-to 11; planning alone does not. Further work closes these observable gaps rather
-than automatically extending the descriptive-fact catalogue.
+**Sprint 48 G01 is delivered:** [Issue #282](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/282)
+and [PR #283](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/283)
+join current research and existing causal candidate facts from the same admitted
+observations. Both independent exact reviews, GitGuardian, **8453 tests / 87.85%
+coverage**, installed SDK/CLI/native Linux qualification, main admission and
+private publication/pulls passed. Qualified code main is
+`92da97564c11ab956427851154dee94124547b12`; Issue/Project/milestone are closed/Done.
+See the [Sprint 48 delivery record](sprints/sprint-48.md) for exact receipts.
+
+The finite ledger now has **11 open outcome gaps (G02–G12)**, down from the
+original 12: five primarily before use, four requiring contract disposition,
+two after research use. These are outcomes, not 11 promised sprints. G02's
+exact selection/whole-list boundary is next to refine; this closeout freezes
+no new scope. Real source/workflow, AI interpretation and effectiveness
+qualification remain open, as do all eight signal-phase obligations.
 
 | Order | Sprint outcome to select | Boundary |
 | --- | --- | --- |
@@ -41,9 +50,9 @@ list; added work must explain its source and reason before estimates change.
 Sprint 46 is fully delivered through PR #275 / main
 `c7abb3a3128f15f340e080857bbebafc9a14ba4e`: both reviews, 8400 tests / 87.84%
 branch coverage, exact main/private publication and complete tracker/receipt
-closeout passed. See the [verified delivery record](roadmap.md#latest-verified-delivery-sprint-46)
+closeout passed. See the [verified delivery record](roadmap.md#previous-verified-delivery-sprint-46)
 for its bounded claim and retained failure/fixture exception. Sprint47 planning
-is delivered; [Sprint48](sprints/sprint-48.md) owns the first runtime bridge.
+and [Sprint48](sprints/sprint-48.md)'s first runtime bridge are delivered.
 
 ## Historical delivery context
 
