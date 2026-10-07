@@ -18,6 +18,9 @@ from typing import Any, Literal, Never, Protocol, cast
 
 from dotenv import load_dotenv
 
+from swing_trading_ai_assistant.historical_evaluation.capability_validation_cli import (
+    read_private_request,
+)
 from swing_trading_ai_assistant.market_regime.current_supplied_cohort import (
     CurrentSuppliedCohortMarketRegimeInputV1,
     DirectCurrentCohortArchiveReaderV1,
@@ -62,6 +65,7 @@ from .agent_research_run import (
     run_agent_swing_research_current,
 )
 from .agent_setup_research import run_agent_setup_research_current
+from .bharatstock_capture import parse_bharatstock_capture_request_v2
 from .bounded_nifty50_workflow import (
     BoundedNifty50DownloadReportV1,
     BoundedNifty50DownloadRequestV1,
@@ -116,6 +120,7 @@ from .download_preparation import (
     CanonicalFileScheduleSourceV1,
     DownloadPreparationServiceV1,
 )
+from .efficient_current_nifty100_adjusted_capture import SelectionEvidenceUnavailable
 from .equity_admission import EquityAdmissionPolicyV1
 from .historical import (
     AccountRateLimiter,
@@ -219,6 +224,10 @@ from .range_ingestion import (
     ProviderSessionAuthenticationError,
 )
 from .schedule_evidence import ScheduleEvidenceValidationError
+from .setup_research_selection import (
+    run_setup_research_selection_current,
+    selection_research_available,
+)
 from .setup_screen import screen_setup_current
 from .storage_root_lease import StorageRootLease, StorageRootLeaseError
 from .watchlist_screen import screen_watchlist_current
@@ -633,6 +642,15 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="ABSOLUTE_OWNER_PRIVATE_ROOT",
     )
     setup_research.add_argument("--output", choices=("json",), required=True)
+    selection_research = commands.add_parser(
+        "setup-research-selection",
+        help="research an exact retained Nifty100 selection or 1–100 explicit stocks",
+    )
+    selection_research.add_argument("--symbol", action="append")
+    selection_research.add_argument("--selection-request-file", type=Path)
+    selection_research.add_argument("--selection-root", type=Path)
+    selection_research.add_argument("--storage-root", type=Path, required=True)
+    selection_research.add_argument("--output", choices=("json",), required=True)
     watchlist = commands.add_parser(
         "watchlist-screen-current",
         help="screen an explicit bounded stock list using admitted V2 price facts",
@@ -766,6 +784,10 @@ def main(  # noqa: C901 - command dispatch remains explicit.
             return _run_setup_screen_command(args, current_stock_research_v2)
         if args.command == "setup-research-current":
             return _run_setup_research_command(args, current_stock_research_v2)
+        if args.command == "setup-research-selection":
+            return _run_selection_research_command(
+                args, current_stock_research_v2, trusted_clock or _SystemClock()
+            )
         if args.command == "watchlist-screen-current":
             return _run_watchlist_screen_command(args, current_stock_research_v2)
         if args.command == "research-run-current":
@@ -795,6 +817,63 @@ def main(  # noqa: C901 - command dispatch remains explicit.
     except Exception:
         sys.stderr.write("internal_error\n")
         return 2
+
+
+def _run_selection_research_command(
+    args: argparse.Namespace,
+    service: CurrentStockResearchPortV2 | None,
+    clock: _ClockV1,
+) -> int:
+    try:
+        request = None
+        if not args.storage_root.is_absolute():
+            raise CurrentStockResearchInputError("invalid selection research root")
+        if args.symbol is not None:
+            if (
+                args.selection_request_file is not None
+                or args.selection_root is not None
+            ):
+                raise CurrentStockResearchInputError("mixed selection modes")
+        else:
+            if (
+                args.selection_request_file is None
+                or args.selection_root is None
+                or not args.selection_root.is_absolute()
+            ):
+                raise CurrentStockResearchInputError("default selection is missing")
+            try:
+                request = parse_bharatstock_capture_request_v2(
+                    read_private_request(
+                        str(args.selection_request_file), 8 * 1024 * 1024
+                    )
+                )
+            except (OSError, ValueError):
+                raise CurrentStockResearchInputError(
+                    "invalid selection request"
+                ) from None
+        report = run_setup_research_selection_current(
+            None if args.symbol is None else tuple(args.symbol),
+            args.storage_root,
+            research=research_current_stock_v2 if service is None else service,
+            selection_request=request,
+            selection_root=args.selection_root,
+            clock=lambda: _trusted_now(clock),
+        )
+        payload = (
+            json.dumps(report, sort_keys=True, separators=(",", ":")) + "\n"
+        ).encode()
+        available = selection_research_available(report)
+    except CurrentStockResearchInputError:
+        sys.stderr.write("request_invalid\n")
+        return 2
+    except SelectionEvidenceUnavailable:
+        sys.stderr.write("selection_unavailable\n")
+        return 1
+    except (Exception, KeyboardInterrupt):
+        sys.stderr.write("selection_research_failed\n")
+        return 2
+    sys.stdout.buffer.write(payload)
+    return 0 if available else 1
 
 
 def _run_setup_research_command(

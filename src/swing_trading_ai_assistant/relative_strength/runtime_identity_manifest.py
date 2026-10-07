@@ -13,7 +13,7 @@ RELATIVE_STRENGTH_RUNTIME_SOURCE_SHA256_V1: Final[dict[str, str]] = {
     "src/swing_trading_ai_assistant/market_data/bounded_nifty50_workflow.py": "a19c2a4c1ddcd1dbf281e8c92f7db0f21f51eadf5aa394310118c5595270dde5",
     "src/swing_trading_ai_assistant/market_data/capture_forward_adjusted_ohlcv.py": "392431179a4ec08d18f117fc584c6c8b413e5646102f20618b8745bfa292b8b7",
     "src/swing_trading_ai_assistant/market_data/catalog.py": "ae17eac5475a39d5ff08173e9b2154c0cf33778f573e7d894656a2ba685294ac",
-    "src/swing_trading_ai_assistant/market_data/cli.py": "6f53183882262b91a82814304923f5f7adc74580c81313a34321f61b6c9f4d0b",
+    "src/swing_trading_ai_assistant/market_data/cli.py": "4bd73e7a5ee79a61ac48d69664a5f19ac1421853c460a00d2b75735f291ffff6",
     "src/swing_trading_ai_assistant/market_data/corporate_actions.py": "1d74c5cc7e94470452377491d5fa6ead801833bb4f17b4bae3305e73058cd9cc",
     "src/swing_trading_ai_assistant/market_data/credentials.py": "bc6b8847a2c57647071d636a43bcb82b3521bfe435944ce289822fbf583b675b",
     "src/swing_trading_ai_assistant/market_data/current_cohort.py": "50d5e3198908a006be93ff4314fe7ceb5350785b1eb52bbb6dcf2fd468770bea",
@@ -90,5 +90,5 @@ RELATIVE_STRENGTH_RUNTIME_SOURCE_SHA256_V1: Final[dict[str, str]] = {
     "src/swing_trading_ai_assistant/relative_strength/request.py": "46e85ad41c788186eb380bedc2bd58fe65755ccbbc2bf2fddb060e267cd7aa06",
     "src/swing_trading_ai_assistant/relative_strength/service.py": "4f40eefbed5b0412e5bf0b6892ff84a1f1ef37906b394c3071eb9062789b084a",
     "src/swing_trading_ai_assistant/market_data/setup_screen.py": "99879e80ba7f7b353e9dab1491244f5289ecb72cf11fa4defbddb2d734246a8c",
-    "src/swing_trading_ai_assistant/market_data/setup_screen_runtime_identity_manifest.py": "77b5aeeb9c86f0f292ccd06471a584a98e7e3e70f6bef327f65b2c40c9f3a0db",
+    "src/swing_trading_ai_assistant/market_data/setup_screen_runtime_identity_manifest.py": "51c305acc3dc668a3d6241d61d0865edb93d1cc2fe5cf4db31d3beea77a3b441",
 }
