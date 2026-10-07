@@ -191,15 +191,12 @@ def main() -> int:
         default = scenario in {"default100", "selection-unavailable"}
         request = None
         path = None
+        selection_root = root
         if default:
             request, path = _default(root)
             if scenario == "selection-unavailable":
-                (
-                    root
-                    / "nifty100-selection-v3"
-                    / "requests"
-                    / f"{request.request_identity_sha256}.json"
-                ).unlink()
+                selection_root = root / "unavailable-selection"
+                selection_root.mkdir(mode=0o700)
         count = (
             101
             if scenario == "invalid101"
@@ -220,13 +217,15 @@ def main() -> int:
                 "--selection-request-file",
                 str(path),
                 "--selection-root",
-                str(root),
+                str(selection_root),
             ]
         else:
             args += [a for symbol in symbols for a in ("--symbol", symbol)]
         code = research_cli(
             args, current_stock_research_v2=service, trusted_clock=SyntheticClock()
         )
+        if scenario == "selection-unavailable" and any(selection_root.iterdir()):
+            raise RuntimeError("synthetic selection read created storage state")
         QUALIFICATION_REFERENCES.clear()
         QUALIFICATION_REFERENCES["producer_calls"] = calls
         QUALIFICATION_REFERENCES["requested_symbols"] = list(
@@ -238,7 +237,7 @@ def main() -> int:
                 root,
                 research=lambda s, *a, **kw: results[s],
                 selection_request=request,
-                selection_root=root if default else None,
+                selection_root=selection_root if default else None,
                 clock=SyntheticClock().now,
             )
             raw = (

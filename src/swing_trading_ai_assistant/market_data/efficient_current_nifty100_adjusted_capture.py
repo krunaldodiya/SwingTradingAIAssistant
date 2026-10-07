@@ -28,7 +28,7 @@ from .http import (
     HttpTransportError,
     UrllibHttpTransport,
 )
-from .storage_root_lease import StorageRootLeaseError
+from .storage_root_lease import LeaseOutcome, StorageRootLease, StorageRootLeaseError
 
 CONTRACT_VERSION_V3 = "current-nifty100-bharatstock-capture@v3"
 NIFTY_50_URL = "https://nsearchives.nseindia.com/content/indices/ind_nifty50list.csv"
@@ -412,7 +412,7 @@ def read_retained_current_nifty100_selection_v1(
     ):
         raise ValueError("retained selection request invalid")
     try:
-        selection = _read_retained_selection_v2(root, request)
+        selection = _read_retained_selection_v2(root, request, read_only=True)
     except _RetainedSelectionUnavailable:
         raise SelectionEvidenceUnavailable from None
     if selection is None:
@@ -427,9 +427,22 @@ class _RetainedSelectionUnavailable(ValueError):
 
 
 def _read_retained_selection_v2(
-    root: Path, request: CaptureRequestV2
+    root: Path, request: CaptureRequestV2, *, read_only: bool = False
 ) -> OfficialSelectionV2 | None:
-    lease = capture_store._acquire_root(root)  # pyright: ignore[reportPrivateUsage]
+    if read_only:
+        identity = StorageRootLease.admit_existing_private_identity(root)
+        acquired = (
+            None
+            if identity is None
+            else StorageRootLease.try_acquire_existing_identity(root, identity)
+        )
+        lease = (
+            acquired.lease
+            if acquired is not None and acquired.outcome is LeaseOutcome.ACQUIRED
+            else None
+        )
+    else:
+        lease = capture_store._acquire_root(root)  # pyright: ignore[reportPrivateUsage]
     if lease is None:
         raise _RetainedSelectionUnavailable
     try:

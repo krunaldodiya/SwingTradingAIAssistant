@@ -37,6 +37,7 @@ from swing_trading_ai_assistant.market_data.current_stock_research_v2 import (
     research_current_stock_v2,
 )
 from swing_trading_ai_assistant.market_data.efficient_current_nifty100_adjusted_capture import (
+    SelectionEvidenceUnavailable,
     _retain_selection_v2,
     admit_current_nifty100_selection_v2,
     read_retained_current_nifty100_selection_v1,
@@ -637,3 +638,43 @@ def test_whole_selection_runtime_substitution_precedes_producer(
         api.run_setup_research_selection_current(
             ("S000",), tmp_path, research=_forbidden
         )
+
+
+@pytest.mark.parametrize("surface", ["reader", "sdk", "cli"])
+@pytest.mark.parametrize("root_state", ["empty", "absent"])
+def test_unavailable_selection_read_never_initializes_storage(
+    tmp_path, capsys, surface, root_state
+):
+    request, path = _retained(tmp_path / "retained")
+    root = tmp_path / "unavailable"
+    if root_state == "empty":
+        root.mkdir(mode=0o700)
+    before = set(tmp_path.rglob("*"))
+    if surface == "reader":
+        with pytest.raises(SelectionEvidenceUnavailable):
+            read_retained_current_nifty100_selection_v1(root, request, known_at=_NOW)
+    elif surface == "sdk":
+        with pytest.raises(SelectionEvidenceUnavailable):
+            api.run_setup_research_selection_current(
+                None,
+                tmp_path,
+                research=_forbidden,
+                selection_request=request,
+                selection_root=root,
+                clock=lambda: _NOW,
+            )
+    else:
+        assert (
+            main(
+                _argv(tmp_path, request=path, selection_root=root),
+                current_stock_research_v2=_forbidden,
+                trusted_clock=_Clock(),
+            )
+            == 1
+        )
+        captured = capsys.readouterr()
+        assert captured.out == "" and captured.err == "selection_unavailable\n"
+    assert set(tmp_path.rglob("*")) == before
+    assert root.exists() == (root_state == "empty")
+    if root.exists():
+        assert list(root.iterdir()) == []

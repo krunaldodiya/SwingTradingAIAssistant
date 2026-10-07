@@ -63,7 +63,7 @@ exit1, no report and no producer effects. Available complete reports exit0;
 reports retaining unknown facts exit1. Invalid/terminal/interrupted execution
 exits2 with fixed sanitized diagnostics. Availability/MATCH is not trade approval.
 
-## Verification checkpoint
+## Initial verification checkpoint (superseded for review admission)
 
 Actual public explicit11 and default100 RED checks preceded implementation.
 The explicit 1/10/11/100 working paths and default100 same-root path were
@@ -78,7 +78,7 @@ The nine source-mode demonstrations and eight verifier contract checks pass,
 including deliberate incomplete/forged receipt rejection. They prepare hosted
 clean installed-wheel qualification; they do not prove installed/live-source
 execution. All affected source manifests, including the closed generic market-
-data inventory, are mechanically refreshed after formatting. Current-source
+data inventory, are mechanically refreshed after formatting. Initial-candidate
 statics pass (format, lint, types and unused-code checks). The main focused run
 recorded 58 passes and one failure: a comparison-demo child imported the old
 owner checkout through the shared environment. With this worktree's source
@@ -89,7 +89,36 @@ eight source-mode qualifier contract checks. The final source-mode qualifier
 checks also pass (8/8) after the output-limitations wording change. Full repository
 coverage and clean installed artifacts remain hosted prerequisites.
 
-Both fresh independent exact committed R3 reviews, full selected hosted tests/
+Both initial full independent reviews completed on
+`fac183b28cbe271a7d637409d01bb3395a2ac364` /
+`57eda18a005a929a5feb3c9508a18efecd007033`. Domain review passed;
+privacy/provenance review found one P2: the new public retained reader reused a
+capture initialization helper and created `.ingestion.lock` in an empty private
+selection directory before returning unavailable. This violates the frozen
+read-only A3/A10 boundary. Both complete initial reports and their exact-byte
+checks remain retained; neither supplies approval for changed bytes.
+
+The correction acquires only a pre-existing identity-pinned private lock for the
+public read path. Capture callers preserve their existing initialization
+behavior. Six reader/SDK/CLI cases assert the complete inventory remains
+unchanged for empty or absent roots. Before repair, three empty-root cases failed
+with a new lock and the three absent-root cases passed. The first repaired
+16-case selection group passed; the broader 28-case group passed, including
+positive default100 same-root, existing capture cold/warm behavior, root faults
+and old comparison tests. The installed demonstration's existing unavailable
+scenario now also rejects any entry created in an empty selection directory.
+
+Final correction statics pass. Final focused checks pass 21 cases, including all
+six no-write surfaces, root faults/lease/time and existing comparison checks;
+final source-mode verifier checks pass all eight cases over nine actual synthetic
+scenarios. An earlier correction lint failure (example assert and reader
+complexity) is retained; the narrow equivalent code adjustment is verified by
+these final results. Both new exact-candidate correction reviews are required.
+The original contract and all twelve criteria remain unchanged; no hosted full run
+has been used. The repaired reader introduces no provider, store, acquisition,
+repair, fallback, threshold or broader scope. Independent comparison confirms
+this correction changes no prior per-stock comparison report fields or hashes.
+Required fresh correction reviews, full selected hosted tests/
 87% coverage/build/installed/native/prior-wheel/GitGuardian, exact normal merge,
 main admission, private publication/fresh pull and tracker/evidence closeout
 remain pending. Standing October7 owner approval covers routine in-scope hosted
