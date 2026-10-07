@@ -61,6 +61,15 @@ these outcomes finished or approve their unspecified implementation details.
 
 ### Priority order and next sprint
 
+**Sprint50 is in progress:** [Issue288](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/288)
+and [Plan63](plans/63-stock-eligibility-safety-readiness.md) answer the required
+safety/eligibility readiness question using current contracts and narrow official
+documentation. This design distinguishes missing listing/liquidity/event/source
+evidence from existing descriptive readiness, and identifies the G05 production
+observation selector prerequisite. It adopts no source, threshold, eligibility
+algorithm or persistence model. Exact reviews and documentation delivery remain
+pending; G03–G12 remain ten open outcomes, with no behavior-gap closure.
+
 October7: **[Sprint49 G02 is delivered](sprints/sprint-49.md)** through
 [Issue285](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/285) /
 [PR286](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/286), code main
