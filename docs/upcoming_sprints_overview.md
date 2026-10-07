@@ -27,6 +27,13 @@ private publication/pulls passed. Qualified code main is
 `92da97564c11ab956427851154dee94124547b12`; Issue/Project/milestone are closed/Done.
 See the [Sprint 48 delivery record](sprints/sprint-48.md) for exact receipts.
 
+**Sprint50 is in progress:** [Issue288](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/288)
+and [Plan63](plans/63-stock-eligibility-safety-readiness.md) reconcile current
+versus missing safety/eligibility evidence and the G05 retained-observation
+access prerequisite. This is a bounded design sprint with exact reviews and
+documentation delivery pending. It adopts no eligibility threshold, source,
+strategy or persistence implementation; G03–G12 remain ten open outcomes.
+
 **[Sprint49 G02 is delivered](sprints/sprint-49.md)** under
 [Plan62](plans/62-exact-selection-whole-list-research.md), Issue285 and PR286,
 code main `c7f4b77c8e43e7c7e2e05514fbf5f0ee2bcbfe9b`. Exact retained
