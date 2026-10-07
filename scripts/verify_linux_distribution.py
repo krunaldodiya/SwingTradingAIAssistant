@@ -3831,6 +3831,134 @@ def _verify_installed_first_inclusion_close(
     return outcomes
 
 
+def _verify_installed_setup_research(python: Path, scratch: Path) -> dict[str, object]:
+    """Qualify the new public path with installed SDK imports and original references."""
+    probe = "\n".join(
+        (
+            "import sys, os, pathlib, json, runpy",
+            "import swing_trading_ai_assistant.market_data.agent_setup_research",
+            "for name, module in tuple(sys.modules.items()):",
+            "    if name.startswith('swing_trading_ai_assistant') and getattr(module, '__file__', None):",
+            "        if not pathlib.Path(module.__file__).resolve().is_relative_to(pathlib.Path(sys.prefix).resolve()):",
+            "            raise RuntimeError('setup research import escaped installed environment')",
+            "fixture, scenario, reference = sys.argv[1:]",
+            "sys.argv = [fixture, '--scenario', scenario]",
+            "namespace = runpy.run_path(fixture, run_name='installed_qualification')",
+            "code = namespace['main']()",
+            "values = namespace['QUALIFICATION_REFERENCES']",
+            "descriptor = os.open(reference, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)",
+            "with os.fdopen(descriptor, 'w', encoding='utf-8') as stream:",
+            "    stream.write(json.dumps(values, sort_keys=True, separators=(',', ':')) + '\\n')",
+            "raise SystemExit(code)",
+        )
+    )
+    safe_env = {
+        "HOME": str(scratch),
+        "TMPDIR": str(scratch),
+        "PATH": "/usr/bin:/bin",
+        "LANG": "C.UTF-8",
+        "PYTHONDONTWRITEBYTECODE": "1",
+    }
+    cases = {
+        "positive": (0, "MATCH"),
+        "negative": (0, "NO_MATCH"),
+        "insufficient": (1, "UNKNOWN"),
+        "geometry-missing": (1, "MATCH"),
+        "comparison-missing": (1, "MATCH"),
+        "interrupted": (2, None),
+        "corrupt": (2, None),
+        "invalid-request": (2, None),
+    }
+    outcomes: dict[str, object] = {}
+    for scenario, (code, status) in cases.items():
+        reference = scratch / ("setup-research-original-" + scenario + ".json")
+        observed = _run(
+            [
+                str(python),
+                "-I",
+                "-c",
+                probe,
+                str(ROOT / "examples/current_setup_research_demo.py"),
+                scenario,
+                str(reference),
+            ],
+            cwd=scratch,
+            env=safe_env,
+        )
+        if (
+            observed.returncode != code
+            or b"SYNTHETIC SETUP RESEARCH" not in observed.stderr
+            or b"not current market data" not in observed.stderr
+        ):
+            raise RuntimeError("installed setup research scenario failed: " + scenario)
+        original = json.loads(reference.read_bytes())
+        calls = original["producer_calls"]
+        if any(call[1:] != ["INTEGRATED_CURRENT_RESEARCH", False] for call in calls):
+            raise RuntimeError("installed setup research producer profile mismatch")
+        if code == 2:
+            diagnostic = (
+                b"request_invalid\n"
+                if scenario == "invalid-request"
+                else b"setup_research_failed\n"
+            )
+            if (
+                observed.stdout
+                or not observed.stderr.endswith(diagnostic)
+                or (scenario == "invalid-request" and calls)
+            ):
+                raise RuntimeError("installed setup research failure leaked output")
+        else:
+            if (
+                len(calls) != 1
+                or len(observed.stdout) > 1024 * 1024
+                or any(
+                    token in observed.stdout
+                    for token in (
+                        b'"price"',
+                        b'"bars"',
+                        b'"open"',
+                        b'"close"',
+                        b'"body"',
+                        b'"api_key"',
+                        str(scratch).encode(),
+                    )
+                )
+            ):
+                raise RuntimeError("installed setup research bounds/privacy failed")
+            report = json.loads(observed.stdout)
+            identity = report.pop("result_identity_sha256")
+            digest = hashlib.sha256(
+                (
+                    json.dumps(report, sort_keys=True, separators=(",", ":")) + "\n"
+                ).encode()
+            ).hexdigest()
+            base_digest = hashlib.sha256(
+                (
+                    json.dumps(
+                        report["research"], sort_keys=True, separators=(",", ":")
+                    )
+                    + "\n"
+                ).encode()
+            ).hexdigest()
+            if (
+                report["contract_version"] != "agent-current-setup-research@v1"
+                or report["members"][0]["status"] != status
+                or identity != digest
+                or identity != original["same_observation_sdk_identity"]
+                or report["base_research_report_identity_sha256"] != base_digest
+                or base_digest != original["base_research_identity"]
+            ):
+                raise RuntimeError("installed setup research SDK/CLI identity mismatch")
+        outcomes[scenario] = {
+            "exit": code,
+            "candidate_status": status,
+            "producer_calls": len(calls),
+            "installed_sdk_cli_binding": "verified",
+            "stdout_bytes": len(observed.stdout),
+        }
+    return outcomes
+
+
 def verify(wheel: Path, receipt: Path | None, prior_commit: str) -> dict[str, object]:
     global _RUNTIME, _PODMAN_ROOTLESS  # noqa: PLW0603 -- fixed for one verifier invocation
     _RUNTIME = select_runtime(allow_job_engine=True)
@@ -3975,6 +4103,7 @@ def verify(wheel: Path, receipt: Path | None, prior_commit: str) -> dict[str, ob
             python, scratch
         )
         first_inclusion_close = _verify_installed_first_inclusion_close(python, scratch)
+        setup_research = _verify_installed_setup_research(python, scratch)
         config = _run(
             [_engine(), "image", "inspect", image, "--format", "{{json .Config}}"]
         )
@@ -4026,6 +4155,7 @@ def verify(wheel: Path, receipt: Path | None, prior_commit: str) -> dict[str, ob
             "installed_setup_level_range_inclusion": range_inclusion,
             "installed_setup_inclusion_interpretation_v4": inclusion_interpretation_v4,
             "installed_setup_first_inclusion_close": first_inclusion_close,
+            "installed_current_setup_research": setup_research,
             "mount_checks": "owner mapped, wrong UID, broad mode, read-only, symlink",
             "source_substitution": "rejected",
             "interrupted_build_and_run": "rejected; current image remained available",

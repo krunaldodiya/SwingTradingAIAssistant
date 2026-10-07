@@ -11,14 +11,17 @@ Nifty 100 selection or supported explicit stock list: trustworthy research facts
 explainable externally reasoned signals/suggestions or NO_TRADE, then observation
 and demonstrated improvements.
 
-**Sprint 47 is in progress:** [Issue #278](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/278)
-and [Plan 61](plans/61-first-use-gap-reconciliation.md) contain the prepared
+**Sprint 47 is delivered** through PR #281 / main
+`15c007111b4706d5a4fea2627d15766cde9f0698`; Issue #278 is closed/completed.
+[Plan 61](plans/61-first-use-gap-reconciliation.md) contains the accepted
 reconciliation and next-path contract. The baseline is **12 distinct open
 outcomes**, not 12 promised sprints: six primarily before use, four needing owner
-disposition, two after research use. Reviews and ordinary delivery remain pending.
+disposition, two after research use. Planning closes no working-behavior gap.
 
-Next implementation: connect current research and existing causal candidate
-facts from the same admitted observations. G01 delivery would reduce the baseline
+**Sprint 48 is in progress:** [Issue #282](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/282)
+connects current research and existing causal candidate facts from the same
+admitted observations. Focused checks pass; both independent reviews and full
+hosted qualification/delivery remain pending. G01 delivery would reduce the baseline
 to 11; planning alone does not. Further work closes these observable gaps rather
 than automatically extending the descriptive-fact catalogue.
 
@@ -39,8 +42,8 @@ Sprint 46 is fully delivered through PR #275 / main
 `c7abb3a3128f15f340e080857bbebafc9a14ba4e`: both reviews, 8400 tests / 87.84%
 branch coverage, exact main/private publication and complete tracker/receipt
 closeout passed. See the [verified delivery record](roadmap.md#latest-verified-delivery-sprint-46)
-for its bounded claim and retained failure/fixture exception. Sprint 47 is active
-planning/reconciliation; the next runtime implementation has not started.
+for its bounded claim and retained failure/fixture exception. Sprint47 planning
+is delivered; [Sprint48](sprints/sprint-48.md) owns the first runtime bridge.
 
 ## Historical delivery context
 

@@ -109,14 +109,22 @@ def _runtime_identity() -> str:
 
 
 def _project(  # noqa: C901 - explicit admission and causal failures precede projection.
-    result: CurrentStockResearchResultV2, symbol: str, producer_runtime: str
+    result: CurrentStockResearchResultV2,
+    symbol: str,
+    producer_runtime: str,
+    *,
+    expected_question: str = "CURRENT_STRUCTURE",
 ) -> tuple[
     dict[str, object], BharatStockInstrument | None, tuple[str, str, str, str] | None
 ]:
     if type(result) is not CurrentStockResearchResultV2:
         raise ValueError("unexpected setup research result")
     result.canonical_json_bytes()
-    if result.question != "CURRENT_STRUCTURE" or result.symbol != symbol:
+    if (
+        expected_question not in {"CURRENT_STRUCTURE", "INTEGRATED_CURRENT_RESEARCH"}
+        or result.question != expected_question
+        or result.symbol != symbol
+    ):
         raise ValueError("setup research request mismatch")
     if result.runtime_code_identity_sha256 != producer_runtime:
         raise ValueError("setup producer runtime mismatch")
