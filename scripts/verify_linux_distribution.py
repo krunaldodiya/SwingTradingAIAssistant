@@ -3959,6 +3959,200 @@ def _verify_installed_setup_research(python: Path, scratch: Path) -> dict[str, o
     return outcomes
 
 
+def _verify_selection_research_child(child: dict[str, object]) -> None:
+    if (
+        child["contract_version"] != "agent-current-setup-research@v1"
+        or not 1 <= len(child["members"]) <= 10
+        or len(
+            (json.dumps(child, sort_keys=True, separators=(",", ":")) + "\n").encode()
+        )
+        > 1024 * 1024
+    ):
+        raise RuntimeError("installed whole-list child contract invalid")
+    child_body = {k: v for k, v in child.items() if k != "result_identity_sha256"}
+    if (
+        child["result_identity_sha256"]
+        != hashlib.sha256(
+            (
+                json.dumps(child_body, sort_keys=True, separators=(",", ":")) + "\n"
+            ).encode()
+        ).hexdigest()
+    ):
+        raise RuntimeError("installed whole-list child identity invalid")
+
+
+def _verify_selection_research_report(
+    raw_output: bytes, original: dict[str, object], count: int, scenario: str
+) -> None:
+    report = json.loads(raw_output)
+    if set(report) != {
+        "contract_version",
+        "runtime_code_identity_sha256",
+        "selection",
+        "requested_order_identity_sha256",
+        "canonical_order_identity_sha256",
+        "reports",
+        "research_jointly_comparable",
+        "candidate_jointly_comparable",
+        "limitations",
+        "result_identity_sha256",
+    }:
+        raise RuntimeError("installed whole-list schema invalid")
+    identity = report.pop("result_identity_sha256")
+    raw = (json.dumps(report, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    rows = [row for child in report["reports"] for row in child["members"]]
+    if (
+        report["contract_version"] != "agent-current-setup-research-selection@v1"
+        or identity != hashlib.sha256(raw).hexdigest()
+        or identity != original["same_observation_sdk_identity"]
+        or hashlib.sha256(raw_output).hexdigest() != original["whole_output_sha256"]
+        or [row["requested_symbol"] for row in rows]
+        != [f"S{i:03d}" for i in range(count)]
+        or len(report["reports"]) != (count + 9) // 10
+        or report["selection"]["kind"]
+        != ("RETAINED_NIFTY100" if scenario == "default100" else "EXPLICIT_SYMBOLS")
+        or report["requested_order_identity_sha256"]
+        != hashlib.sha256(
+            (
+                json.dumps([f"S{i:03d}" for i in range(count)], separators=(",", ":"))
+                + "\n"
+            ).encode()
+        ).hexdigest()
+    ):
+        raise RuntimeError("installed whole-list identity/order invalid")
+    for child in report["reports"]:
+        _verify_selection_research_child(child)
+    if scenario == "unknown-later":
+        if (
+            rows[10]["status"] != "UNKNOWN"
+            or report["canonical_order_identity_sha256"] is not None
+            or report["candidate_jointly_comparable"]
+            or report["research_jointly_comparable"]
+        ):
+            raise RuntimeError("installed whole-list unknown member lost")
+    elif scenario == "negative":
+        if rows[0]["status"] != "NO_MATCH":
+            raise RuntimeError("installed whole-list negative invalid")
+    elif (
+        any(row["status"] != "MATCH" for row in rows)
+        or not report["candidate_jointly_comparable"]
+        or report["research_jointly_comparable"] != (scenario != "geometry-missing")
+    ):
+        raise RuntimeError("installed whole-list observed member invalid")
+    if scenario == "default100" and (
+        report["selection"]["knowledge_basis"] != "CURRENT_AT_RETRIEVAL"
+        or report["selection"]["selection_identity_sha256"]
+        != report["canonical_order_identity_sha256"]
+        or len(report["selection"]["expected_members"]) != 100
+    ):
+        raise RuntimeError("installed whole-list selector binding invalid")
+
+
+def _verify_installed_selection_research(
+    python: Path, scratch: Path
+) -> dict[str, object]:
+    """Prove the whole-list path in the isolated installed wheel, with exact SDK bytes."""
+    probe = "\n".join(
+        (
+            "import sys, os, pathlib, json, runpy",
+            "import swing_trading_ai_assistant.market_data.setup_research_selection",
+            "import swing_trading_ai_assistant.market_data.cli",
+            "def verify_imports():",
+            "    for name, module in tuple(sys.modules.items()):",
+            "        if name.startswith('swing_trading_ai_assistant') and getattr(module, '__file__', None):",
+            "            if not pathlib.Path(module.__file__).resolve().is_relative_to(pathlib.Path(sys.prefix).resolve()):",
+            "                raise RuntimeError('whole-list import escaped installed environment')",
+            "verify_imports()",
+            "fixture, scenario, reference = sys.argv[1:]",
+            "sys.argv = [fixture, '--scenario', scenario]",
+            "namespace = runpy.run_path(fixture, run_name='installed_qualification')",
+            "code = namespace['main']()",
+            "verify_imports()",
+            "values = namespace['QUALIFICATION_REFERENCES']",
+            "descriptor = os.open(reference, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)",
+            "with os.fdopen(descriptor, 'w', encoding='utf-8') as stream:",
+            "    stream.write(json.dumps(values, sort_keys=True, separators=(',', ':')) + '\\n')",
+            "raise SystemExit(code)",
+        )
+    )
+    safe_env = {
+        "HOME": str(scratch),
+        "TMPDIR": str(scratch),
+        "PATH": "/usr/bin:/bin",
+        "LANG": "C.UTF-8",
+        "PYTHONDONTWRITEBYTECODE": "1",
+    }
+    cases = {
+        "explicit11": (0, 11, None),
+        "default100": (0, 100, None),
+        "unknown-later": (1, 11, None),
+        "negative": (0, 1, None),
+        "geometry-missing": (1, 1, None),
+        "interrupted": (2, 11, b"selection_research_failed\n"),
+        "canonical-conflict": (2, 11, b"request_invalid\n"),
+        "invalid101": (2, 0, b"request_invalid\n"),
+        "selection-unavailable": (1, 0, b"selection_unavailable\n"),
+    }
+    outcomes: dict[str, object] = {}
+    for scenario, (code, count, diagnostic) in cases.items():
+        reference = scratch / ("selection-research-original-" + scenario + ".json")
+        observed = _run(
+            [
+                str(python),
+                "-I",
+                "-c",
+                probe,
+                str(ROOT / "examples/setup_research_selection_demo.py"),
+                scenario,
+                str(reference),
+            ],
+            cwd=scratch,
+            env=safe_env,
+        )
+        if (
+            observed.returncode != code
+            or b"SYNTHETIC WHOLE-LIST RESEARCH" not in observed.stderr
+            or b"not current market data" not in observed.stderr
+        ):
+            raise RuntimeError("installed whole-list scenario failed: " + scenario)
+        original = json.loads(reference.read_bytes())
+        calls = original["producer_calls"]
+        if calls != [
+            [f"S{i:03d}", "INTEGRATED_CURRENT_RESEARCH", False] for i in range(count)
+        ]:
+            raise RuntimeError(
+                "installed whole-list producer count/order/profile invalid"
+            )
+        if diagnostic is not None:
+            if observed.stdout or not observed.stderr.endswith(diagnostic):
+                raise RuntimeError("installed whole-list terminal output invalid")
+        else:
+            if len(observed.stdout) > 11 * 1024 * 1024 or any(
+                token in observed.stdout
+                for token in (
+                    b'"price"',
+                    b'"bars"',
+                    b'"open"',
+                    b'"close"',
+                    b'"body"',
+                    b'"source_bytes"',
+                    b'"api_key"',
+                    str(scratch).encode(),
+                )
+            ):
+                raise RuntimeError("installed whole-list bounds/privacy invalid")
+            _verify_selection_research_report(
+                observed.stdout, original, count, scenario
+            )
+        outcomes[scenario] = {
+            "exit": code,
+            "producer_calls": len(calls),
+            "installed_sdk_cli_binding": "verified",
+            "stdout_bytes": len(observed.stdout),
+        }
+    return outcomes
+
+
 def verify(wheel: Path, receipt: Path | None, prior_commit: str) -> dict[str, object]:
     global _RUNTIME, _PODMAN_ROOTLESS  # noqa: PLW0603 -- fixed for one verifier invocation
     _RUNTIME = select_runtime(allow_job_engine=True)
@@ -4104,6 +4298,7 @@ def verify(wheel: Path, receipt: Path | None, prior_commit: str) -> dict[str, ob
         )
         first_inclusion_close = _verify_installed_first_inclusion_close(python, scratch)
         setup_research = _verify_installed_setup_research(python, scratch)
+        selection_research = _verify_installed_selection_research(python, scratch)
         config = _run(
             [_engine(), "image", "inspect", image, "--format", "{{json .Config}}"]
         )
@@ -4156,6 +4351,7 @@ def verify(wheel: Path, receipt: Path | None, prior_commit: str) -> dict[str, ob
             "installed_setup_inclusion_interpretation_v4": inclusion_interpretation_v4,
             "installed_setup_first_inclusion_close": first_inclusion_close,
             "installed_current_setup_research": setup_research,
+            "installed_whole_selection_research": selection_research,
             "mount_checks": "owner mapped, wrong UID, broad mode, read-only, symlink",
             "source_substitution": "rejected",
             "interrupted_build_and_run": "rejected; current image remained available",

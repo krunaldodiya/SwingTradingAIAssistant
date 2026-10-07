@@ -30,8 +30,10 @@ See the [Sprint 48 delivery record](sprints/sprint-48.md) for exact receipts.
 The finite ledger now has **11 open outcome gaps (G02–G12)**, down from the
 original 12: five primarily before use, four requiring contract disposition,
 two after research use. These are outcomes, not 11 promised sprints. G02's
-exact selection/whole-list boundary is next to refine; this closeout freezes
-no new scope. Real source/workflow, AI interpretation and effectiveness
+exact selection/whole-list boundary is now active [Sprint49](sprints/sprint-49.md)
+under [Plan62](plans/62-exact-selection-whole-list-research.md) and Issue285.
+Its full scope is frozen; review/qualification/delivery remains pending. G02
+stays open. Real source/workflow, AI interpretation and effectiveness
 qualification remain open, as do all eight signal-phase obligations.
 
 | Order | Sprint outcome to select | Boundary |

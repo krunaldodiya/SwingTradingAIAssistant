@@ -28,7 +28,7 @@ from .http import (
     HttpTransportError,
     UrllibHttpTransport,
 )
-from .storage_root_lease import StorageRootLeaseError
+from .storage_root_lease import LeaseOutcome, StorageRootLease, StorageRootLeaseError
 
 CONTRACT_VERSION_V3 = "current-nifty100-bharatstock-capture@v3"
 NIFTY_50_URL = "https://nsearchives.nseindia.com/content/indices/ind_nifty50list.csv"
@@ -393,14 +393,56 @@ def _parse_retained_selection(
     )
 
 
+class SelectionEvidenceUnavailable(ValueError):
+    """Exact retained official selection evidence is missing or unavailable."""
+
+
+def read_retained_current_nifty100_selection_v1(
+    root: Path, request: CaptureRequestV2, *, known_at: datetime
+) -> OfficialSelectionV2:
+    """Read existing official witnesses without acquisition, repair or fallback."""
+    validate_current_capture_request_v2(request)
+    if (
+        not isinstance(root, Path)  # pyright: ignore[reportUnnecessaryIsInstance]
+        or not root.is_absolute()
+        or len(request.members) != 100
+        or type(known_at) is not datetime
+        or known_at.tzinfo is None
+        or request.decision_cutoff > known_at
+    ):
+        raise ValueError("retained selection request invalid")
+    try:
+        selection = _read_retained_selection_v2(root, request, read_only=True)
+    except _RetainedSelectionUnavailable:
+        raise SelectionEvidenceUnavailable from None
+    if selection is None:
+        raise SelectionEvidenceUnavailable
+    if selection.members != request.members:
+        raise SelectionEvidenceUnavailable
+    return selection
+
+
 class _RetainedSelectionUnavailable(ValueError):
     """Retained selection cannot authorize acquisition or exact reuse."""
 
 
 def _read_retained_selection_v2(
-    root: Path, request: CaptureRequestV2
+    root: Path, request: CaptureRequestV2, *, read_only: bool = False
 ) -> OfficialSelectionV2 | None:
-    lease = capture_store._acquire_root(root)  # pyright: ignore[reportPrivateUsage]
+    if read_only:
+        identity = StorageRootLease.admit_existing_private_identity(root)
+        acquired = (
+            None
+            if identity is None
+            else StorageRootLease.try_acquire_existing_identity(root, identity)
+        )
+        lease = (
+            acquired.lease
+            if acquired is not None and acquired.outcome is LeaseOutcome.ACQUIRED
+            else None
+        )
+    else:
+        lease = capture_store._acquire_root(root)  # pyright: ignore[reportPrivateUsage]
     if lease is None:
         raise _RetainedSelectionUnavailable
     try:

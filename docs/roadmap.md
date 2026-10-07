@@ -61,6 +61,15 @@ these outcomes finished or approve their unspecified implementation details.
 
 ### Priority order and next sprint
 
+October7: [Sprint49](sprints/sprint-49.md) /
+[Issue285](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/285)
+now implements exact retained Nifty100 selection/whole-list research and explicit
+1–100-stock orchestration under [Plan62](plans/62-exact-selection-whole-list-research.md).
+Its Goal is active; all twelve acceptance rows and full review/hosted/private
+delivery remain required. G02 stays OPEN and the finite count stays eleven until
+complete delivery. This adds no trading, source/AI qualification or phase claim.
+The earlier Sprint47/48 closeout statements below retain their dated scope.
+
 **Sprint 47 is delivered** through PR #281 and main
 `15c007111b4706d5a4fea2627d15766cde9f0698`; Issue #278 is closed/completed.
 [Plan 61](plans/61-first-use-gap-reconciliation.md) reconciles this checklist
