@@ -61,14 +61,17 @@ these outcomes finished or approve their unspecified implementation details.
 
 ### Priority order and next sprint
 
-October7: [Sprint49](sprints/sprint-49.md) /
-[Issue285](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/285)
-now implements exact retained Nifty100 selection/whole-list research and explicit
-1–100-stock orchestration under [Plan62](plans/62-exact-selection-whole-list-research.md).
-Its Goal is active; all twelve acceptance rows and full review/hosted/private
-delivery remain required. G02 stays OPEN and the finite count stays eleven until
-complete delivery. This adds no trading, source/AI qualification or phase claim.
-The earlier Sprint47/48 closeout statements below retain their dated scope.
+October7: **[Sprint49 G02 is delivered](sprints/sprint-49.md)** through
+[Issue285](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/285) /
+[PR286](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/286), code main
+`c7f4b77c8e43e7c7e2e05514fbf5f0ee2bcbfe9b`. Exact retained Nifty100 selection
+and explicit 1–100-stock research preserve whole-list identity and original G01
+reports under [Plan62](plans/62-exact-selection-whole-list-research.md). All twelve
+rows, both complete exact reviews, 8,513 tests / 87.88% coverage, installed/native/
+prior-wheel/security, main/private publication/fresh pulls and tracker closeout
+pass. The finite count decreases11→10. Actual source/AI qualification and the
+complete signal/product claim remain open; earlier dated checkpoints retain
+their original scope.
 
 **Sprint 47 is delivered** through PR #281 and main
 `15c007111b4706d5a4fea2627d15766cde9f0698`; Issue #278 is closed/completed.
@@ -87,11 +90,12 @@ private publication/pulls passed. Qualified code main is
 `92da97564c11ab956427851154dee94124547b12`; Issue/Project/milestone are closed/Done.
 See the [Sprint 48 delivery record](sprints/sprint-48.md) for exact receipts.
 
-The finite ledger now has **11 open outcome gaps (G02–G12)**, down from the
-original 12: five primarily before use, four requiring contract disposition,
-two after research use. These are outcomes, not 11 promised sprints. G02's
-exact selection/whole-list boundary is next to refine; this closeout freezes
-no new scope. Real source/workflow, AI interpretation and effectiveness
+The finite ledger now has **10 open outcome gaps (G03–G12)**, down from the
+original 12: four primarily before use, four requiring contract disposition,
+two after research use. These are outcomes, not 10 promised sprints. G01/G02
+are closed; remaining eligibility/safety, policy and actual source/AI workflow
+dependencies need their own bounded contracts and evidence. This closeout
+freezes no new scope. Real source/workflow, AI interpretation and effectiveness
 qualification remain open, as do all eight signal-phase obligations.
 
 | Priority | Outcome | Dependency and completion rule |
@@ -113,14 +117,28 @@ bounded slice allocation. Completed outcomes reduce that list; additions name
 their source and reason. Earlier broad forecasts are historical assumptions,
 not a current countdown or a reason to keep the same estimate after delivery.
 
-### Latest verified delivery: Sprint 48
+### Latest verified delivery: Sprint49
+
+[Sprint49](sprints/sprint-49.md) delivers exact retained current-at-retrieval
+default Nifty100 and explicit 1–100-stock descriptive research at code main
+`c7f4b77c8e43e7c7e2e05514fbf5f0ee2bcbfe9b`.
+[Quality37591216597/1](https://github.com/krunaldodiya/SwingTradingAIAssistant/actions/runs/37591216597),
+[main admission37597028474/1](https://github.com/krunaldodiya/SwingTradingAIAssistant/actions/runs/37597028474)
+and [private publication37597061287/1](https://github.com/krunaldodiya/SwingTradingAIAssistant/actions/runs/37597061287)
+all pass, with both exact reviews, 8,513 tests / 87.88% coverage and complete
+installed/native/pull/tracker receipts. G01/G02 are closed; G03–G12 remain open.
+This is component delivery, not complete source/AI/product qualification.
+The immutable qualified image remains labelled with that runtime commit; this
+Markdown reconciliation does not create a newly qualified runtime image.
+
+### Earlier verified delivery: Sprint48
 
 [Sprint 48](sprints/sprint-48.md) delivers the descriptive same-observation
 SDK/CLI bridge at code main `92da97564c11ab956427851154dee94124547b12`.
 Quality run [37562606282](https://github.com/krunaldodiya/SwingTradingAIAssistant/actions/runs/37562606282),
 main admission [37569558508](https://github.com/krunaldodiya/SwingTradingAIAssistant/actions/runs/37569558508)
 and private publication [37569582049](https://github.com/krunaldodiya/SwingTradingAIAssistant/actions/runs/37569582049)
-all pass. G01 is closed; G02–G12 remain open. This is component delivery,
+all pass. At that Sprint48 checkpoint G01 closed and G02–G12 remained open. This is component delivery,
 not the complete Nifty 100 suggestion workflow or signal-phase completion.
 
 ### Previous verified delivery: Sprint 46

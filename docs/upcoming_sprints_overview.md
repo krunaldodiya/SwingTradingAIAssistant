@@ -15,8 +15,8 @@ and demonstrated improvements.
 `15c007111b4706d5a4fea2627d15766cde9f0698`; Issue #278 is closed/completed.
 [Plan 61](plans/61-first-use-gap-reconciliation.md) contains the accepted
 reconciliation and next-path contract. Its original baseline was **12 distinct
-open outcomes**, not 12 promised sprints. Sprint 48 closes one actual behavior
-gap; the current remaining count is below. Planning closed no working gap.
+open outcomes**, not 12 promised sprints. Sprint48 and Sprint49 close two actual
+behavior gaps; the current remaining count is below. Planning closed no working gap.
 
 **Sprint 48 G01 is delivered:** [Issue #282](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/282)
 and [PR #283](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/283)
@@ -27,13 +27,21 @@ private publication/pulls passed. Qualified code main is
 `92da97564c11ab956427851154dee94124547b12`; Issue/Project/milestone are closed/Done.
 See the [Sprint 48 delivery record](sprints/sprint-48.md) for exact receipts.
 
-The finite ledger now has **11 open outcome gaps (G02–G12)**, down from the
-original 12: five primarily before use, four requiring contract disposition,
-two after research use. These are outcomes, not 11 promised sprints. G02's
-exact selection/whole-list boundary is now active [Sprint49](sprints/sprint-49.md)
-under [Plan62](plans/62-exact-selection-whole-list-research.md) and Issue285.
-Its full scope is frozen; review/qualification/delivery remains pending. G02
-stays open. Real source/workflow, AI interpretation and effectiveness
+**[Sprint49 G02 is delivered](sprints/sprint-49.md)** under
+[Plan62](plans/62-exact-selection-whole-list-research.md), Issue285 and PR286,
+code main `c7f4b77c8e43e7c7e2e05514fbf5f0ee2bcbfe9b`. Exact retained
+CURRENT_AT_RETRIEVAL default Nifty100 and explicit 1–100-stock orchestration pass
+all twelve rows, both complete exact reviews, 8,513 tests / 87.88% coverage,
+installed/native/prior-wheel/security, main/private publication/fresh pulls and
+Issue/Project/milestone closeout. The Sprint49 record preserves full receipts
+and earlier failures; this Markdown reconciliation does not relabel that image.
+
+The finite ledger now has **10 open outcome gaps (G03–G12)**, down from the
+original 12: four primarily before use, four requiring contract disposition,
+two after research use. These are outcomes, not 10 promised sprints. G01/G02
+are closed. Remaining eligibility/safety, policy and actual source/AI workflow
+dependencies need their own contracts and evidence; no new implementation sprint
+is frozen here. Real source/workflow, AI interpretation and effectiveness
 qualification remain open, as do all eight signal-phase obligations.
 
 | Order | Sprint outcome to select | Boundary |

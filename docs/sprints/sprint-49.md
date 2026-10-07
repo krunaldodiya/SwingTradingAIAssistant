@@ -1,5 +1,60 @@
 # Sprint 49: exact selection and whole-list current research
 
+## Verified delivery checkpoint — October 7, 2026
+
+**G02 is delivered.** [Issue #285](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/285)
+is closed/completed with all twelve criteria checked; its Delivery Project item
+is Done and milestone 41 is closed with no open issue. The complete milestone
+issue list and GraphQL counts establish open 0 / closed 1. The initially stale
+REST summary counter and the supported reconciliation readbacks are retained.
+
+Runtime [PR #286](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/286)
+merged exact reviewed head `381cb964710114697fdb361baa1d6ed548955388` as code main
+`c7f4b77c8e43e7c7e2e05514fbf5f0ee2bcbfe9b`, tree
+`ba77abc1ac1957dc09956178f3995a4b6978d841`. Both complete independent current
+domain and privacy/provenance reviews pass. GitGuardian passes; automatic Codex
+review completed with no inline/review findings. The initial P2 and every failed
+focused/static check remain retained; the six-case read-only reproduction and
+repair preserve all accepted behavior and existing capture initialization.
+
+| Required receipt | Verified result |
+| --- | --- |
+| [Full quality37591216597/1](https://github.com/krunaldodiya/SwingTradingAIAssistant/actions/runs/37591216597) | 8,513 selected tests passed in 2,583.54 seconds; 87.88% aggregate branch coverage; all statics, sdist and wheel. Executed GitHub runner group 0 / ubuntu-24.04. |
+| Exact PR admission | Tested merge `cb56dc583ede1d35cb004cde494289c7a4464fe7` has the reviewed tree and exact base/head parents; one strict notice and full record name this run/attempt and unchanged workflow. |
+| Installed/native Linux | All nine whole-list scenarios, all previous installed qualifications, native outcomes, hostile mount/source/interruption checks and prior-wheel compatibility pass. Original isolated installed SDK/CLI identities, member count/order/profile and privacy bounds are checked. |
+| [Main admission37597028474/1](https://github.com/krunaldodiya/SwingTradingAIAssistant/actions/runs/37597028474) | Native exact PR286/run37591216597/1 reuse passes, including merge integrity; no full fallback executed. |
+| [Private publication37597061287/1](https://github.com/krunaldodiya/SwingTradingAIAssistant/actions/runs/37597061287) | Exact code main rebuilt and requalified; fresh tag then digest pulls, labels/image identity, restricted network-none/read-only/nonroot help, private visibility and overall successful logout all pass. |
+
+The immutable private tag is `0.1.0-c7f4b77c8e43e7c7e2e05514fbf5f0ee2bcbfe9b`.
+Registry digest:
+`ghcr.io/krunaldodiya/swingtradingaiassistant@sha256:d0f0f9ea5a5d52dd745410ec23536c40acd8c09039c640e51cabb973348d6419`.
+Wheel SHA256 `4fb8d865676ac6d209d6aa0e8b7b7d034cb95219ee42d8d117bef9ae5f8bba05`;
+requirements SHA256 `04fcc498a40f141db3afac2d51500045c4975cf3dcc6f779b3ed9bc440526030`.
+The CLI credential lacks optional package-read scope; the existing publication
+workflow and authenticated package UI independently verify private visibility.
+No scope or access setting was expanded.
+
+All A1–A12 evidence and complete exact run/attempt archives are retained in the
+owner-private evidence directory listed below. Local main was fast-forwarded
+after ancestry checks; the owner checkout and all previous worktrees remain
+unchanged. This small Markdown closeout stays under Issue285 and uses local
+diffcheck, proportionate exact independent review, permitted lightweight
+security and normal PR delivery. It does not require heavy docs CI/CD or
+relabel the qualified runtime image as a later documentation commit.
+
+The finite ledger decreases **11→10 open outcomes (G03–G12)**. These are outcomes,
+not promised sprints. Qualification uses fixed synthetic collaborators and
+retained synthetic selection witnesses. Actual authorized source/workflow G08,
+AI/historical G09, eligibility/policy/lifecycle/integration/observation gaps,
+complete signal/product readiness, five Future issues, Windows and Issue250
+retain their separate requirements. No new policy, threshold, provider or
+external AI authority follows from this delivery.
+
+The frozen working-slice and initial verification sections below preserve their
+original active/pending statements as history; this checkpoint supersedes them.
+
+## Frozen working slice and initial contract (historical)
+
 October 7, 2026. [Issue #285](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/285),
 milestone 41, private Delivery Project. Owner/risk owner Krunal Dodiya; R3.
 [Plan 62](../plans/62-exact-selection-whole-list-research.md) freezes all twelve
