@@ -3,9 +3,11 @@
 October 6, 2026. [Issue #278](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/278),
 Sprint 47 / milestone 39, private Delivery Project. Owner and risk owner: Krunal
 Dodiya. R3 planning/provenance. Base `03ba7e1b921da8bbdef1c4b4de46d1d4472f30ce`.
-Authority: the owner continued after roadmap PR #277. This specification is a
-planning candidate until its exact-source reviews and ordinary delivery close.
-It specifies the next bounded implementation; it does not implement it.
+Authority: the owner continued after roadmap PR #277. Sprint 47 planning was
+delivered through PR #281 / main `15c007111b4706d5a4fea2627d15766cde9f0698`.
+The frozen G01 contract below was subsequently implemented and qualified by
+[Sprint 48](../sprints/sprint-48.md) / Issue #282 / PR #283. The original planning
+boundaries and acceptance matrix remain the contract, not a whole-tool claim.
 
 ## Evidence boundary
 
@@ -52,8 +54,8 @@ above is reusable; the named gap's closure evidence supplies the missing claim.
 | Roadmap outcome | Reuse now | Remaining gap IDs |
 | --- | --- | --- |
 | 1. Choose exact stocks | Current-at-retrieval selector/capture; bounded explicit research and canonical mappings | G02, G03; no 10-to-100 extrapolation or membership-as-eligibility. |
-| 2. Coherent current research | Agent V1–V5, independent price/Structure/Volume/RS/context | G01, G06, G07, G08; retain independent bases rather than manufacture comparability. |
-| 3. Explainable candidates | Public latest detection and bounded pair facts | G01, G04, G05; facts alone do not define generation or active validity. |
+| 2. Coherent current research | Agent V1–V5 plus delivered G01 same-observation bridge, independent price/Structure/Volume/RS/context | G06, G07, G08; retain independent bases rather than manufacture comparability. |
+| 3. Explainable candidates | Public latest detection, delivered G01 same-observation bridge and bounded pair facts | G04, G05; facts alone do not define generation or active validity. |
 | 4. Safety and eligibility | Existing identity, mapping, data/price and source admission | G03; missing listing/history/liquidity/price/event requirements need an evidence-backed contract. |
 | 5. Understandable external-AI output | Agent fact reports and structured pair-response checkers | G06, G09; synthetic caller responses do not qualify a real suggestion policy. |
 | 6. Practical end-to-end workflow | Installed bounded explicit-list commands and private source workflows | G02, G08, G10; default and explicit lists both need their declared success/negative/unknown paths. |
@@ -62,8 +64,11 @@ above is reusable; the named gap's closure evidence supplies the missing claim.
 
 ## Finite remaining outcomes
 
-There are **12 distinct open outcome gaps**, counted once despite appearing in
-several checklist rows. BEFORE means before the full first-use claim named in
+As of October 7, Sprint 48 closes G01 with the exact delivery evidence in its
+[record](../sprints/sprint-48.md). The original baseline was 12 open outcomes;
+**11 distinct outcome gaps remain open (G02–G12)**, counted once despite appearing
+in several checklist rows. G01 is retained below as CLOSED for an auditable
+countdown. BEFORE means before the full first-use claim named in
 that row. OWNER means a required contract/disposition decision for that claim,
 not optional safety. AFTER can follow qualified research use, with its own
 before-real-money/performance/phase-completion gates intact. A research-only
@@ -71,7 +76,7 @@ prefix does not satisfy the complete signal/suggestion product goal.
 
 | ID / stage | Exact outcome still required | Dependencies | Observable closure evidence |
 | --- | --- | --- | --- |
-| G01 / BEFORE | One same-observation current research report with existing causal candidate facts | Existing current producer/report and Plan 47 | Next-path contract below implemented and qualified through SDK/installed public CLI, negative/unknown/integrity paths and exact full delivery. |
+| G01 / CLOSED — Sprint 48 | One same-observation current research report with existing causal candidate facts | Existing current producer/report and Plan 47 | SDK/installed public CLI, all nine adversarial rows, two exact reviews, 8453 tests / 87.85% coverage, main/private release and tracker receipts verified; see the Sprint 48 record. Synthetic qualification does not close G08/G09. |
 | G02 / BEFORE default-list use | Exact point-in-time default Nifty 100 selection into whole-list research, plus supported explicit-list bounds | Existing selector/capture; G01 | Versioned selector knowledge/membership and complete ordered-list orchestration; every member accounted for, bounds/partition/failure semantics demonstrated, no fake aggregate/comparability. |
 | G03 / OWNER, before actionable suggestion | Objective capability-specific eligibility/safety evidence | Existing canonical/source admission | Accepted listing/history, mappings, data quality, liquidity/turnover, price integrity and event-risk requirements, source authority/knowledge times, fail-closed implementation and adversarial evidence. No arbitrary threshold or exemption here. |
 | G04 / OWNER, before active/actionable signal | Generation, confirmation, validity/expiry, correction and duplicate policy | G03; existing detection/pair facts | One explicit versioned decision policy with causal accepted transitions, no-trade/unknown rules and demonstrated information need; independently qualified without promoting age or level inclusion into a trade rule. |
@@ -84,27 +89,30 @@ prefix does not satisfy the complete signal/suggestion product goal.
 | G11 / AFTER research use; before real-money/performance claim | Authorized paper observation and measured improvement | Qualified G10; chosen versioned policy | Retained opportunities, decisions/no-trade and later outcomes with contemporaneous evidence, corrections, timing/execution/costs and a stated observation interval. No return claim from synthetic or incomplete observations. |
 | G12 / AFTER; before signal-phase closeout | Every Plan 47 outcome delivered or explicitly owner-dispositioned | All applicable preceding gaps | Exact eight-outcome audit, remaining analytical/research/AI obligations resolved, independent review/gates and live tracker agree. Capital/portfolio expansion remains a separate segment, not silently removed. |
 
-Six gaps have BEFORE as their primary stage, four have OWNER, two have AFTER.
+The remaining gaps have five BEFORE primary stages, four OWNER and two AFTER.
+The original six BEFORE stages included the now-closed G01.
 Dependencies are for the affected claim: G03–G09 do not block G01's explicitly
 descriptive research-only bridge. They do block claims that need their evidence.
-G01 is the sole implementation-ready next slice. Distant gaps are refined at
-their decision point; this plan does not pretend to specify their policies.
+G01 was the sole implementation-ready slice and is now delivered. G02 is the
+next dependency to refine; no new contract, list expansion or sprint is frozen
+by this closeout. Distant gaps are refined at their decision point; this plan
+does not pretend to specify their policies.
 
-This is a new evidence-backed baseline, **not 12 promised sprints**. Sprint 47's
-planning completion does not close a working-behavior gap. G01 delivery reduces
-12 to 11 unless separately accepted discoveries change the baseline. A gap
-closes only on its named evidence, not because a document or helper exists.
+This is an evidence-backed outcome ledger, **not a promised sprint count**.
+Sprint 47 planning closed no working-behavior gap. Verified Sprint 48 G01
+delivery reduces the original baseline from 12 to 11; no gap was added or
+removed by rescoping. A gap closes only on its named evidence, not because a document or helper exists.
 Splitting work preserves its parent gap; merging slices does not hide unresolved
 outcomes. Additions identify source, necessity and owner/Issue before the count
-changes. Only G01 is allocated to the next implementation sprint; a defensible
-whole-tool sprint estimate requires the remaining owner decisions and slice
-sizes. The old 20–30 forecast is not refreshed or repeated as a countdown.
+changes. No next implementation sprint is allocated by this closeout; a
+defensible whole-tool sprint estimate requires the remaining contract decisions
+and slice sizes. The old 20–30 forecast is not refreshed or repeated as a countdown.
 
 ## All eight signal-phase obligations retained
 
 | Plan 47 outcome | Current disposition / remaining evidence |
 | --- | --- |
-| 1. Causal public detection | Delivered narrow latest-BOS path; G01 joins it to current research, G08 qualifies actual use. No broad setup catalogue. |
+| 1. Causal public detection | Delivered narrow latest-BOS path and G01 current-research bridge; G08 still qualifies actual use. No broad setup catalogue. |
 | 2. Necessary analytical coverage | Delivered Structure/Price Action/Volume/RS/context reused; G03/G07 explicitly resolve remaining family needs. |
 | 3. Generation responsibility/identity | Observation-bound identity delivered, external reasoning ownership unchanged; G04/G06 remain. |
 | 4. Confirmation/invalidation/expiry/duplicates | Pivot/BOS timing and descriptive anchored facts delivered; G04/G05 own actual policy and correction/duplicate semantics. |

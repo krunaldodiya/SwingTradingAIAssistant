@@ -64,18 +64,26 @@ these outcomes finished or approve their unspecified implementation details.
 **Sprint 47 is delivered** through PR #281 and main
 `15c007111b4706d5a4fea2627d15766cde9f0698`; Issue #278 is closed/completed.
 [Plan 61](plans/61-first-use-gap-reconciliation.md) reconciles this checklist
-and freezes the next working path. The accepted baseline has **12 distinct open
+and freezes the next working path. The original accepted baseline had **12 distinct open
 outcomes**, with dependencies and observable closure evidence: six primarily
 before use, four needing owner disposition, two after research use. These are
 not 12 promised sprints; planning completion does not close a behavior gap.
 
-**Sprint 48 is in progress:** [Issue #282](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/282)
-and the [Sprint48 record](sprints/sprint-48.md) implement G01, joining current research and existing causal candidate
-facts from the same admitted observations, without another calculation or trading
-rule. Delivery of that G01 path reduces the baseline to 11 only after every
-criterion and receipt is verified. Focused checks pass; both fresh independent
-reviews and hosted full qualification/delivery remain pending. Plan 61 preserves
-every first-use and signal-phase obligation.
+**Sprint 48 G01 is delivered:** [Issue #282](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/282)
+and [PR #283](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/283)
+join current research and existing causal candidate facts from the same admitted
+observations. Both independent exact reviews, GitGuardian, **8453 tests / 87.85%
+coverage**, installed SDK/CLI/native Linux qualification, main admission and
+private publication/pulls passed. Qualified code main is
+`92da97564c11ab956427851154dee94124547b12`; Issue/Project/milestone are closed/Done.
+See the [Sprint 48 delivery record](sprints/sprint-48.md) for exact receipts.
+
+The finite ledger now has **11 open outcome gaps (G02–G12)**, down from the
+original 12: five primarily before use, four requiring contract disposition,
+two after research use. These are outcomes, not 11 promised sprints. G02's
+exact selection/whole-list boundary is next to refine; this closeout freezes
+no new scope. Real source/workflow, AI interpretation and effectiveness
+qualification remain open, as do all eight signal-phase obligations.
 
 | Priority | Outcome | Dependency and completion rule |
 | --- | --- | --- |
@@ -96,7 +104,17 @@ bounded slice allocation. Completed outcomes reduce that list; additions name
 their source and reason. Earlier broad forecasts are historical assumptions,
 not a current countdown or a reason to keep the same estimate after delivery.
 
-### Latest verified delivery: Sprint 46
+### Latest verified delivery: Sprint 48
+
+[Sprint 48](sprints/sprint-48.md) delivers the descriptive same-observation
+SDK/CLI bridge at code main `92da97564c11ab956427851154dee94124547b12`.
+Quality run [37562606282](https://github.com/krunaldodiya/SwingTradingAIAssistant/actions/runs/37562606282),
+main admission [37569558508](https://github.com/krunaldodiya/SwingTradingAIAssistant/actions/runs/37569558508)
+and private publication [37569582049](https://github.com/krunaldodiya/SwingTradingAIAssistant/actions/runs/37569582049)
+all pass. G01 is closed; G02–G12 remain open. This is component delivery,
+not the complete Nifty 100 suggestion workflow or signal-phase completion.
+
+### Previous verified delivery: Sprint 46
 
 [Issue #274](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/274) /
 [Plan 60](plans/60-first-inclusion-close.md) is fully delivered through
