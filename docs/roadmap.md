@@ -61,12 +61,15 @@ these outcomes finished or approve their unspecified implementation details.
 
 ### Priority order and next sprint
 
-**Sprint51 is in progress:** [Issue290](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/290)
-and [Plan64](plans/64-retained-stock-observation-workflow.md) combine current
-observation recording, exact retained readback, comparison, negative/recovery
-paths and installed instructions in one working delivery. Software and actual
-source/session evidence remain separate; G03–G12 stay open until each named
-closure condition is proven.
+**Sprint 51 is delivered:** [Issue #290](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/290)
+and [PR #291](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/291)
+delivered the usable retained observation and comparison workflow under
+[Plan 64](plans/64-retained-stock-observation-workflow.md).
+
+**Sprint 52 is in progress:** [Issue #292](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/292)
+and [Plan 65](plans/65-supported-signal-decisions.md) tackle Group 2: Supported
+Signal Decisions, establishing objective stock eligibility/safety gates (G03)
+and setup-to-signal decision rules (G04).
 
 October7 accepted owner course correction: related tasks belong in usable
 delivery groups, with independent work in the same group allowed in parallel.

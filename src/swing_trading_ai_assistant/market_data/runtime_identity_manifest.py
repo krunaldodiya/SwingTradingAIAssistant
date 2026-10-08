@@ -1,4 +1,4 @@
-"""Generated source inventory for current-cohort runtime identity verification."""
+"""Source-at-rest identities for the closed generic market data inventory."""
 
 from typing import Final
 
@@ -107,6 +107,11 @@ MARKET_DATA_RUNTIME_SOURCE_SHA256_V1: Final[dict[str, str]] = {
     "setup_research_selection_runtime_identity_manifest.py": "02904a25d155df3c11486b4129dcbcbea0a81135263cc47c5795c9cfb1bb7f6e",
     "setup_screen.py": "99879e80ba7f7b353e9dab1491244f5289ecb72cf11fa4defbddb2d734246a8c",
     "setup_screen_runtime_identity_manifest.py": "51c305acc3dc668a3d6241d61d0865edb93d1cc2fe5cf4db31d3beea77a3b441",
+    "signal_decisions.py": "f9336e28df546899acbbe038e9e5c631ca831f231293a0b7addf16214af1912d",
+    "signal_decisions_cli.py": "c7b8587e551b7e949401bfce027ec9018ce6e3f26862a42c715d7976e2c9c89c",
+    "signal_decisions_runtime_identity_manifest.py": "370998758f9549f6b30e61bdc40b1b1b2383c6e228b3ab810520079c5e519fc4",
+    "stock_eligibility.py": "8264e6671b456a66ca4c5a61f07cc6699ddf83189025c76f72c5685931adf393",
+    "stock_eligibility_runtime_identity_manifest.py": "7d60ad04ae638cbeaafd1164c10367256e02e6f5e011f6e2cb042e3fbed3c4f2",
     "stock_observations.py": "01e59ddaa39d3d0020c5e7ee51dfa5a88a0ffee6d5f950f88f2a3ceabe0d585e",
     "stock_observations_cli.py": "315313510d849238b105c29e3f3efad2dce1c4db984f3e6f80eed561f56c5644",
     "stock_observations_runtime_identity_manifest.py": "5d842365031ea3a7004d9ac2dfd8d220534ef259e840b2f60cc3b2296d11f198",
