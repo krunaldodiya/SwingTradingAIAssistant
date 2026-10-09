@@ -66,7 +66,7 @@ Policy identifier: `supported-signal-safety-policy@v1`. Values are fixed in code
 
 The INR denomination applies only after exact `NSE_EQ` identity is established. The policy reports calculated threshold comparison values as derived evidence; it does not redistribute provider payloads. Circuit and spread threshold checks compare the underlying Decimal values directly, without accepting a rounded quotient as evidence. The rule never applies to another exchange, segment or asset class.
 
-Before any quote Decimal is canonicalized, rendered or used in policy arithmetic, the strict adapter requires a finite representation of at most 192 Decimal-object bytes, 128 coefficient digits, exponent from -128 through 128, and at most 258 fixed-point characters. A violation is malformed quote evidence and therefore yields the closed `UNKNOWN` path without constructing attacker-sized text or arithmetic precision.
+Before any Upstox quote or BharatStock history Decimal is canonicalized, rendered or used in policy arithmetic, its strict adapter requires a finite representation of at most 192 Decimal-object bytes, 128 coefficient digits, exponent from -128 through 128, and at most 258 fixed-point characters. Upstox count and timestamp integers must be nonnegative and at most `2^63 - 1`. A violation is malformed provider evidence and therefore yields the closed `UNKNOWN` path without constructing attacker-sized text, arithmetic precision or public-output fields.
 
 Eligibility precedence is fixed: local integrity failure raises only to the closed public operator boundary; the first proved safety-policy failure is `INELIGIBLE` and ends later provider effects; absent a proved failure, any mandatory unavailable or invalid source/evidence is `UNKNOWN`; `ELIGIBLE` requires every rule to pass. A lower-priority provider effect is not opened after an earlier policy or source failure.
 
@@ -83,7 +83,7 @@ A result may be `RESEARCH_CANDIDATE` only when all of the following are true:
 5. The current relation to the original broken high is observed and `ABOVE`.
 6. The unchanged original supporting `SWING_LOW` / `HL` is represented in the current structure, supplies a valid protective-stop reference, and the current quote price is strictly above that reference.
 
-A demonstrated causal failure (changed event, invalidation, stale age, non-`ABOVE` relation, or current price at/below the structural stop) produces `NO_TRADE`. Missing, revised, non-comparable or unsupported pair evidence produces `UNKNOWN`. The output names the structural stop as a reference and its daily-close invalidation condition; it is not an order instruction, broker stop, position size, target, or loss limit.
+A replay, demonstrated invalidation, stale age, non-`ABOVE` relation, or current price at/below the structural stop produces `NO_TRADE`. A non-`SAME_EVENT` continuity result other than replay, including changed, revised, non-comparable or unsupported original-event representation, produces `UNKNOWN` because the causal comparison is not established. The output names the structural stop as a reference and its daily-close invalidation condition; it is not an order instruction, broker stop, position size, target, or loss limit.
 
 ## G07 analytical-family disposition
 
@@ -143,7 +143,7 @@ Existing V2 schemas, retained observations, BharatStock capture contracts, causa
 | --- | --- |
 | Full positive | Exact local admission, source-bound quote/history/actions, every safety rule pass, same causal event, age 1–5, `ABOVE`, unchanged supporting low and price above reference yield `RESEARCH_CANDIDATE` with a complete ledger. |
 | Safety negatives | Independently show below history/turnover/depth/price/circuit/action thresholds yield `INELIGIBLE`/`NO_TRADE` and name the actual failed rule. |
-| Causal negatives | Invalidated, changed/replayed/non-comparable event, age 0 or 6, `AT`/`BELOW`, unavailable support or quote at/below reference produce their frozen `NO_TRADE` or `UNKNOWN` outcome. |
+| Causal negatives | Replay, invalidation, age 0 or 6, `AT`/`BELOW`, or quote at/below reference produce `NO_TRADE`; changed/revised/non-comparable continuity and unavailable support produce `UNKNOWN`. |
 | Missing/conflicting evidence | Missing token, 401/403/429, transport failure, stale/provider time conflict, history end mismatch, malformed action/quote, and unavailable retained records remain typed `UNKNOWN`, with no provider fallback. |
 | Source substitution and schema abuse | Wrong ISIN, response symbol/key/token mismatch, duplicate JSON keys, unknown/oversized/deep payload, bad number/timestamp, bad depth and changed circuit relation fail closed without raw output. |
 | Bounds and precedence | Exact threshold and limit-plus-one checks cover 252 sessions, 20 turnover rows, INR 10,000,000, INR 20, 2%, seven days, age 1/5 and output 128 KiB. Earlier mandatory failures prevent later provider effects. |

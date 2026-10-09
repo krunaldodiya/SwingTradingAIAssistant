@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from datetime import UTC, datetime
 from decimal import Decimal
 
@@ -237,3 +238,23 @@ def test_quote_client_accepts_decimal_representation_at_exact_boundary() -> None
     quote = client.fetch(_ISIN, _SYMBOL, _ACCESS_TOKEN)
 
     assert quote.last_price == Decimal("102")
+
+
+def test_quote_client_rejects_oversized_integer_before_canonicalization() -> None:
+    prior_limit = sys.get_int_max_str_digits()
+    try:
+        sys.set_int_max_str_digits(0)
+        oversized = b"9" * 70_000
+        payload = _payload()
+        payload = payload.replace(
+            b'"total_buy_quantity":15000', b'"total_buy_quantity":' + oversized
+        )
+        payload = payload.replace(
+            b'"total_sell_quantity":12000', b'"total_sell_quantity":' + oversized
+        )
+        client, _ = _client(payload)
+
+        with pytest.raises(UpstoxFullQuoteCorruptError):
+            client.fetch(_ISIN, _SYMBOL, _ACCESS_TOKEN)
+    finally:
+        sys.set_int_max_str_digits(prior_limit)

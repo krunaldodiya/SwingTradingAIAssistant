@@ -593,6 +593,8 @@ def _history_valid(
         return None
     try:
         value.__post_init__()
+        for row in value.rows:
+            row.__post_init__()
     except (TypeError, ValueError):
         return None
     if (

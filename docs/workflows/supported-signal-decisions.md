@@ -92,10 +92,10 @@ invalidation condition for that structural reference. It calls out that
 not proof of validity, profitability, or future return.
 
 `NO_TRADE` names the proven failed safety or causal condition. For example, it
-can report a circuit or turnover failure, an event blackout, a changed or
+can report a circuit or turnover failure, an event blackout, a replayed or
 invalidated setup, a stale candidate age, a completed close at/below the broken
 high, or a current quote at/below the structural reference. `UNKNOWN` identifies
-missing, revised, non-comparable, stale, malformed, unavailable, or
+changed, missing, revised, non-comparable, stale, malformed, unavailable, or
 identity-conflicting evidence. These states give an AI harness enough factual
 material to explain a decision without inventing market facts.
 

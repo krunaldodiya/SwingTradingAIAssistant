@@ -36,6 +36,9 @@ _MIN_DECIMAL_EXPONENT: Final = -128
 _MAX_DECIMAL_EXPONENT: Final = 128
 _MAX_CANONICAL_DECIMAL_CHARACTERS: Final = 258
 _MAX_DECIMAL_OBJECT_BYTES: Final = 192
+_MAX_PROVIDER_INTEGER: Final = (1 << 63) - 1
+_MIN_PROVIDER_INTEGER: Final = -(1 << 63)
+_MAX_JSON_DECIMAL_CHARACTERS: Final = 512
 _QUOTE_FIELDS: Final = frozenset(
     {
         "ohlc",
@@ -141,10 +144,10 @@ class UpstoxFullQuoteV3:
             or self.lower_circuit_limit >= self.upper_circuit_limit
             or type(self.total_buy_quantity) is not int
             or type(self.total_sell_quantity) is not int
-            or self.total_buy_quantity < 0
-            or self.total_sell_quantity < 0
+            or not 0 <= self.total_buy_quantity <= _MAX_PROVIDER_INTEGER
+            or not 0 <= self.total_sell_quantity <= _MAX_PROVIDER_INTEGER
             or type(self.last_trade_time_millis) is not int
-            or self.last_trade_time_millis < 0
+            or not 0 <= self.last_trade_time_millis <= _MAX_PROVIDER_INTEGER
             or _DIGEST.fullmatch(self.response_sha256) is None
             or _DIGEST.fullmatch(self.quote_identity_sha256) is None
         ):
@@ -262,7 +265,8 @@ def _parse_quote(  # noqa: C901 - strict closed provider schema validation
         payload = json.loads(
             response.body.decode("utf-8"),
             object_pairs_hook=_unique_object,
-            parse_float=Decimal,
+            parse_float=_bounded_json_decimal,
+            parse_int=_bounded_json_int,
             parse_constant=_reject_constant,
         )
         _assert_depth(payload)
@@ -440,6 +444,11 @@ def _nonnegative_decimal_value(value: object) -> Decimal:
 def _finite_decimal_value(value: object) -> Decimal:
     if type(value) not in {int, Decimal}:
         raise UpstoxFullQuoteCorruptError("full quote response corrupt")
+    if (
+        type(value) is int
+        and not _MIN_PROVIDER_INTEGER <= value <= _MAX_PROVIDER_INTEGER
+    ):
+        raise UpstoxFullQuoteCorruptError("full quote response corrupt")
     result = Decimal(cast(int | Decimal, value))
     if not _bounded_decimal_representation(result) or abs(result) > _MAX_DECIMAL:
         raise UpstoxFullQuoteCorruptError("full quote response corrupt")
@@ -447,7 +456,7 @@ def _finite_decimal_value(value: object) -> Decimal:
 
 
 def _nonnegative_int(value: object) -> int:
-    if type(value) is not int or value < 0:
+    if type(value) is not int or not 0 <= value <= _MAX_PROVIDER_INTEGER:
         raise UpstoxFullQuoteCorruptError("full quote response corrupt")
     return value
 
@@ -491,6 +500,24 @@ def _bounded_decimal_representation(value: object) -> bool:
         else 2 - exponent
     ) + sign
     return fixed_characters <= _MAX_CANONICAL_DECIMAL_CHARACTERS
+
+
+def _bounded_json_decimal(value: str) -> Decimal:
+    if type(value) is not str or len(value) > _MAX_JSON_DECIMAL_CHARACTERS:
+        raise ValueError("invalid decimal")
+    result = Decimal(value)
+    if not _bounded_decimal_representation(result):
+        raise ValueError("invalid decimal")
+    return result
+
+
+def _bounded_json_int(value: str) -> int:
+    if type(value) is not str or len(value) > 20:
+        raise ValueError("invalid integer")
+    result = int(value)
+    if not _MIN_PROVIDER_INTEGER <= result <= _MAX_PROVIDER_INTEGER:
+        raise ValueError("invalid integer")
+    return result
 
 
 def _valid_instrument_key(value: object) -> bool:

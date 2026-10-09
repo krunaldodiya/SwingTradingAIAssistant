@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+import sys
+from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -12,6 +15,7 @@ from test_setup_screen import _service
 from test_upstox_full_quote_v3 import _ISIN, _TOKEN, _payload
 
 import swing_trading_ai_assistant.market_data.corporate_actions as corporate_actions_module
+import swing_trading_ai_assistant.market_data.stock_eligibility_v3 as stock_eligibility_v3_module
 from swing_trading_ai_assistant.market_data.bharatstock import (
     BharatStockClient,
     BharatStockDailyPrice,
@@ -49,6 +53,16 @@ class _Transport:
 
     def get(self, _url: str, _headers: dict[str, str]) -> HttpResponse:
         return HttpResponse(200, self.payload)
+
+
+class _SequencedTransport:
+    def __init__(self, *responses: HttpResponse) -> None:
+        self.responses = list(responses)
+        self.urls: list[str] = []
+
+    def get(self, url: str, _headers: dict[str, str]) -> HttpResponse:
+        self.urls.append(url)
+        return self.responses.pop(0)
 
 
 class _Providers:
@@ -338,6 +352,149 @@ def test_v3_eligibility_keeps_provider_authentication_unknown_and_private(
     ledger = {entry["rule_id"]: entry for entry in result["explanation_ledger"]}
     assert ledger["CURRENT_UPSTOX_QUOTE_BINDING"]["outcome"] == "UNKNOWN"
     assert _TOKEN not in str(result)
+
+
+def test_v3_public_sdk_closes_malformed_bharatstock_decimal_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    observation = _structure_observation(tmp_path)
+    handle = record_stock_observation_v1(tmp_path, observation)
+    packet = observation.packet
+    assert packet is not None
+    mapping = packet.mapping_projection.members[0]
+    source = packet.source("MARKET_STRUCTURE")
+    assert source is not None
+    end = source.admitted_sessions[-1]
+    rows = [
+        {
+            "trade_date": (end - timedelta(days=index)).isoformat(),
+            "open": 100.0,
+            "high": 101.0,
+            "low": 99.0,
+            "close": 100.0,
+            "volume": 200_000,
+            "adjusted_close": None,
+            "adjustment_factor": None,
+        }
+        for index in range(252)
+    ]
+    history_body = json.dumps(
+        {
+            "data": rows,
+            "pagination": {
+                "page": 1,
+                "page_size": 1000,
+                "total_items": len(rows),
+                "total_pages": 1,
+            },
+        },
+        separators=(",", ":"),
+    ).encode()
+    for field, ordinary in (
+        ("open", b"100.0"),
+        ("high", b"101.0"),
+        ("low", b"99.0"),
+        ("close", b"100.0"),
+    ):
+        history_body = history_body.replace(
+            f'"{field}":'.encode() + ordinary,
+            f'"{field}":1e-999999999'.encode(),
+            1,
+        )
+    transport = _SequencedTransport(
+        HttpResponse(
+            200,
+            json.dumps(
+                {
+                    "isin": mapping.isin,
+                    "exchange": mapping.exchange,
+                    "symbol": mapping.effective_symbol,
+                },
+                separators=(",", ":"),
+            ).encode(),
+        ),
+        HttpResponse(200, history_body),
+    )
+    history_client = BharatStockClient(api_key="synthetic-key", transport=transport)
+    quote = _quote(end)
+
+    class _StaticQuoteClient:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
+        def fetch(
+            self, _isin: str, _symbol: str, _token: AccessToken
+        ) -> UpstoxFullQuoteV3:
+            return quote
+
+    monkeypatch.setenv("UPSTOX_ACCESS_TOKEN", "synthetic-upstox-token")
+    monkeypatch.setattr(
+        stock_eligibility_v3_module, "UpstoxFullQuoteV3Client", _StaticQuoteClient
+    )
+    monkeypatch.setattr(
+        stock_eligibility_v3_module, "BharatStockClient", lambda: history_client
+    )
+
+    result = stock_eligibility_v3_module.evaluate_stock_eligibility_from_record_v3(
+        tmp_path, handle
+    )
+
+    assert result["status"] == "UNKNOWN"
+    ledger = {entry["rule_id"]: entry for entry in result["explanation_ledger"]}
+    assert ledger["PROVIDER_OBSERVABLE_HISTORY"]["reason_code"] == (
+        "BHARATSTOCK_HISTORY_UNAVAILABLE"
+    )
+    assert ledger["SUPPORTED_CORPORATE_ACTION_BLACKOUT"]["outcome"] == "NOT_EVALUATED"
+    assert history_client.requests_used == 2
+    assert len(transport.urls) == 2
+
+
+def test_v3_public_sdk_closes_oversized_upstox_integer_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    observation = _structure_observation(tmp_path)
+    handle = record_stock_observation_v1(tmp_path, observation)
+    oversized = b"9" * 70_000
+    payload = _payload()
+    payload = payload.replace(
+        b'"total_buy_quantity":15000', b'"total_buy_quantity":' + oversized
+    )
+    payload = payload.replace(
+        b'"total_sell_quantity":12000', b'"total_sell_quantity":' + oversized
+    )
+
+    class _OversizedQuoteClient:
+        def __init__(
+            self, _transport: object, *, clock: Callable[[], datetime]
+        ) -> None:
+            self._client = UpstoxFullQuoteV3Client(_Transport(payload), clock=clock)
+
+        def fetch(
+            self, isin: str, symbol: str, token: AccessToken
+        ) -> UpstoxFullQuoteV3:
+            return self._client.fetch(isin, symbol, token)
+
+    monkeypatch.setenv("UPSTOX_ACCESS_TOKEN", "synthetic-upstox-token")
+    monkeypatch.setattr(
+        stock_eligibility_v3_module,
+        "UpstoxFullQuoteV3Client",
+        _OversizedQuoteClient,
+    )
+    prior_limit = sys.get_int_max_str_digits()
+    try:
+        sys.set_int_max_str_digits(0)
+        result = stock_eligibility_v3_module.evaluate_stock_eligibility_from_record_v3(
+            tmp_path, handle
+        )
+    finally:
+        sys.set_int_max_str_digits(prior_limit)
+
+    assert result["status"] == "UNKNOWN"
+    ledger = {entry["rule_id"]: entry for entry in result["explanation_ledger"]}
+    assert ledger["CURRENT_UPSTOX_QUOTE_BINDING"]["reason_code"] == (
+        "UPSTOX_QUOTE_UNAVAILABLE"
+    )
+    assert ledger["PROVIDER_OBSERVABLE_HISTORY"]["outcome"] == "NOT_EVALUATED"
 
 
 def test_v3_eligibility_treats_tampered_provider_projection_as_unknown(

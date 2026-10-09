@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import re
+import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
@@ -35,6 +36,65 @@ _ISIN = re.compile(r"[A-Z]{2}[A-Z0-9]{9}[0-9]\Z")
 _SYMBOL = re.compile(r"[A-Z0-9][A-Z0-9&._-]{0,63}\Z")
 _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
 _MAX_NUMBER: Final = Decimal("1e18")
+_MAX_DECIMAL_COEFFICIENT_DIGITS: Final = 128
+_MIN_DECIMAL_EXPONENT: Final = -128
+_MAX_DECIMAL_EXPONENT: Final = 128
+_MAX_CANONICAL_DECIMAL_CHARACTERS: Final = 258
+_MAX_DECIMAL_OBJECT_BYTES: Final = 192
+_MAX_JSON_DECIMAL_CHARACTERS: Final = 512
+_MIN_PROVIDER_INTEGER: Final = -(1 << 63)
+_MAX_PROVIDER_INTEGER: Final = (1 << 63) - 1
+
+
+def _bounded_decimal_representation(value: object) -> bool:
+    """Keep provider Decimal values bounded before downstream canonicalization."""
+    if (
+        type(value) is not Decimal
+        or sys.getsizeof(value) > _MAX_DECIMAL_OBJECT_BYTES
+        or not value.is_finite()
+    ):
+        return False
+    sign, digits, exponent = value.as_tuple()
+    if (
+        type(exponent) is not int
+        or len(digits) > _MAX_DECIMAL_COEFFICIENT_DIGITS
+        or not _MIN_DECIMAL_EXPONENT <= exponent <= _MAX_DECIMAL_EXPONENT
+    ):
+        return False
+    fixed_characters = (
+        len(digits) + exponent
+        if exponent >= 0
+        else len(digits) + 1
+        if -exponent < len(digits)
+        else 2 - exponent
+    ) + sign
+    return fixed_characters <= _MAX_CANONICAL_DECIMAL_CHARACTERS
+
+
+def _bounded_positive_decimal(value: object) -> bool:
+    return (
+        type(value) is Decimal
+        and _bounded_decimal_representation(value)
+        and 0 < value <= _MAX_NUMBER
+    )
+
+
+def _bounded_json_decimal(value: str) -> Decimal:
+    if type(value) is not str or len(value) > _MAX_JSON_DECIMAL_CHARACTERS:
+        raise ValueError("invalid price value")
+    result = Decimal(value)
+    if not _bounded_decimal_representation(result):
+        raise ValueError("invalid price value")
+    return result
+
+
+def _bounded_json_int(value: str) -> int:
+    if type(value) is not str or len(value) > 20:
+        raise ValueError("invalid integer value")
+    result = int(value)
+    if not _MIN_PROVIDER_INTEGER <= result <= _MAX_PROVIDER_INTEGER:
+        raise ValueError("invalid integer value")
+    return result
 
 
 class BharatStockError(RuntimeError):
@@ -91,12 +151,7 @@ class BharatStockDailyPrice:
         )
         if (
             type(self.session) is not date
-            or any(
-                type(value) is not Decimal
-                or not value.is_finite()
-                or not 0 < value <= _MAX_NUMBER
-                for value in values
-            )
+            or any(not _bounded_positive_decimal(value) for value in values)
             or type(self.volume) is not int
             or not 0 <= self.volume < 1 << 63
             or not self.low
@@ -177,7 +232,8 @@ def _decode(body: bytes) -> dict[str, object]:
     try:
         value: object = json.loads(
             body.decode("utf-8"),
-            parse_float=Decimal,
+            parse_float=_bounded_json_decimal,
+            parse_int=_bounded_json_int,
             parse_constant=_invalid_constant,
             object_pairs_hook=_json_object,
         )
@@ -191,8 +247,13 @@ def _decode(body: bytes) -> dict[str, object]:
 def _decimal(value: object) -> Decimal:
     if type(value) not in {int, Decimal}:
         raise ValueError("invalid price value")
+    if (
+        type(value) is int
+        and not _MIN_PROVIDER_INTEGER <= value <= _MAX_PROVIDER_INTEGER
+    ):
+        raise ValueError("invalid price value")
     result = Decimal(cast(int | Decimal, value))
-    if not result.is_finite() or not 0 < result <= _MAX_NUMBER:
+    if not _bounded_positive_decimal(result):
         raise ValueError("invalid price value")
     return result
 
