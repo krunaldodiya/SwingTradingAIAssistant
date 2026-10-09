@@ -13,6 +13,7 @@ from test_current_stock_research import _NOW, _Clock
 from test_setup_invalidation import _AnchoredPrices
 from test_setup_screen import _service
 
+import swing_trading_ai_assistant.market_data.stock_eligibility as eligibility_module
 from swing_trading_ai_assistant.market_data.bharatstock import BharatStockClient
 from swing_trading_ai_assistant.market_data.stock_eligibility import (
     _evaluate_stock_eligibility_from_admitted_record_v2,
@@ -100,3 +101,28 @@ def test_invalid_record_request_is_rejected_before_assessment(tmp_path: Path) ->
 
 def test_runtime_identity() -> None:
     assert len(_runtime_identity()) == 64
+
+
+@pytest.mark.parametrize(
+    "relative",
+    (
+        *tuple(eligibility_module.STOCK_ELIGIBILITY_RUNTIME_SOURCE_SHA256_V2),
+        eligibility_module._MANIFEST_SOURCE,
+    ),
+)
+def test_runtime_identity_rejects_each_installed_command_source_substitution(
+    monkeypatch: pytest.MonkeyPatch, relative: str
+) -> None:
+    original = eligibility_module.runtime_source_sha256
+    calls: list[str] = []
+
+    def substituted(module: str, root: Path, source: str) -> str:
+        calls.append(source)
+        return "0" * 64 if source == relative else original(module, root, source)
+
+    monkeypatch.setattr(eligibility_module, "runtime_source_sha256", substituted)
+
+    with pytest.raises(ValueError, match="runtime"):
+        eligibility_module._runtime_identity()
+
+    assert relative in calls

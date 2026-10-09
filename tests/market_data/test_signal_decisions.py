@@ -13,6 +13,7 @@ from test_current_stock_research import _NOW, _Clock
 from test_setup_invalidation import _AnchoredPrices
 from test_setup_screen import _service
 
+import swing_trading_ai_assistant.market_data.signal_decisions as decisions_module
 from swing_trading_ai_assistant.market_data.bharatstock import BharatStockClient
 from swing_trading_ai_assistant.market_data.signal_decisions import (
     _runtime_identity,
@@ -181,3 +182,28 @@ def test_cli_hides_missing_record_root(tmp_path: Path, capsys) -> None:
 
 def test_runtime_identity() -> None:
     assert len(_runtime_identity()) == 64
+
+
+@pytest.mark.parametrize(
+    "relative",
+    (
+        *tuple(decisions_module.SIGNAL_DECISIONS_RUNTIME_SOURCE_SHA256_V2),
+        decisions_module._MANIFEST_SOURCE,
+    ),
+)
+def test_runtime_identity_rejects_each_installed_command_source_substitution(
+    monkeypatch: pytest.MonkeyPatch, relative: str
+) -> None:
+    original = decisions_module.runtime_source_sha256
+    calls: list[str] = []
+
+    def substituted(module: str, root: Path, source: str) -> str:
+        calls.append(source)
+        return "0" * 64 if source == relative else original(module, root, source)
+
+    monkeypatch.setattr(decisions_module, "runtime_source_sha256", substituted)
+
+    with pytest.raises(ValueError, match="runtime"):
+        decisions_module._runtime_identity()
+
+    assert relative in calls

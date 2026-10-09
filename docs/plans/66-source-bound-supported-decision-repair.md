@@ -39,7 +39,9 @@ arguments.
    time. No caller-supplied relation or stop/reference can influence it.
 4. The CLI is read-only and offline. Invalid requests return `request_invalid`;
    unavailable or unadmitted selected records return a fixed public envelope
-   without a storage path or raw retained data.
+   without a storage path or raw retained data. Each command's runtime closure
+   validates the installed entrypoint, dispatcher, relevant retained-record
+   verifier sources and dedicated manifest before it assesses a record.
 
 The first working slice gives a user a real command that proves the decision
 boundary fails closed on exact retained research. It is not an actionable
@@ -84,7 +86,7 @@ this plan does not relabel it as INR proof.
 | Matching causal pair, `ABOVE` relation, no observed invalidation | Relation is internally derived and result remains `NO_TRADE`; no caller can turn it into `ACTIONABLE`. |
 | Invalidated, revised, replayed, non-comparable or different-stock pair | Derived setup summary is preserved where available; result remains fail-closed `NO_TRADE`. |
 | Relative root, malformed command, malformed handle or unexpected flag | `request_invalid`, zero record reads or writes. |
-| Runtime-source or derived-evidence substitution | Existing closed manifest/admission checks or derived-evidence identity validation refuse the result. |
+| Runtime-source or derived-evidence substitution | Both command paths reject substitutions of the installed entrypoint, dispatcher, verifier sources or dedicated manifest; retained-record admission and derived-evidence identity validation also refuse mismatches. |
 
 ## Completion and follow-on boundary
 

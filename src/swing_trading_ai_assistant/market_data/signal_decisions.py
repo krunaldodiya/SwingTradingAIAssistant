@@ -16,6 +16,7 @@ from swing_trading_ai_assistant.research_comparison.setup_observation_comparison
     canonical_comparison_bytes,
 )
 
+from .runtime_identity_manifest import MARKET_DATA_RUNTIME_SOURCE_SHA256_V1
 from .runtime_source_verifier import runtime_source_sha256
 from .signal_decisions_runtime_identity_manifest import (
     SIGNAL_DECISIONS_RUNTIME_SOURCE_SHA256_V2,
@@ -25,10 +26,23 @@ from .stock_observations import read_stock_observation_v1
 
 SCHEMA: Final = "stock-signal-decision@v2"
 _DIGEST: Final = re.compile(r"[0-9a-f]{64}\Z")
+_MANIFEST_SOURCE: Final = (
+    "src/swing_trading_ai_assistant/market_data/"
+    "signal_decisions_runtime_identity_manifest.py"
+)
+_GENERIC_MANIFEST_SOURCE: Final = (
+    "src/swing_trading_ai_assistant/market_data/runtime_identity_manifest.py"
+)
 _SOURCES: Final = (
     "src/swing_trading_ai_assistant/market_data/signal_decisions.py",
     "src/swing_trading_ai_assistant/market_data/stock_eligibility.py",
+    "src/swing_trading_ai_assistant/market_data/"
+    "stock_eligibility_runtime_identity_manifest.py",
+    "src/swing_trading_ai_assistant/market_data/stock_observations.py",
+    "src/swing_trading_ai_assistant/market_data/"
+    "stock_observations_runtime_identity_manifest.py",
     "src/swing_trading_ai_assistant/market_data/signal_decisions_cli.py",
+    "src/swing_trading_ai_assistant/entrypoints/signal_decisions.py",
 )
 
 
@@ -72,6 +86,22 @@ def _runtime_identity() -> str:
         if actual != expected:
             raise ValueError("signal decision runtime identity invalid")
         observed[relative] = actual
+    manifest_key = Path(_MANIFEST_SOURCE).name
+    expected_manifest = MARKET_DATA_RUNTIME_SOURCE_SHA256_V1.get(manifest_key)
+    manifest = runtime_source_sha256(
+        "swing_trading_ai_assistant.market_data."
+        "signal_decisions_runtime_identity_manifest",
+        root,
+        _MANIFEST_SOURCE,
+    )
+    if expected_manifest != manifest:
+        raise ValueError("signal decision runtime identity invalid")
+    observed[_MANIFEST_SOURCE] = manifest
+    observed[_GENERIC_MANIFEST_SOURCE] = runtime_source_sha256(
+        "swing_trading_ai_assistant.market_data.runtime_identity_manifest",
+        root,
+        _GENERIC_MANIFEST_SOURCE,
+    )
     return _digest(observed)
 
 
