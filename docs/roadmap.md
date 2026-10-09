@@ -67,9 +67,10 @@ delivered the usable retained observation and comparison workflow under
 [Plan 64](plans/64-retained-stock-observation-workflow.md).
 
 **Sprint 52 is in progress:** [Issue #292](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/292)
-and [Plan 65](plans/65-supported-signal-decisions.md) tackle Group 2: Supported
-Signal Decisions, establishing objective stock eligibility/safety gates (G03)
-and setup-to-signal decision rules (G04).
+is repairing the initial supported-decision implementation under
+[Plan 66](plans/66-source-bound-supported-decision-repair.md). It establishes a
+retained-observation, fail-closed decision boundary; G03 and G04 remain open
+until source-backed eligibility and actionability evidence is available.
 
 October7 accepted owner course correction: related tasks belong in usable
 delivery groups, with independent work in the same group allowed in parallel.

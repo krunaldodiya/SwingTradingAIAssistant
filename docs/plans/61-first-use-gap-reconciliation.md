@@ -64,10 +64,11 @@ above is reusable; the named gap's closure evidence supplies the missing claim.
 
 ## Finite remaining outcomes
 
-October 8 Sprint 52 checkpoint: [Issue #292](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/292)
-and [Plan 65](65-supported-signal-decisions.md) implement Group 2: Supported
-Signal Decisions (G03 eligibility gates, G04 setup-to-signal policy, G07 analytical
-family disposition).
+October 9 Sprint 52 checkpoint: [Issue #292](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/292)
+is repairing the initial decision implementation under
+[Plan 66](66-source-bound-supported-decision-repair.md). The active slice is a
+source-bound `UNKNOWN`/`NO_TRADE` boundary; G03 eligibility and G04 actionability
+remain open until their missing evidence capabilities are separately admitted.
 
 October 7 Sprint 51 delivery: Issue #290 / PR #291 delivered the retained
 observation and comparison workflow under Plan 64.

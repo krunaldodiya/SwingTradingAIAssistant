@@ -1,5 +1,11 @@
 # Plan 65: supported signal decisions and stock eligibility/safety gates
 
+> **Supersession note, October 9, 2026:** The initial unmerged implementation
+> admitted caller-authored JSON and was blocked by both required R3 reviews.
+> [Plan 66](66-source-bound-supported-decision-repair.md) preserves this plan as
+> historical scope and defines the corrective source-bound Sprint 52 slice. It
+> does not claim G03 or G04 outcome closure.
+
 Accepted October 8, 2026 under [Issue #292](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/292),
 milestone 44. Owner and risk owner: Krunal Dodiya. R3 financial-research provenance,
 safety gating, and decision policy. Base: `ee61272f84afe108b4e7101a31ee4d72083e29e8` (main).

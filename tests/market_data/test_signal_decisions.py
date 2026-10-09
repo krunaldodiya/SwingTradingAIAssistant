@@ -1,417 +1,183 @@
-"""Tests for setup-to-signal decision policy (G04)."""
+"""Source-bound checks for the fail-closed G04 repair boundary."""
 
 from __future__ import annotations
 
-import hashlib
 import json
+from datetime import timedelta
+from inspect import signature
 from pathlib import Path
-from typing import Any
+from typing import cast
 
 import pytest
+from test_current_stock_research import _NOW, _Clock
+from test_setup_invalidation import _AnchoredPrices
+from test_setup_screen import _service
 
+from swing_trading_ai_assistant.market_data.bharatstock import BharatStockClient
 from swing_trading_ai_assistant.market_data.signal_decisions import (
     _runtime_identity,
-    evaluate_signal_decision,
+    evaluate_signal_decision_from_records_v2,
 )
 from swing_trading_ai_assistant.market_data.signal_decisions_cli import main as cli_main
-from swing_trading_ai_assistant.market_data.stock_eligibility import (
-    evaluate_stock_eligibility,
+from swing_trading_ai_assistant.market_data.stock_observations import (
+    record_stock_observation_v1,
 )
 
 
-def _bars(
-    *, count: int = 21, close: float = 2800.0, volume: float = 50000.0
-) -> list[dict[str, Any]]:
-    return [
-        {
-            "date": f"2026-08-{index + 1:02d}",
-            "open": close - 1.0,
-            "high": close + 2.0,
-            "low": close - 2.0,
-            "close": close,
-            "volume": volume,
-        }
-        for index in range(count)
-    ]
-
-
-@pytest.fixture
-def eligible_stock() -> dict[str, Any]:
-    return evaluate_stock_eligibility(
-        symbol="RELIANCE",
-        series="EQ",
-        exchange="NSE",
-        isin="INE002A01018",
-        bars=_bars(),
-        event_notices=[],
+def _structure_observation(root: Path, *, later: bool = False, symbol: str = "PNB"):
+    root.mkdir(mode=0o700, exist_ok=True)
+    clock = _Clock()
+    clock.value = _NOW + timedelta(days=int(later))
+    return _service()(
+        symbol,
+        root,
+        question="CURRENT_STRUCTURE",
+        clock=clock,
+        price_client=cast(
+            BharatStockClient,
+            _AnchoredPrices(clock.value, later=later, close=134, wick=120),
+        ),
     )
 
 
 @pytest.fixture
-def ineligible_stock() -> dict[str, Any]:
-    return evaluate_stock_eligibility(
-        symbol="PENNY",
-        series="EQ",
-        exchange="NSE",
-        isin="INE123A01010",
-        bars=_bars(close=5.0),
-        event_notices=[],
-    )
+def retained_pair(tmp_path: Path) -> tuple[Path, str, str]:
+    previous = _structure_observation(tmp_path)
+    previous_handle = record_stock_observation_v1(tmp_path, previous)
+    current = _structure_observation(tmp_path, later=True)
+    current_handle = record_stock_observation_v1(tmp_path, current)
+    return tmp_path, previous_handle, current_handle
 
 
-def test_actionable_signal_when_eligible_and_valid_setup(
-    eligible_stock: dict[str, Any],
-) -> None:
-    result = evaluate_signal_decision(
-        symbol="RELIANCE",
-        eligibility=eligible_stock,
-        setup_match="MATCH",
-        invalidation_status="NO_CONTRADICTION_OBSERVED",
-        level_relation="ABOVE",
-        level_range_inclusion="EARLIEST_RANGE_INCLUDED",
-        broken_high=2750.0,
-        confirmed_hl=2650.0,
-        latest_close=2800.0,
-        candidate_age_sessions=5,
-        known_at="2026-08-21T10:00:00.000000Z",
+def test_matching_admitted_pair_cannot_emit_an_actionable_signal(retained_pair) -> None:
+    root, previous, current = retained_pair
+
+    result = evaluate_signal_decision_from_records_v2(root, previous, current)
+
+    assert result["schema"] == "stock-signal-decision@v2"
+    assert result["disposition"] == "NO_TRADE"
+    assert result["decision_code"] == "ELIGIBILITY_EVIDENCE_UNAVAILABLE"
+    assert result["previous_observation_identity_sha256"] == previous
+    assert result["current_observation_identity_sha256"] == current
+    assert result["eligibility"]["status"] == "UNKNOWN"
+    assert (
+        result["setup_evidence"]["invalidation_status"] == "NO_CONTRADICTION_OBSERVED"
     )
-    assert result["schema"] == "stock-signal-decision@v1"
-    assert result["disposition"] == "ACTIONABLE"
-    assert result["decision_code"] == "BUY_SETUP_CONFIRMED"
-    assert result["signal_type"] == "SWING_LONG_CANDIDATE"
-    assert result["broken_high"] == 2750.0
-    assert result["stop_loss_reference"] == 2650.0
-    assert result["entry_reference"] == 2800.0
-    assert result["target_reference"] == 2750.0
-    assert result["target_reference_kind"] == "BROKEN_HIGH_DESCRIPTIVE_LEVEL"
-    assert result["candidate_age_sessions"] == 5
-    assert result["known_at"] == "2026-08-21T10:00:00.000000Z"
+    assert result["setup_evidence"]["level_relation"] == "ABOVE"
     assert len(result["decision_identity_sha256"]) == 64
+    public = json.dumps(result, sort_keys=True)
+    assert "ACTIONABLE" not in public
+    assert "entry_reference" not in public
+    assert "stop_loss_reference" not in public
+    assert "source_bars" not in public
 
 
-def test_ineligible_stock_refuses_signal(ineligible_stock: dict[str, Any]) -> None:
-    result = evaluate_signal_decision(
-        symbol="PENNY",
-        eligibility=ineligible_stock,
-        setup_match="MATCH",
-        invalidation_status="NO_CONTRADICTION_OBSERVED",
-        level_relation="ABOVE",
-        level_range_inclusion="EARLIEST_RANGE_INCLUDED",
-        broken_high=4.5,
-        confirmed_hl=4.0,
-        latest_close=5.0,
+def test_sdk_has_no_raw_eligibility_or_price_input_surface() -> None:
+    parameters = set(signature(evaluate_signal_decision_from_records_v2).parameters)
+    assert parameters == {"storage_root", "previous", "current"}
+    assert (
+        not {
+            "eligibility",
+            "setup_match",
+            "invalidation_status",
+            "level_relation",
+            "broken_high",
+            "latest_close",
+        }
+        & parameters
     )
+
+
+def test_noncomparable_retained_pair_remains_no_trade(tmp_path: Path) -> None:
+    previous = record_stock_observation_v1(tmp_path, _structure_observation(tmp_path))
+    current = record_stock_observation_v1(
+        tmp_path,
+        _structure_observation(tmp_path, later=True, symbol="RELIANCE"),
+    )
+
+    result = evaluate_signal_decision_from_records_v2(tmp_path, previous, current)
+
     assert result["disposition"] == "NO_TRADE"
-    assert result["decision_code"] == "STOCK_INELIGIBLE"
-    assert "PRICE_INTEGRITY_FAILED" in result["eligibility_failure_reasons"]
+    assert result["decision_code"] == "ELIGIBILITY_EVIDENCE_UNAVAILABLE"
+    assert result["setup_evidence"]["continuity_status"] == "NON_COMPARABLE"
 
 
-def test_unknown_eligibility_refuses_signal() -> None:
-    unknown_stock = evaluate_stock_eligibility(
-        symbol="RELIANCE",
-        series="EQ",
-        exchange="NSE",
-        isin="INE002A01018",
-        bars=_bars(),
-        event_notices=None,
-    )
-    result = evaluate_signal_decision(
-        symbol="RELIANCE",
-        eligibility=unknown_stock,
-        setup_match="MATCH",
-        invalidation_status="NO_CONTRADICTION_OBSERVED",
-        level_relation="ABOVE",
-        level_range_inclusion="EARLIEST_RANGE_INCLUDED",
-        broken_high=2750.0,
-        confirmed_hl=2650.0,
-        latest_close=2800.0,
-        candidate_age_sessions=1,
-        known_at="2026-08-21T10:00:00.000000Z",
-    )
-    assert result["disposition"] == "NO_TRADE"
-    assert result["decision_code"] == "STOCK_INELIGIBLE"
-    assert result["eligibility_status"] == "UNKNOWN"
+def test_real_cli_reads_only_retained_handles(retained_pair, capsys) -> None:
+    root, previous, current = retained_pair
 
-
-def test_invalidated_setup_refuses_signal(eligible_stock: dict[str, Any]) -> None:
-    result = evaluate_signal_decision(
-        symbol="RELIANCE",
-        eligibility=eligible_stock,
-        setup_match="MATCH",
-        invalidation_status="INVALIDATED",
-        level_relation="ABOVE",
-        level_range_inclusion="EARLIEST_RANGE_INCLUDED",
-        broken_high=2750.0,
-        confirmed_hl=2650.0,
-        latest_close=2800.0,
-    )
-    assert result["disposition"] == "NO_TRADE"
-    assert result["decision_code"] == "SETUP_INVALIDATED"
-
-
-def test_unknown_invalidation_refuses_signal(eligible_stock: dict[str, Any]) -> None:
-    result = evaluate_signal_decision(
-        symbol="RELIANCE",
-        eligibility=eligible_stock,
-        setup_match="MATCH",
-        invalidation_status="UNKNOWN",
-        level_relation="ABOVE",
-        level_range_inclusion="EARLIEST_RANGE_INCLUDED",
-    )
-    assert result["disposition"] == "NO_TRADE"
-    assert result["decision_code"] == "INSUFFICIENT_EVIDENCE"
-
-
-def test_no_setup_match_refuses_signal(eligible_stock: dict[str, Any]) -> None:
-    result = evaluate_signal_decision(
-        symbol="RELIANCE",
-        eligibility=eligible_stock,
-        setup_match="NO_MATCH",
-        invalidation_status="NO_CONTRADICTION_OBSERVED",
-        level_relation="ABOVE",
-        level_range_inclusion="EARLIEST_RANGE_INCLUDED",
-    )
-    assert result["disposition"] == "NO_TRADE"
-    assert result["decision_code"] == "NO_SETUP_MATCH"
-
-
-def test_price_below_broken_level_refuses_signal(
-    eligible_stock: dict[str, Any],
-) -> None:
-    result = evaluate_signal_decision(
-        symbol="RELIANCE",
-        eligibility=eligible_stock,
-        setup_match="MATCH",
-        invalidation_status="NO_CONTRADICTION_OBSERVED",
-        level_relation="BELOW",
-        level_range_inclusion="NO_INCLUSION",
-        broken_high=2750.0,
-        confirmed_hl=2650.0,
-        latest_close=2700.0,
-    )
-    assert result["disposition"] == "NO_TRADE"
-    assert result["decision_code"] == "PRICE_BELOW_BROKEN_LEVEL"
-
-
-def test_below_level_with_unknown_inclusion_refuses_signal(
-    eligible_stock: dict[str, Any],
-) -> None:
-    result = evaluate_signal_decision(
-        symbol="RELIANCE",
-        eligibility=eligible_stock,
-        setup_match="MATCH",
-        invalidation_status="NO_CONTRADICTION_OBSERVED",
-        level_relation="BELOW",
-        level_range_inclusion="UNKNOWN",
-        broken_high=2750.0,
-        confirmed_hl=2650.0,
-        latest_close=2700.0,
-        candidate_age_sessions=1,
-    )
-    assert result["disposition"] == "NO_TRADE"
-    assert result["decision_code"] == "LEVEL_RANGE_INCLUSION_UNKNOWN"
-
-
-def test_invalid_setup_state_and_missing_actionable_references_are_rejected(
-    eligible_stock: dict[str, Any],
-) -> None:
-    with pytest.raises(ValueError, match="invalidation status"):
-        evaluate_signal_decision(
-            symbol="RELIANCE",
-            eligibility=eligible_stock,
-            setup_match="MATCH",
-            invalidation_status="NOT_A_STATUS",
-            level_relation="ABOVE",
-            level_range_inclusion="EARLIEST_RANGE_INCLUDED",
-        )
-
-    with pytest.raises(ValueError, match="broken high"):
-        evaluate_signal_decision(
-            symbol="RELIANCE",
-            eligibility=eligible_stock,
-            setup_match="MATCH",
-            invalidation_status="NO_CONTRADICTION_OBSERVED",
-            level_relation="ABOVE",
-            level_range_inclusion="EARLIEST_RANGE_INCLUDED",
-        )
-
-    with pytest.raises(ValueError, match="known at"):
-        evaluate_signal_decision(
-            symbol="RELIANCE",
-            eligibility=eligible_stock,
-            setup_match="MATCH",
-            invalidation_status="NO_CONTRADICTION_OBSERVED",
-            level_relation="ABOVE",
-            level_range_inclusion="EARLIEST_RANGE_INCLUDED",
-            broken_high=2750.0,
-            confirmed_hl=2650.0,
-            latest_close=2800.0,
-            candidate_age_sessions=1,
-        )
-
-
-def test_tampered_or_mismatched_eligibility_cannot_authorize_action(
-    eligible_stock: dict[str, Any],
-) -> None:
-    tampered = {**eligible_stock, "symbol": "OTHER"}
-    with pytest.raises(ValueError, match="eligibility provenance"):
-        evaluate_signal_decision(
-            symbol="RELIANCE",
-            eligibility=tampered,
-            setup_match="MATCH",
-            invalidation_status="NO_CONTRADICTION_OBSERVED",
-            level_relation="ABOVE",
-            level_range_inclusion="EARLIEST_RANGE_INCLUDED",
-            broken_high=2750.0,
-            confirmed_hl=2650.0,
-            latest_close=2800.0,
-            candidate_age_sessions=1,
-        )
-
-    mismatched = dict(eligible_stock)
-    mismatched["symbol"] = "OTHER"
-    unsigned = dict(mismatched)
-    unsigned.pop("provenance_sha256")
-    mismatched["provenance_sha256"] = hashlib.sha256(
-        json.dumps(unsigned, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    ).hexdigest()
-    with pytest.raises(ValueError, match="eligibility symbol"):
-        evaluate_signal_decision(
-            symbol="RELIANCE",
-            eligibility=mismatched,
-            setup_match="MATCH",
-            invalidation_status="NO_CONTRADICTION_OBSERVED",
-            level_relation="ABOVE",
-            level_range_inclusion="EARLIEST_RANGE_INCLUDED",
-            broken_high=2750.0,
-            confirmed_hl=2650.0,
-            latest_close=2800.0,
-            candidate_age_sessions=1,
-        )
-
-
-def test_cli_evaluate_actionable(
-    tmp_path: Path, eligible_stock: dict[str, Any]
-) -> None:
-    input_file = tmp_path / "input.json"
-    input_file.write_text(
-        json.dumps(
-            {
-                "eligibility": eligible_stock,
-                "setup_match": "MATCH",
-                "invalidation_status": "NO_CONTRADICTION_OBSERVED",
-                "level_relation": "ABOVE",
-                "level_range_inclusion": "EARLIEST_RANGE_INCLUDED",
-                "broken_high": 2750.0,
-                "confirmed_hl": 2650.0,
-                "latest_close": 2800.0,
-                "candidate_age_sessions": 3,
-                "known_at": "2026-08-21T10:00:00.000000Z",
-            }
-        )
-    )
-    ret = cli_main(
+    code = cli_main(
         [
             "evaluate",
-            "--symbol",
-            "RELIANCE",
-            "--input-json",
-            str(input_file),
+            "--storage-root",
+            str(root),
+            "--previous-observation",
+            previous,
+            "--current-observation",
+            current,
             "--output",
             "json",
         ]
     )
-    assert ret == 0
+
+    assert code == 1
+    captured = capsys.readouterr()
+    result = json.loads(captured.out)
+    assert captured.err == ""
+    assert result["disposition"] == "NO_TRADE"
+    assert result["current_observation_identity_sha256"] == current
 
 
-def test_cli_evaluate_no_trade(
-    tmp_path: Path, ineligible_stock: dict[str, Any]
+def test_cli_rejects_removed_raw_json_interface_before_record_access(
+    tmp_path: Path, capsys
 ) -> None:
-    input_file = tmp_path / "input.json"
-    input_file.write_text(
-        json.dumps(
-            {
-                "eligibility": ineligible_stock,
-                "setup_match": "MATCH",
-                "invalidation_status": "NO_CONTRADICTION_OBSERVED",
-                "level_relation": "ABOVE",
-                "level_range_inclusion": "EARLIEST_RANGE_INCLUDED",
-            }
-        )
-    )
-    ret = cli_main(
+    code = cli_main(
         [
             "evaluate",
-            "--symbol",
-            "PENNY",
+            "--storage-root",
+            str(tmp_path),
+            "--previous-observation",
+            "a" * 64,
+            "--current-observation",
+            "b" * 64,
             "--input-json",
-            str(input_file),
+            str(tmp_path / "forged.json"),
             "--output",
             "json",
         ]
     )
-    assert ret == 1
+
+    assert code == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == "request_invalid\n"
+    assert not (tmp_path / "forged.json").exists()
 
 
-def test_cli_rejects_unrecognized_input_fields(
-    tmp_path: Path, eligible_stock: dict[str, Any]
-) -> None:
-    input_file = tmp_path / "input.json"
-    input_file.write_text(
-        json.dumps(
-            {
-                "eligibility": eligible_stock,
-                "setup_match": "MATCH",
-                "invalidation_status": "NO_CONTRADICTION_OBSERVED",
-                "level_relation": "ABOVE",
-                "level_range_inclusion": "EARLIEST_RANGE_INCLUDED",
-                "broken_high": 2750.0,
-                "confirmed_hl": 2650.0,
-                "latest_close": 2800.0,
-                "candidate_age_sessions": 1,
-                "minimum_close_price": 0.0,
-            }
-        )
-    )
-    ret = cli_main(
-        [
-            "evaluate",
-            "--symbol",
-            "RELIANCE",
-            "--input-json",
-            str(input_file),
-            "--output",
-            "json",
-        ]
-    )
-    assert ret == 2
-
-    input_file.write_text(
-        json.dumps(
-            {
-                "series": "EQ",
-                "exchange": "NSE",
-                "isin": "INE002A01018",
-                "bars": _bars(),
-                "event_notices": [],
-                "minimum_close_price": 0.0,
-            }
-        )
-    )
-    ret = cli_main(
+def test_cli_hides_missing_record_root(tmp_path: Path, capsys) -> None:
+    root = tmp_path / "private-root"
+    code = cli_main(
         [
             "check-eligibility",
-            "--symbol",
-            "RELIANCE",
-            "--input-json",
-            str(input_file),
+            "--storage-root",
+            str(root),
+            "--observation",
+            "a" * 64,
             "--output",
             "json",
         ]
     )
-    assert ret == 2
+
+    assert code == 1
+    captured = capsys.readouterr()
+    result = json.loads(captured.out)
+    assert result == {
+        "code": "OBSERVATION_RECORD_UNAVAILABLE",
+        "contract_version": "stock-signal-decision@v2",
+        "status": "UNAVAILABLE",
+    }
+    assert str(root) not in captured.out + captured.err
+    assert not root.exists()
 
 
 def test_runtime_identity() -> None:
-    ident = _runtime_identity()
-    assert len(ident) == 64
+    assert len(_runtime_identity()) == 64
