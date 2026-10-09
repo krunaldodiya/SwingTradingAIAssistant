@@ -34,7 +34,7 @@ def test_eligible_stock_passes_all_gates() -> None:
         exchange="NSE",
         isin="INE002A01018",
         bars=bars,
-        event_notices=None,
+        event_notices=[],
     )
     assert result["schema"] == "stock-eligibility@v1"
     assert result["symbol"] == "RELIANCE"
@@ -70,6 +70,17 @@ def test_unsupported_mapping_fails() -> None:
     assert r3["status"] == "INELIGIBLE"
     assert "UNSUPPORTED_MAPPING" in r3["failure_reasons"]
 
+    # Unsupported symbol grammar
+    r4 = evaluate_stock_eligibility(
+        symbol="NOT A SYMBOL!",
+        series="EQ",
+        exchange="NSE",
+        isin="INE123A01010",
+        bars=bars,
+    )
+    assert r4["status"] == "INELIGIBLE"
+    assert "UNSUPPORTED_MAPPING" in r4["failure_reasons"]
+
 
 def test_insufficient_history_window_fails() -> None:
     bars = _valid_bars(20)  # less than 21
@@ -85,7 +96,12 @@ def test_data_quality_invalid_fails() -> None:
     bars = _valid_bars(21)
     bars[5]["high"] = bars[5]["low"] - 1.0
     r1 = evaluate_stock_eligibility(
-        symbol="TEST", series="EQ", exchange="NSE", isin="INE123A01010", bars=bars
+        symbol="TEST",
+        series="EQ",
+        exchange="NSE",
+        isin="INE123A01010",
+        bars=bars,
+        event_notices=[],
     )
     assert r1["status"] == "INELIGIBLE"
     assert "DATA_QUALITY_INVALID" in r1["failure_reasons"]
@@ -110,13 +126,61 @@ def test_insufficient_liquidity_fails() -> None:
     assert r1["status"] == "INELIGIBLE"
     assert "INSUFFICIENT_LIQUIDITY" in r1["failure_reasons"]
 
-    # Extremely low average volume
+    # A positive volume is sufficient for this bounded G03 rule.  An arbitrary
+    # share-count floor would be a separate, source-backed policy decision.
     bars2 = _valid_bars(21, volume=50.0)
     r2 = evaluate_stock_eligibility(
-        symbol="TEST", series="EQ", exchange="NSE", isin="INE123A01010", bars=bars2
+        symbol="TEST",
+        series="EQ",
+        exchange="NSE",
+        isin="INE123A01010",
+        bars=bars2,
+        event_notices=[],
     )
-    assert r2["status"] == "INELIGIBLE"
-    assert "INSUFFICIENT_LIQUIDITY" in r2["failure_reasons"]
+    assert r2["status"] == "ELIGIBLE"
+    assert "INSUFFICIENT_LIQUIDITY" not in r2["failure_reasons"]
+
+
+def test_missing_event_snapshot_is_unknown_and_fail_closed() -> None:
+    result = evaluate_stock_eligibility(
+        symbol="TEST",
+        series="EQ",
+        exchange="NSE",
+        isin="INE123A01010",
+        bars=_valid_bars(),
+        event_notices=None,
+    )
+    assert result["status"] == "UNKNOWN"
+    assert "EVENT_RISK_UNVERIFIED" in result["failure_reasons"]
+    assert result["event_risk_flag"] is None
+
+
+def test_nonfinite_or_unordered_bars_fail_data_quality() -> None:
+    nonfinite = _valid_bars()
+    nonfinite[3]["volume"] = float("nan")
+    nonfinite_result = evaluate_stock_eligibility(
+        symbol="TEST",
+        series="EQ",
+        exchange="NSE",
+        isin="INE123A01010",
+        bars=nonfinite,
+        event_notices=[],
+    )
+    assert nonfinite_result["status"] == "INELIGIBLE"
+    assert "DATA_QUALITY_INVALID" in nonfinite_result["failure_reasons"]
+
+    unordered = _valid_bars()
+    unordered[3]["date"] = unordered[2]["date"]
+    unordered_result = evaluate_stock_eligibility(
+        symbol="TEST",
+        series="EQ",
+        exchange="NSE",
+        isin="INE123A01010",
+        bars=unordered,
+        event_notices=[],
+    )
+    assert unordered_result["status"] == "INELIGIBLE"
+    assert "DATA_QUALITY_INVALID" in unordered_result["failure_reasons"]
 
 
 def test_price_integrity_penny_stock_fails() -> None:
@@ -154,7 +218,7 @@ def test_event_risk_detected_fails() -> None:
     assert result["event_risk_flag"] is True
 
 
-def test_benign_event_notices_pass() -> None:
+def test_present_event_risk_notice_blocks_eligibility() -> None:
     bars = _valid_bars(21, base_price=500.0)
     notices = [
         {
@@ -171,9 +235,9 @@ def test_benign_event_notices_pass() -> None:
         bars=bars,
         event_notices=notices,
     )
-    assert result["status"] == "ELIGIBLE"
-    assert result["failure_reasons"] == []
-    assert result["event_risk_flag"] is False
+    assert result["status"] == "INELIGIBLE"
+    assert "EVENT_RISK_DETECTED" in result["failure_reasons"]
+    assert result["event_risk_flag"] is True
 
 
 def test_runtime_identity() -> None:
