@@ -73,11 +73,19 @@ delivered the repaired retained-observation decision boundary under
 `b1840fab6509e4343958e17e3792bf9e8d586675`. Its `UNKNOWN` eligibility and
 `NO_TRADE` decision output preserve the G03/G04 source/policy block.
 
-**Sprint 53 is in progress:** [Issue #294](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/294)
-and [Plan 67](plans/67-owner-staged-nse-safety-evidence.md) define one offline
-owner-staged NSE reference-package inspection path. It has no automated source
-collection, source-authentication, eligibility or actionability claim. A valid
-staging report remains `UNKNOWN`; G03 and G04 remain open.
+**Sprint 53 is delivered:** [Issue #294](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/294)
+and [PR #295](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/295)
+delivered the offline owner-staged NSE reference-package inspection path under
+[Plan 67](plans/67-owner-staged-nse-safety-evidence.md), main
+`a826f530e2d9dde7757e7245edbafd3ba90200e2`. It has no automated source
+collection, source-authentication, eligibility or actionability claim; a valid
+staging report remains `UNKNOWN`.
+
+**Sprint 54 is governed by [Issue #296](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/296),
+Milestone 46, and [Plan 68](plans/68-g03-source-and-criteria-admission.md).**
+It freezes the G03 source-capability and criterion-evidence boundary without
+new collection, provider adoption, thresholds, clearance, or actionability.
+Live Issue/Project state owns this Sprint's delivery status.
 
 October7 accepted owner course correction: related tasks belong in usable
 delivery groups, with independent work in the same group allowed in parallel.
