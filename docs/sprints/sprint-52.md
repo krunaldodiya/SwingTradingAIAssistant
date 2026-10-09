@@ -48,8 +48,9 @@ event-risk coverage because no admitted contract establishes them.
   are derived internally and bound to retained handles.
 - Malformed, forged, truncated, unavailable, or unadmitted records fail closed.
   The public CLI envelope does not expose storage paths or retained raw data.
-- Both command paths bind their installed entrypoint, dispatcher, retained-record
-  verifier sources, and dedicated manifest before emitting a result.
+- The installed package, launcher, interpreter, and import environment are the
+  trusted execution root. Runtime and result identities are reproducibility and
+  correlation metadata; they are not source authentication or attestation.
 - Runtime identity, focused adversarial checks, full independent R3 reviews,
   GitHub-hosted gates, merge, main admission, private publication, and live
   tracker closeout remain required before this sprint can be marked delivered.

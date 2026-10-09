@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
 from datetime import timedelta
 from inspect import signature
 from pathlib import Path
@@ -13,7 +16,6 @@ from test_current_stock_research import _NOW, _Clock
 from test_setup_invalidation import _AnchoredPrices
 from test_setup_screen import _service
 
-import swing_trading_ai_assistant.market_data.signal_decisions as decisions_module
 from swing_trading_ai_assistant.market_data.bharatstock import BharatStockClient
 from swing_trading_ai_assistant.market_data.signal_decisions import (
     _runtime_identity,
@@ -185,25 +187,49 @@ def test_runtime_identity() -> None:
 
 
 @pytest.mark.parametrize(
-    "relative",
+    "arguments",
     (
-        *tuple(decisions_module.SIGNAL_DECISIONS_RUNTIME_SOURCE_SHA256_V2),
-        decisions_module._MANIFEST_SOURCE,
+        ("check-eligibility", "--observation", "a" * 64),
+        (
+            "evaluate",
+            "--previous-observation",
+            "a" * 64,
+            "--current-observation",
+            "b" * 64,
+        ),
     ),
 )
-def test_runtime_identity_rejects_each_installed_command_source_substitution(
-    monkeypatch: pytest.MonkeyPatch, relative: str
+def test_installed_command_hides_missing_record_root(
+    tmp_path: Path, arguments: tuple[str, ...]
 ) -> None:
-    original = decisions_module.runtime_source_sha256
-    calls: list[str] = []
+    root = tmp_path / "private-root"
+    environment = os.environ.copy()
+    environment.pop("PYTHONPATH", None)
+    environment["PYTHONDONTWRITEBYTECODE"] = "1"
+    command = Path(sys.executable).with_name("signal-decisions")
 
-    def substituted(module: str, root: Path, source: str) -> str:
-        calls.append(source)
-        return "0" * 64 if source == relative else original(module, root, source)
+    completed = subprocess.run(  # noqa: S603 - controlled installed command
+        [
+            str(command),
+            arguments[0],
+            "--storage-root",
+            str(root),
+            *arguments[1:],
+            "--output",
+            "json",
+        ],
+        cwd=tmp_path,
+        env=environment,
+        check=False,
+        capture_output=True,
+    )
 
-    monkeypatch.setattr(decisions_module, "runtime_source_sha256", substituted)
-
-    with pytest.raises(ValueError, match="runtime"):
-        decisions_module._runtime_identity()
-
-    assert relative in calls
+    assert completed.returncode == 1
+    assert completed.stderr == b""
+    assert json.loads(completed.stdout) == {
+        "code": "OBSERVATION_RECORD_UNAVAILABLE",
+        "contract_version": "stock-signal-decision@v2",
+        "status": "UNAVAILABLE",
+    }
+    assert str(root).encode() not in completed.stdout
+    assert not root.exists()

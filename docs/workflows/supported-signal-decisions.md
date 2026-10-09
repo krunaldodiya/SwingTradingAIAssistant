@@ -68,6 +68,19 @@ A valid fail-closed `UNKNOWN` or `NO_TRADE` response also exits `1`. Exit `0`
 is not currently emitted because this contract has no eligible or actionable
 outcome.
 
+## Trusted installation
+
+Use this workflow only from a trusted installed package, console launcher,
+Python interpreter, and import environment, including `PYTHONPATH` and import
+resolution. Those assets are the execution root; this workflow does not claim to
+detect or prevent their replacement.
+
+`observation_identity_sha256` identifies the selected retained record.
+`runtime_code_identity_sha256`, `result_identity_sha256`, and
+`decision_identity_sha256` provide reproducibility and correlation metadata.
+They do not authenticate package code, provider content, source admission, or a
+security attestation.
+
 ## Analytical-family disposition
 
 | Family | Current use |

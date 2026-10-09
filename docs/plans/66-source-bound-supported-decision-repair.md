@@ -39,9 +39,7 @@ arguments.
    time. No caller-supplied relation or stop/reference can influence it.
 4. The CLI is read-only and offline. Invalid requests return `request_invalid`;
    unavailable or unadmitted selected records return a fixed public envelope
-   without a storage path or raw retained data. Each command's runtime closure
-   validates the installed entrypoint, dispatcher, relevant retained-record
-   verifier sources and dedicated manifest before it assesses a record.
+   without a storage path or raw retained data.
 
 The first working slice gives a user a real command that proves the decision
 boundary fails closed on exact retained research. It is not an actionable
@@ -61,6 +59,21 @@ No new provider, network access, persistence model, event classifier, price
 currency rule, turnover threshold, listing-age rule, or broker surface is
 introduced. The existing `BharatStock` price basis remains source-reported;
 this plan does not relabel it as INR proof.
+
+## Trusted installation boundary
+
+The installed package, console launcher, Python interpreter, and import
+environment, including `PYTHONPATH` and import resolution, form this workflow's
+trusted execution root. A process that can replace those assets can execute
+arbitrary code, so this plan does not claim package-source substitution
+prevention or detection.
+
+`runtime_code_identity_sha256`, `result_identity_sha256`, and
+`decision_identity_sha256` provide reproducibility and correlation metadata.
+They do not authenticate package code, a provider, source admission, or a
+security attestation. Retained-record handles and the existing record-admission
+checks retain their defined byte, ownership, and compatibility controls within
+the trusted installation boundary.
 
 ## Decision precedence
 
@@ -86,7 +99,8 @@ this plan does not relabel it as INR proof.
 | Matching causal pair, `ABOVE` relation, no observed invalidation | Relation is internally derived and result remains `NO_TRADE`; no caller can turn it into `ACTIONABLE`. |
 | Invalidated, revised, replayed, non-comparable or different-stock pair | Derived setup summary is preserved where available; result remains fail-closed `NO_TRADE`. |
 | Relative root, malformed command, malformed handle or unexpected flag | `request_invalid`, zero record reads or writes. |
-| Runtime-source or derived-evidence substitution | Both command paths reject substitutions of the installed entrypoint, dispatcher, verifier sources or dedicated manifest; retained-record admission and derived-evidence identity validation also refuse mismatches. |
+| Retained record, raw input, or derived-evidence substitution | Record admission and derived-evidence identity validation refuse mismatches; no caller-supplied fact can create actionability. |
+| Package source, console launcher, interpreter, or import-path substitution | Outside the trusted installation boundary; runtime and result identities are correlation metadata, not source authentication. |
 
 ## Completion and follow-on boundary
 
