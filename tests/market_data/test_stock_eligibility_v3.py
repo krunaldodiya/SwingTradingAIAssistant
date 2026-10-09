@@ -354,8 +354,12 @@ def test_v3_eligibility_keeps_provider_authentication_unknown_and_private(
     assert _TOKEN not in str(result)
 
 
+@pytest.mark.parametrize(
+    "malformed_decimal",
+    (b"1e-999999999", b"1e" + b"9" * 500),
+)
 def test_v3_public_sdk_closes_malformed_bharatstock_decimal_evidence(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, malformed_decimal: bytes
 ) -> None:
     observation = _structure_observation(tmp_path)
     handle = record_stock_observation_v1(tmp_path, observation)
@@ -398,7 +402,7 @@ def test_v3_public_sdk_closes_malformed_bharatstock_decimal_evidence(
     ):
         history_body = history_body.replace(
             f'"{field}":'.encode() + ordinary,
-            f'"{field}":1e-999999999'.encode(),
+            f'"{field}":'.encode() + malformed_decimal,
             1,
         )
     transport = _SequencedTransport(

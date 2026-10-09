@@ -237,7 +237,7 @@ def _decode(body: bytes) -> dict[str, object]:
             parse_constant=_invalid_constant,
             object_pairs_hook=_json_object,
         )
-    except (ValueError, UnicodeError, RecursionError):
+    except (ArithmeticError, ValueError, UnicodeError, RecursionError):
         raise BharatStockError("RESPONSE_INVALID", member_local=True) from None
     if type(value) is not dict:
         raise BharatStockError("RESPONSE_INVALID", member_local=True)

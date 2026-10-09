@@ -166,7 +166,13 @@ def test_invalid_price_evidence_is_member_local(rows: list[dict[str, object]]) -
     assert error.value.member_local
 
 
-def test_rejects_unbounded_decimal_before_history_projection() -> None:
+@pytest.mark.parametrize(
+    "malformed_decimal",
+    (b"1e-999999999", b"1e" + b"9" * 500),
+)
+def test_rejects_unbounded_decimal_before_history_projection(
+    malformed_decimal: bytes,
+) -> None:
     row = _row("2026-08-27")
     for field in ("open", "high", "low", "close"):
         row[field] = 1.0
@@ -174,7 +180,7 @@ def test_rejects_unbounded_decimal_before_history_projection() -> None:
     for field in ("open", "high", "low", "close"):
         body = body.replace(
             f'"{field}": 1.0'.encode(),
-            f'"{field}": 1e-999999999'.encode(),
+            f'"{field}": '.encode() + malformed_decimal,
             1,
         )
     client = BharatStockClient(
