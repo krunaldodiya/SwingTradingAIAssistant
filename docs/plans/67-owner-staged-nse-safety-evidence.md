@@ -94,7 +94,7 @@ conflicting matching rows fail closed.
 
 | File | Required normalized columns | Required selected-row rule |
 | --- | --- | --- |
-| `equity-trading.csv` | `SYMBOL`, `SERIES`, `ISIN_NUMBER`, `DATE_OF_LISTING` | Exactly one `SERIES=EQ` row matches the re-admitted observation's effective symbol and ISIN; the listing field must be syntactically present and nonempty. |
+| `equity-trading.csv` | `SYMBOL`, `SERIES`, `ISIN_NUMBER`, `DATE_OF_LISTING` | Exactly one `SERIES=EQ` row matches the re-admitted observation's effective symbol and ISIN; the listing field must be a nonempty real `DD-Mon-YYYY` calendar date. |
 | `asm.csv` | `SYMBOL` | At most one matching symbol. The response says only whether it was observed in the staged bytes. |
 | `gsm.csv` | `SYMBOL` | At most one matching symbol. The response says only whether it was observed in the staged bytes. |
 

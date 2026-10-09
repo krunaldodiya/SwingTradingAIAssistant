@@ -47,8 +47,10 @@ container run is used.
 - Issue #294 is open and read back in the private delivery project as In Progress.
 - Milestone 45 is open with Issue #294.
 - The source boundary and full adversarial matrix are frozen in Plan 67.
-- Implementation has not started; no source artifact, credential or current
-  market payload has been acquired for this sprint.
+- The offline SDK, installed command, source-at-rest identity closure, focused
+  adversarial checks, and operator workflow are implemented on the sprint
+  candidate. No source artifact, credential, or current market payload has been
+  acquired for this sprint.
 
 ## Explicit later boundary
 
