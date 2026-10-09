@@ -1,18 +1,26 @@
 # GitHub-hosted CI and cost controls
 
-Status: accepted owner direction, 2026-10-03; migration validation pending.
+Status: active owner direction, updated 2026-10-09.
 Risk owner: Krunal Dodiya. The owner requested GitHub-only CI after repeated
 memory pressure on the daily-use PC. This supersedes the self-hosted execution
 policy in Issues #222/#228 and [the historical runner procedure](self-hosted-ci.md).
-The repository and its OCI package remain private.
+The owner then made the repository public, as retained in the
+[visibility decision](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/163#issuecomment-6081009817),
+to use standard public GitHub-hosted runners without private-repository
+Actions-minute charges. The OCI package must remain separately private and its
+pre-push privacy gate and post-publication verification remain required.
 
 ## Execution and acceptance
 
 Linux quality, main admission and publication use standard `ubuntu-24.04`
-GitHub-hosted runners and explicitly select Docker. No local or dedicated
-self-hosted fallback is permitted. A billing refusal, missing capacity, cancelled
-run or failed check blocks the affected delivery; it is never permission to
-restart CI on the owner's PC, change visibility, buy capacity or weaken gates.
+GitHub-hosted runners and explicitly select Docker. GitHub's current
+[billing guidance](https://docs.github.com/en/billing/concepts/product-billing/github-actions)
+and [runner reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)
+make standard runner compute free and unlimited for a public repository. No
+local or dedicated self-hosted fallback is permitted. A billing refusal, missing
+capacity, cancelled run or failed check blocks the affected delivery; it is never
+permission to restart CI on the owner's PC, use a larger/nonstandard runner,
+change visibility without new owner authority, buy capacity or weaken gates.
 
 Only the owner actor and same-repository owner-authored PRs are admitted. The
 quality job runs for ready PRs; draft updates do not allocate a quality runner.
@@ -29,8 +37,10 @@ GitHub's [concurrency contract](https://docs.github.com/en/actions/how-tos/write
 allows one active and at most 100 pending jobs per `max` queue. It orders jobs
 by when they started waiting, not necessarily commit or dispatch order. At the
 limit, further jobs are cancelled; those outcomes remain blocked, never admitted.
-Inspect pending work and remaining allowance before merging. Do not merge a new
-candidate while required publication for the prior candidate remains incomplete:
+Inspect pending work, public visibility and standard-runner eligibility before
+merging. For a run that persists storage or publishes a package, also inspect
+the applicable storage/Packages controls. Do not merge a new candidate while
+required publication for the prior candidate remains incomplete:
 the publisher still requires the exact current main commit, so a superseded
 commit fails explicitly instead of inheriting a later receipt. Preserve all
 failed, timed-out, cancelled and skipped outcomes; queueing is not unlimited
@@ -78,46 +88,64 @@ its full selection and coverage gate passed, distributions built, and the
 required Linux verifier began after about 85 minutes but was cancelled by the
 former 90-minute cap. The correction leaves the selected gates, runner,
 concurrency, privacy controls and publication cap unchanged.
-No retry is automatic; inspect the failure and remaining allowance before an
-explicitly authorized retry.
+No retry is automatic; inspect the failure and its applicable public-compute or
+storage/package boundary before an explicitly authorized retry.
 
-## Verify allowance and stop controls before starting CI
+## Verify public-runner and storage controls before hosted work
 
 Use the owner's existing authenticated GitHub billing UI or a supported read-only
 API. Do not read credentials, add token scopes, log in again, purchase capacity,
 change a subscription or add payment information to obtain this evidence.
 
-Before publishing a ready candidate or starting/retrying a run, record:
+Before starting or retrying a quality or main job that only uses the declared
+standard runner and creates no persisted Actions artifact, cache or package,
+record:
 
-1. Account and current plan, billing period/reset, included Actions minutes and
-   storage usage, and all other repositories sharing that allowance.
-2. The Actions budget's **product scope, account scope, amount and Stop usage
-   setting**. The approved setting is account `krunaldodiya`, product `Actions`,
-   **$0 paid-usage budget, Stop usage Yes**. Included-usage alerts supplement this
-   control; an alert-only budget is insufficient. Verify Packages separately for
-   private distribution. Any change to these settings requires exact owner
-   approval and readback; a repo policy file does not configure GitHub billing.
-3. Enough remaining allowance for the bounded candidate and release path, allowing
-   for all active jobs and other repositories. A normal Linux path has up to
-   120 minutes quality + 120 minutes fallback (only if admission cannot be reused)
-   + 60 minutes publication, plus short checks and GitHub job rounding. Use observed
-   durations to plan capacity; configured timeouts are bounds, not cost estimates.
-4. If usage, remaining allowance, stop enforcement or scope is unavailable or
-   ambiguous, report that exact blocker **before** triggering hosted execution.
-   Exhausted allowance means wait for reset or an explicit owner decision, never
-   a local fallback or silent paid usage.
+1. the live repository readback as `visibility=public` / `private=false`; and
+2. the exact workflow label as a standard public runner, currently
+   `ubuntu-24.04`.
 
-Read-only observation on 2026-10-03: the account UI showed GitHub Free,
-0 / 2,000 Actions minutes and 0 / 0.5 GB Actions storage used; Actions and Packages
-both had account budgets of $0 and Stop usage Yes; included-usage alerts were On.
-These are dated observations, not an enduring allowance or zero-charge guarantee.
-The existing CLI returned no plan and HTTP 404 for usage, indicating missing
-`user` scope; the already authenticated Chrome session supplied the evidence
-without granting new access. No billing setting was changed.
+If either fact is unavailable, changed or ambiguous, do not apply the public
+standard-runner compute rule. Larger runners are always charged, including for
+public repositories, so a changed runner is a separate cost/authority boundary.
 
-GitHub explains that budgets govern paid usage for their selected scope, that
-metered Actions can stop at a threshold, and that newly created budgets do not
-retroactively cover earlier usage. See [budgets and alerts](https://docs.github.com/en/billing/concepts/budgets-and-alerts).
+Before a workflow persists Actions artifact/cache storage or publishes the OCI
+package, also record:
+
+1. account/plan and current relevant storage usage;
+2. the Actions and Packages budgets' product scope, account scope, amount and
+   Stop usage setting. The approved controls remain account `krunaldodiya`,
+   product `Actions` and `Packages`, **$0 paid-usage budget, Stop usage Yes**;
+   and
+3. enough remaining storage capacity for the bounded retained result and every
+   active job/repository sharing it.
+
+Actions artifacts and GitHub Packages share storage allowance. Missing or
+ambiguous storage, budget or Stop-use evidence blocks the persisted-storage or
+publication event; it does not convert standard public-runner compute into a
+paid action or authorize a local fallback. A repository policy file cannot
+configure GitHub billing. Any billing-setting change requires exact owner
+approval and readback.
+
+Before any OCI registry login, manifest lookup, local tag, or push, the
+publisher must use its job token to read the existing exact package metadata and
+require `visibility=private`. A missing package, unreadable metadata, or another
+visibility fails before a registry mutation; the workflow must not create the
+package or change its visibility. It repeats the private-visibility assertion
+after the fresh pull, but that later check only verifies the published result and
+cannot replace the preventive pre-push gate.
+
+The 2026-10-03 private-repository billing readback remains historical only and
+does not establish present storage, package, budget or visibility state. The
+authenticated CLI lacks the `read:packages` scope, so package
+visibility must be checked by the publication job rather than claimed from that
+CLI. GitHub [documents that a package first created by a workflow inherits the
+repository visibility model](https://docs.github.com/en/packages/managing-github-packages-using-github-actions-workflows/publishing-and-installing-a-package-with-github-actions#default-permissions-and-access-settings-for-packages-modified-through-workflows),
+so allowing a public repository's publisher to create a missing package would
+expose the image before a post-push assertion.
+
+GitHub documents the standard public-runner compute rule, larger-runner charges,
+and shared artifact/Packages storage in its [Actions billing guidance](https://docs.github.com/en/billing/concepts/product-billing/github-actions).
 
 ## Receipts and retention
 
@@ -134,6 +162,12 @@ A missing or expired receipt blocks a claim that depends on it. Existing local
 receipts remain protected historical evidence until the cleanup inventory is
 approved; this migration does not delete them.
 
+The repository is public, so GitHub exposes Actions history and logs to everyone.
+Receipts, job output, summaries, artifacts and linked Issue/PR evidence must
+therefore stay compact and redacted: never emit credentials, raw private market
+data, owner-private filesystem paths, or unnecessary account material. Public
+logs are not a destination for private retained evidence.
+
 ## Windows boundary
 
 The existing Windows conformance contract requires actual WSL2 and Docker Desktop.
@@ -149,11 +183,14 @@ approved suitable hosted environment proves the original contract.
 ## Cutover and local retirement
 
 Prepare and review the complete workflow/admission/policy delta on a clean isolated
-candidate. Use a draft PR for review; after exact independent review and fresh
-budget readback, mark it ready once. Verify hosted PR quality, security checks,
-exact merge ancestry/tree, main admission and private registry publication/pull.
-Do not start Sprint 35 until Sprint 34 publication and tracker closeout are complete.
-No direct main push or automatic merge is authorized by this procedure.
+candidate. Use a draft PR for review; after exact independent review and the
+applicable public-runner/storage preflight, mark it ready once. Verify hosted PR
+quality, security checks, exact merge ancestry/tree, main admission and private
+registry publication/pull. A publisher change also needs an adversarial
+workflow-shell test proving missing, unreadable, or non-private package metadata
+prevents login, manifest lookup, tagging, and push. The former Sprint-35 hold
+was satisfied by the completed hosted migration and remains historical context
+only. No direct main push or automatic merge is authorized by this procedure.
 
 Only after hosted validation, inventory local CI services/controllers, runner
 registrations, job containers/networks/volumes, images, caches and retained receipts.
