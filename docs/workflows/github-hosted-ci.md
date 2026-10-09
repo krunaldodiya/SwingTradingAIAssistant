@@ -8,7 +8,7 @@ The owner then made the repository public, as retained in the
 [visibility decision](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/163#issuecomment-6081009817),
 to use standard public GitHub-hosted runners without private-repository
 Actions-minute charges. The OCI package must remain separately private and its
-publication check remains required.
+pre-push privacy gate and post-publication verification remain required.
 
 ## Execution and acceptance
 
@@ -127,11 +127,22 @@ paid action or authorize a local fallback. A repository policy file cannot
 configure GitHub billing. Any billing-setting change requires exact owner
 approval and readback.
 
+Before any OCI registry login, manifest lookup, local tag, or push, the
+publisher must use its job token to read the existing exact package metadata and
+require `visibility=private`. A missing package, unreadable metadata, or another
+visibility fails before a registry mutation; the workflow must not create the
+package or change its visibility. It repeats the private-visibility assertion
+after the fresh pull, but that later check only verifies the published result and
+cannot replace the preventive pre-push gate.
+
 The 2026-10-03 private-repository billing readback remains historical only and
 does not establish present storage, package, budget or visibility state. The
 authenticated CLI lacks the `read:packages` scope, so package
-visibility must continue to be checked by the publication workflow rather than
-claimed from that CLI.
+visibility must be checked by the publication job rather than claimed from that
+CLI. GitHub [documents that a package first created by a workflow inherits the
+repository visibility model](https://docs.github.com/en/packages/managing-github-packages-using-github-actions-workflows/publishing-and-installing-a-package-with-github-actions#default-permissions-and-access-settings-for-packages-modified-through-workflows),
+so allowing a public repository's publisher to create a missing package would
+expose the image before a post-push assertion.
 
 GitHub documents the standard public-runner compute rule, larger-runner charges,
 and shared artifact/Packages storage in its [Actions billing guidance](https://docs.github.com/en/billing/concepts/product-billing/github-actions).
@@ -175,9 +186,11 @@ Prepare and review the complete workflow/admission/policy delta on a clean isola
 candidate. Use a draft PR for review; after exact independent review and the
 applicable public-runner/storage preflight, mark it ready once. Verify hosted PR
 quality, security checks, exact merge ancestry/tree, main admission and private
-registry publication/pull. The former Sprint-35 hold was satisfied by the
-completed hosted migration and remains historical context only. No direct main
-push or automatic merge is authorized by this procedure.
+registry publication/pull. A publisher change also needs an adversarial
+workflow-shell test proving missing, unreadable, or non-private package metadata
+prevents login, manifest lookup, tagging, and push. The former Sprint-35 hold
+was satisfied by the completed hosted migration and remains historical context
+only. No direct main push or automatic merge is authorized by this procedure.
 
 Only after hosted validation, inventory local CI services/controllers, runner
 registrations, job containers/networks/volumes, images, caches and retained receipts.

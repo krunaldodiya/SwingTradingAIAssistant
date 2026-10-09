@@ -130,6 +130,8 @@ def _gh(args, state):
     state["visibility_checks"] += 1
     if state["scenario"] == "visibility_denied":
         return 1, "", "HTTP 403"
+    if state["scenario"] == "visibility_missing":
+        return 1, "", "HTTP 404"
     public = state["scenario"] == "public_before" or (
         state["scenario"] == "public_after" and state["visibility_checks"] == 2
     )
@@ -267,7 +269,7 @@ def test_publication_verifies_registry_digest_after_discarding_local_metadata(
     assert sum(command[1] == "push" for command in commands) == (0 if exists else 1)
     assert not any(STALE_DIGEST in command for command in commands)
     assert [runtime, "pull", "--platform", "linux/amd64", REGISTRY_DIGEST] in commands
-    assert state["visibility_checks"] == 2
+    assert state["visibility_checks"] == (2 if exists else 3)
 
 
 @pytest.mark.parametrize("runtime", ("podman", "docker"))
@@ -287,6 +289,7 @@ def test_publication_verifies_registry_digest_after_discarding_local_metadata(
         "failed_smoke",
         "lookup_denied",
         "visibility_denied",
+        "visibility_missing",
         "public_before",
         "public_after",
     ),
@@ -301,8 +304,18 @@ def test_publication_fails_closed_without_success_receipt(tmp_path, runtime, sce
     assert result.returncode != 0
     assert "Traceback" not in result.stderr, result.stderr
     assert not (retained / "oci-publication-receipt.json").exists()
-    if scenario in {"collision", "lookup_denied", "visibility_denied", "public_before"}:
+    if scenario in {"collision", "lookup_denied"}:
         assert not any(command[1] == "push" for command in state["commands"])
+    if scenario in {"visibility_denied", "visibility_missing", "public_before"}:
+        assert not any(
+            command[0] == runtime and command[1] in {"login", "manifest", "tag", "push"}
+            for command in state["commands"]
+        )
+    if scenario == "public_after":
+        assert not any(
+            command[0] == runtime and command[1] in {"tag", "push"}
+            for command in state["commands"]
+        )
     if scenario == "changed_alias":
         assert not any(command[1:3] == ["image", "rm"] for command in state["commands"])
     if scenario.startswith("changed_") and scenario != "changed_alias":

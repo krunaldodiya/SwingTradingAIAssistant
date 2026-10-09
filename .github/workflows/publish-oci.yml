@@ -97,12 +97,17 @@ jobs:
           test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)" = "$ADMITTED_SHA"
           package_path="users/${GITHUB_REPOSITORY_OWNER}/packages/container/${GITHUB_REPOSITORY#*/}"
           package_path="${package_path,,}"
-          if gh api "$package_path" --jq .visibility > "$RUNNER_TEMP/package-visibility.txt" 2> "$RUNNER_TEMP/package-error.txt"; then
-            test "$(cat "$RUNNER_TEMP/package-visibility.txt")" = private
-          elif ! grep -q 'HTTP 404' "$RUNNER_TEMP/package-error.txt"; then
-            echo 'GHCR package visibility could not be established.' >&2
-            exit 1
-          fi
+          require_private_package() {
+            if ! package_visibility="$(gh api "$package_path" --jq .visibility 2> "$RUNNER_TEMP/package-error.txt")"; then
+              echo 'Private GHCR package must already exist and be readable before publication.' >&2
+              exit 1
+            fi
+            if test "$package_visibility" != private; then
+              echo 'GHCR package is not private; refusing registry mutation.' >&2
+              exit 1
+            fi
+          }
+          require_private_package
           printf '%s' "$GHCR_TOKEN" | "$runtime" login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
           if "$runtime" manifest inspect "$remote_tag" > "$RUNNER_TEMP/existing-manifest.json" 2> "$RUNNER_TEMP/manifest-error.txt"; then
             "$runtime" pull --platform linux/amd64 "$remote_tag"
@@ -116,6 +121,7 @@ jobs:
               echo 'Registry lookup failed for a reason other than a missing tag.' >&2
               exit 1
             fi
+            require_private_package
             "$runtime" tag "$local_tag" "$remote_tag"
             "$runtime" push "$remote_tag"
             published_id="$local_id"
