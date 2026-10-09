@@ -64,12 +64,14 @@ above is reusable; the named gap's closure evidence supplies the missing claim.
 
 ## Finite remaining outcomes
 
-October7 Sprint51 checkpoint: Issue290 / Plan64 implements the accepted
-combined observation-record/readback/comparison working path and instructions.
-The roadmap now groups related tasks into four delivery groups; no original
-closure predicate or dependency is weakened, and G10 is counted only once.
-Software/synthetic and actual-source/chronological-session evidence remain
-separate. G03–G12 remain ten open outcomes until their full named evidence passes.
+October 9 Sprint 52 checkpoint: [Issue #292](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/292)
+is repairing the initial decision implementation under
+[Plan 66](66-source-bound-supported-decision-repair.md). The active slice is a
+source-bound `UNKNOWN`/`NO_TRADE` boundary; G03 eligibility and G04 actionability
+remain open until their missing evidence capabilities are separately admitted.
+
+October 7 Sprint 51 delivery: Issue #290 / PR #291 delivered the retained
+observation and comparison workflow under Plan 64.
 
 October7 next-sprint checkpoint: [Sprint50](../sprints/sprint-50.md) /
 [Plan63](63-stock-eligibility-safety-readiness.md) / Issue288 reconciles the

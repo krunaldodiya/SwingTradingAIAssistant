@@ -27,13 +27,16 @@ private publication/pulls passed. Qualified code main is
 `92da97564c11ab956427851154dee94124547b12`; Issue/Project/milestone are closed/Done.
 See the [Sprint 48 delivery record](sprints/sprint-48.md) for exact receipts.
 
-**Sprint51 is in progress:** [Issue290](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/290)
-and [Plan64](plans/64-retained-stock-observation-workflow.md) combine recording,
-exact retained readback, comparison, failure/recovery paths and installed
-instructions. The owner accepted grouping related work into four usable
-delivery groups; the [roadmap table](roadmap.md#priority-order-and-next-sprint)
-owns the groups and dependencies. These are not four promised sprints.
-Original closure predicates/counting remain unchanged; G03–G12 remain open.
+**Sprint 51 is delivered:** [Issue #290](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/290)
+and [PR #291](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/291)
+delivered the usable retained observation and comparison workflow under
+[Plan 64](plans/64-retained-stock-observation-workflow.md).
+
+**Sprint 52 is in progress:** [Issue #292](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/292)
+is completing the source-bound repair in
+[Plan 66](plans/66-source-bound-supported-decision-repair.md). The corrected
+installed decision boundary returns `NO_TRADE` from retained admitted
+observations while G03/G04 source-capability work remains open.
 
 **Sprint50 design is delivered** through Issue288/PR289/main
 `0bba1769619cad7c6159c986e8c42c690f04d3b7`, with both complete independent
