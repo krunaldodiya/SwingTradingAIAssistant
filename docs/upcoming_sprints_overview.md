@@ -32,11 +32,18 @@ and [PR #291](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/291)
 delivered the usable retained observation and comparison workflow under
 [Plan 64](plans/64-retained-stock-observation-workflow.md).
 
-**Sprint 52 is in progress:** [Issue #292](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/292)
-is completing the source-bound repair in
-[Plan 66](plans/66-source-bound-supported-decision-repair.md). The corrected
-installed decision boundary returns `NO_TRADE` from retained admitted
-observations while G03/G04 source-capability work remains open.
+**Sprint 52 is delivered:** [Issue #292](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/292)
+and [PR #293](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/293)
+completed the source-bound repair in
+[Plan 66](plans/66-source-bound-supported-decision-repair.md), main
+`b1840fab6509e4343958e17e3792bf9e8d586675`. The installed boundary returns
+`NO_TRADE` from retained admitted observations while G03/G04 remain open.
+
+**Sprint 53 is in progress:** [Issue #294](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/294)
+implements [Plan 67](plans/67-owner-staged-nse-safety-evidence.md): an offline
+inspection of a fixed owner-staged NSE reference package. It does not collect or
+authenticate source data and can only return `UNKNOWN` eligibility, preserving
+the outstanding G03/G04 source-capability work.
 
 **Sprint50 design is delivered** through Issue288/PR289/main
 `0bba1769619cad7c6159c986e8c42c690f04d3b7`, with both complete independent

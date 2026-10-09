@@ -36,6 +36,7 @@ efficient-current-nifty100-adjusted-capture = "swing_trading_ai_assistant.entryp
 equity-data-download = "equity_data_downloader.cli:main"
 stock-observations = "swing_trading_ai_assistant.entrypoints.stock_observations:main"
 signal-decisions = "swing_trading_ai_assistant.entrypoints.signal_decisions:main"
+stock-safety-evidence = "swing_trading_ai_assistant.entrypoints.stock_safety_evidence:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/equity_data_downloader", "src/swing_trading_ai_assistant"]
