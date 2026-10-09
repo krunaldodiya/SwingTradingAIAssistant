@@ -16,6 +16,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Final, Protocol, cast
 
+from .credentials import AccessToken
 from .http import HttpTransport
 from .storage_root_lease import (
     StorageRootLease,
@@ -330,6 +331,20 @@ class UpstoxCorporateActionsClientV1:
         self._clock = clock
 
     def fetch_strict(self, isin: str, access_token: str) -> CorporateActionSnapshotV1:
+        """Fetch one snapshot with the legacy string credential contract."""
+        return self._fetch_strict(isin, access_token)
+
+    def fetch_strict_with_access_token(
+        self, isin: str, access_token: AccessToken
+    ) -> CorporateActionSnapshotV1:
+        """Fetch one strict snapshot, revealing a redacted credential only here."""
+        if type(access_token) is not AccessToken:
+            raise CorporateActionUnavailableError(
+                "corporate action request unavailable"
+            )
+        return self._fetch_strict(isin, access_token.reveal())
+
+    def _fetch_strict(self, isin: str, access_token: str) -> CorporateActionSnapshotV1:
         """Fetch one snapshot without broad exception laundering.
 
         The legacy ``fetch`` preserves its historical broad failure envelope.
@@ -339,8 +354,9 @@ class UpstoxCorporateActionsClientV1:
             raise CorporateActionUnavailableError(
                 "corporate action request unavailable"
             )
+        url = UPSTOX_CORPORATE_ACTIONS_URL_V1.format(isin=isin)
         response = self._transport.get(
-            UPSTOX_CORPORATE_ACTIONS_URL_V1.format(isin=isin),
+            url,
             headers={
                 "Accept": "application/json",
                 "Authorization": f"Bearer {access_token}",
@@ -360,6 +376,8 @@ class UpstoxCorporateActionsClientV1:
             raise CorporateActionProviderResponseError(
                 "corporate action response unavailable"
             )
+        if response.response_url not in {None, url}:
+            raise CorporateActionCorruptError("corporate action response corrupt")
         events = _parse_upstox_response_strict(response.body)
         retrieved_at = self._clock()
         if not _aware(retrieved_at):

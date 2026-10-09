@@ -1,6 +1,6 @@
 # Supported signal decisions workflow
 
-[Plan 69](../plans/69-automated-supported-signal-decisions.md) defines the
+[Plan 70](../plans/70-automated-supported-signal-decisions.md) defines the
 automated V3 safety and causal-decision contract. It gives a human or an AI
 harness the same structured evidence to explain why a stock is a bounded
 research candidate, why it is rejected, or why the tool cannot decide safely.
@@ -19,7 +19,7 @@ token, API key, raw provider payload, or source file is accepted on the command
 line. For each V3 evaluation it makes at most four serial provider reads:
 
 1. one exact NSE-equity Upstox Full Market Quotes V3 read for quote, circuit and
-   top-of-book facts;
+   top-of-book facts. The documented response may contain one through five ordered levels per side; the gate evaluates the best valid bid/ask pair;
 2. the bounded BharatStock identity and completed-history reads needed for the
    retained ISIN and latest completed session; and
 3. one strict Upstox corporate-actions read for that ISIN.
@@ -51,8 +51,8 @@ The fixed safety rules make the reason concrete:
 | `CANONICAL_NSE_EQUITY_IDENTITY` | Whether the retained observation binds exactly one NSE EQ symbol, ISIN, mapping and structure source. |
 | `CURRENT_UPSTOX_QUOTE_BINDING` | Whether the current Upstox instrument token and symbol exactly bind the retained ISIN and effective symbol. |
 | `CURRENT_QUOTE_FRESHNESS_AND_INTEGRITY` | Quote timestamp, retrieval time, completed-session alignment and circuit coherence. |
-| `LOW_PRICE_AND_CIRCUIT_DISTANCE` | Current price, INR 20 floor, both circuit distances and the 2% threshold. |
-| `CURRENT_BOOK_LIQUIDITY` | Best bid/ask, relative spread, positive two-sided quantities and the 2% maximum spread. |
+| `LOW_PRICE_AND_CIRCUIT_DISTANCE` | Current price, INR 20 floor, both circuit distances, the 2% threshold, and whether each exact comparison passed. |
+| `CURRENT_BOOK_LIQUIDITY` | Best bid/ask, relative spread, positive two-sided quantities, the 2% maximum spread, and the exact comparison outcome. |
 | `PROVIDER_OBSERVABLE_HISTORY` | Whether at least 252 valid completed rows end at the retained decision session. |
 | `ROLLING_CASH_TURNOVER` | The median `close × volume` across the newest 20 sessions and the INR 10,000,000 threshold. |
 | `SUPPORTED_CORPORATE_ACTION_BLACKOUT` | Whether a provider-supported dividend, bonus, split or rights event falls within seven calendar days of the retained session. |

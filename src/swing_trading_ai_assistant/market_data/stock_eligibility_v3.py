@@ -8,9 +8,9 @@ import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
-from decimal import Decimal
+from decimal import Decimal, localcontext
 from pathlib import Path
-from typing import Final, Protocol, cast
+from typing import Final, Protocol
 from zoneinfo import ZoneInfo
 
 from swing_trading_ai_assistant.research_packet.bharatstock_v2 import (
@@ -23,7 +23,7 @@ from .corporate_actions import (
     CorporateActionSnapshotV1,
     UpstoxCorporateActionsClientV1,
 )
-from .credentials import EnvironmentAccessTokenProvider
+from .credentials import AccessToken, EnvironmentAccessTokenProvider
 from .current_stock_research_v2 import CurrentStockResearchResultV2
 from .http import UrllibHttpTransport
 from .runtime_source_verifier import runtime_source_sha256
@@ -109,10 +109,10 @@ class _LiveProviders:
         self._actions_client: UpstoxCorporateActionsClientV1 | None = None
         self._history_client: BharatStockClient | None = None
 
-    def _access_token(self) -> str:
+    def _access_token(self) -> AccessToken:
         if self._token_provider is None:
             self._token_provider = EnvironmentAccessTokenProvider()
-        return self._token_provider.get_access_token().reveal()
+        return self._token_provider.get_access_token()
 
     def get_quote(self, isin: str, symbol: str) -> UpstoxFullQuoteV3:
         if self._quote_client is None:
@@ -135,7 +135,9 @@ class _LiveProviders:
             self._actions_client = UpstoxCorporateActionsClientV1(
                 UrllibHttpTransport(max_body_bytes=1024 * 1024), clock=self._clock
             )
-        return self._actions_client.fetch_strict(isin, self._access_token())
+        return self._actions_client.fetch_strict_with_access_token(
+            isin, self._access_token()
+        )
 
 
 def _utc_now() -> datetime:
@@ -427,53 +429,160 @@ def _quote_integrity(
     return True, "CURRENT_QUOTE_IS_FRESH_AND_INTERNALLY_COHERENT", details
 
 
+def _decimal_exponent(value: Decimal) -> int:
+    exponent = value.as_tuple().exponent
+    if type(exponent) is not int:
+        raise ValueError("invalid finite decimal")
+    return exponent
+
+
+def _decimal_precision(*values: Decimal, extra_digits: int = 0) -> int:
+    """Return enough significant digits for exact bounded Decimal arithmetic."""
+    return max(
+        28,
+        sum(len(value.as_tuple().digits) for value in values) + extra_digits,
+        max(value.adjusted() for value in values)
+        - min(_decimal_exponent(value) for value in values)
+        + 1
+        + extra_digits,
+    )
+
+
+def _decimal_product(left: Decimal, right: Decimal) -> Decimal:
+    with localcontext() as context:
+        context.prec = _decimal_precision(left, right)
+        return left * right
+
+
+def _decimal_sum(left: Decimal, right: Decimal) -> Decimal:
+    with localcontext() as context:
+        context.prec = _decimal_precision(left, right)
+        return left + right
+
+
+def _decimal_difference(left: Decimal, right: Decimal) -> Decimal:
+    with localcontext() as context:
+        context.prec = _decimal_precision(left, right)
+        return left - right
+
+
+def _decimal_ratio(numerator: Decimal, denominator: Decimal) -> Decimal:
+    with localcontext() as context:
+        context.prec = _decimal_precision(numerator, denominator, extra_digits=16)
+        return numerator / denominator
+
+
+def _scaled_decimal_at_most(
+    left: Decimal, left_factor: int, right: Decimal, right_factor: int
+) -> bool:
+    """Compare exact decimal products without using a rounded quotient."""
+    return _decimal_product(left, Decimal(left_factor)) <= _decimal_product(
+        right, Decimal(right_factor)
+    )
+
+
 def _price_and_circuit_measurements(
     quote: UpstoxFullQuoteV3,
 ) -> dict[str, object]:
-    lower_distance = (quote.last_price - quote.lower_circuit_limit) / quote.last_price
-    upper_distance = (quote.upper_circuit_limit - quote.last_price) / quote.last_price
+    lower_distance = _decimal_ratio(
+        _decimal_difference(quote.last_price, quote.lower_circuit_limit),
+        quote.last_price,
+    )
+    upper_distance = _decimal_ratio(
+        _decimal_difference(quote.upper_circuit_limit, quote.last_price),
+        quote.last_price,
+    )
     return {
         "last_price_inr": _decimal_text(quote.last_price),
         "minimum_price_inr": _decimal_text(_MIN_PRICE),
         "lower_circuit_distance": _decimal_text(lower_distance),
         "upper_circuit_distance": _decimal_text(upper_distance),
         "minimum_circuit_distance": _decimal_text(_MIN_CIRCUIT_DISTANCE),
+        "lower_circuit_distance_meets_minimum": _scaled_decimal_at_most(
+            quote.lower_circuit_limit, 100, quote.last_price, 98
+        ),
+        "upper_circuit_distance_meets_minimum": _scaled_decimal_at_most(
+            quote.upper_circuit_limit, 100, quote.last_price, 102
+        ),
     }
 
 
 def _price_and_circuit_passes(quote: UpstoxFullQuoteV3) -> bool:
-    measurements = _price_and_circuit_measurements(quote)
     return (
         quote.last_price >= _MIN_PRICE
-        and Decimal(cast(str, measurements["lower_circuit_distance"]))
-        >= _MIN_CIRCUIT_DISTANCE
-        and Decimal(cast(str, measurements["upper_circuit_distance"]))
-        >= _MIN_CIRCUIT_DISTANCE
+        and _scaled_decimal_at_most(
+            quote.lower_circuit_limit, 100, quote.last_price, 98
+        )
+        and _scaled_decimal_at_most(
+            quote.last_price, 102, quote.upper_circuit_limit, 100
+        )
+    )
+
+
+def _price_and_circuit_failure(quote: UpstoxFullQuoteV3) -> tuple[str, str]:
+    if quote.last_price < _MIN_PRICE:
+        return (
+            "LAST_PRICE_BELOW_MINIMUM_SAFETY_FLOOR",
+            "The observed last price is below the fixed INR 20 research-safety floor.",
+        )
+    if not _scaled_decimal_at_most(
+        quote.lower_circuit_limit, 100, quote.last_price, 98
+    ):
+        return (
+            "LOWER_CIRCUIT_DISTANCE_BELOW_SAFETY_POLICY",
+            "The observed lower circuit is closer than the fixed 2% research-safety distance.",
+        )
+    return (
+        "UPPER_CIRCUIT_DISTANCE_BELOW_SAFETY_POLICY",
+        "The observed upper circuit is closer than the fixed 2% research-safety distance.",
     )
 
 
 def _book_measurements(quote: UpstoxFullQuoteV3) -> dict[str, object] | None:
     if quote.best_bid <= 0 or quote.best_ask <= 0 or quote.best_bid >= quote.best_ask:
         return None
-    midpoint = (quote.best_bid + quote.best_ask) / Decimal(2)
+    midpoint = _decimal_ratio(_decimal_sum(quote.best_bid, quote.best_ask), Decimal(2))
     if midpoint <= 0:
         return None
-    relative_spread = (quote.best_ask - quote.best_bid) / midpoint
+    relative_spread = _decimal_ratio(
+        _decimal_difference(quote.best_ask, quote.best_bid), midpoint
+    )
     return {
         "best_bid_inr": _decimal_text(quote.best_bid),
         "best_ask_inr": _decimal_text(quote.best_ask),
         "relative_spread": _decimal_text(relative_spread),
         "maximum_relative_spread": _decimal_text(_MAX_RELATIVE_SPREAD),
+        "relative_spread_meets_maximum": _scaled_decimal_at_most(
+            quote.best_ask, 99, quote.best_bid, 101
+        ),
         "total_buy_quantity": quote.total_buy_quantity,
         "total_sell_quantity": quote.total_sell_quantity,
     }
 
 
 def _book_passes(quote: UpstoxFullQuoteV3, measurements: dict[str, object]) -> bool:
+    del measurements
     return (
         quote.total_buy_quantity > 0
         and quote.total_sell_quantity > 0
-        and Decimal(cast(str, measurements["relative_spread"])) <= _MAX_RELATIVE_SPREAD
+        and _scaled_decimal_at_most(quote.best_ask, 99, quote.best_bid, 101)
+    )
+
+
+def _book_failure(quote: UpstoxFullQuoteV3) -> tuple[str, str]:
+    if quote.total_buy_quantity <= 0:
+        return (
+            "CURRENT_BOOK_BUY_QUANTITY_NOT_POSITIVE",
+            "The observed current book has no positive aggregate buy quantity.",
+        )
+    if quote.total_sell_quantity <= 0:
+        return (
+            "CURRENT_BOOK_SELL_QUANTITY_NOT_POSITIVE",
+            "The observed current book has no positive aggregate sell quantity.",
+        )
+    return (
+        "CURRENT_BOOK_RELATIVE_SPREAD_EXCEEDS_SAFETY_POLICY",
+        "The observed best-bid/best-ask relative spread exceeds the fixed 2% research-safety limit.",
     )
 
 
@@ -497,20 +606,35 @@ def _history_valid(
     return value
 
 
-def _history_measurements(history: BharatStockHistory) -> dict[str, object]:
-    turnover_values = tuple(
-        row.close * Decimal(row.volume) for row in history.rows[-_TURNOVER_WINDOW:]
+def _turnover_values(history: BharatStockHistory) -> tuple[Decimal, ...]:
+    values = tuple(
+        _decimal_product(row.close, Decimal(row.volume))
+        for row in history.rows[-_TURNOVER_WINDOW:]
     )
-    if len(turnover_values) != _TURNOVER_WINDOW:
+    if len(values) != _TURNOVER_WINDOW:
         raise ValueError("insufficient turnover rows")
-    ordered = tuple(sorted(turnover_values))
-    median = (ordered[9] + ordered[10]) / Decimal(2)
-    return {
-        "history_session_count": len(history.rows),
-        "turnover_window_sessions": _TURNOVER_WINDOW,
-        "median_turnover_inr": _decimal_text(median),
-        "minimum_median_turnover_inr": _decimal_text(_MIN_MEDIAN_TURNOVER),
-    }
+    return values
+
+
+def _history_measurements(
+    history: BharatStockHistory,
+) -> tuple[dict[str, object], bool]:
+    ordered = tuple(sorted(_turnover_values(history)))
+    median_numerator = _decimal_sum(ordered[9], ordered[10])
+    median = _decimal_ratio(median_numerator, Decimal(2))
+    meets_minimum = median_numerator >= _decimal_product(
+        _MIN_MEDIAN_TURNOVER, Decimal(2)
+    )
+    return (
+        {
+            "history_session_count": len(history.rows),
+            "turnover_window_sessions": _TURNOVER_WINDOW,
+            "median_turnover_inr": _decimal_text(median),
+            "minimum_median_turnover_inr": _decimal_text(_MIN_MEDIAN_TURNOVER),
+            "median_turnover_meets_minimum": meets_minimum,
+        },
+        meets_minimum,
+    )
 
 
 def _actions_valid(
@@ -702,12 +826,13 @@ def _evaluate_stock_eligibility_from_admitted_record_v3(  # noqa: C901 - explici
     )
     price_measurements = _price_and_circuit_measurements(quote)
     if not _price_and_circuit_passes(quote):
+        price_reason, price_explanation = _price_and_circuit_failure(quote)
         ledger.append(
             _entry(
                 "LOW_PRICE_AND_CIRCUIT_DISTANCE",
                 "FAIL",
-                "PRICE_OR_CIRCUIT_DISTANCE_BELOW_SAFETY_POLICY",
-                "The observed quote is below the policy price floor or too close to a circuit limit for this research-candidate policy.",
+                price_reason,
+                price_explanation,
                 {"quote_identity_sha256": quote.quote_identity_sha256},
                 price_measurements,
             )
@@ -752,12 +877,13 @@ def _evaluate_stock_eligibility_from_admitted_record_v3(  # noqa: C901 - explici
             stopping_rule_id="CURRENT_BOOK_LIQUIDITY",
         )
     if not _book_passes(quote, book_measurements):
+        book_reason, book_explanation = _book_failure(quote)
         ledger.append(
             _entry(
                 "CURRENT_BOOK_LIQUIDITY",
                 "FAIL",
-                "CURRENT_BOOK_LIQUIDITY_BELOW_SAFETY_POLICY",
-                "The observed top of book has zero side liquidity or exceeds the fixed relative-spread limit.",
+                book_reason,
+                book_explanation,
                 {"quote_identity_sha256": quote.quote_identity_sha256},
                 book_measurements,
             )
@@ -848,12 +974,9 @@ def _evaluate_stock_eligibility_from_admitted_record_v3(  # noqa: C901 - explici
             },
         )
     )
-    turnover_measurements = _history_measurements(history)
+    turnover_measurements, turnover_meets_minimum = _history_measurements(history)
     evidence["median_turnover_inr"] = turnover_measurements["median_turnover_inr"]
-    if (
-        Decimal(cast(str, turnover_measurements["median_turnover_inr"]))
-        < _MIN_MEDIAN_TURNOVER
-    ):
+    if not turnover_meets_minimum:
         ledger.append(
             _entry(
                 "ROLLING_CASH_TURNOVER",

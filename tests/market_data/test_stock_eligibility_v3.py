@@ -24,6 +24,7 @@ from swing_trading_ai_assistant.market_data.corporate_actions import (
     CorporateActionKindV1,
     CorporateActionSnapshotV1,
 )
+from swing_trading_ai_assistant.market_data.credentials import AccessToken
 from swing_trading_ai_assistant.market_data.http import HttpResponse
 from swing_trading_ai_assistant.market_data.stock_eligibility_v3 import (
     _MAX_RESULT_BYTES,
@@ -143,19 +144,27 @@ def _quote(
             for index in range(5)
         ],
     }
+    payload = _payload(
+        timestamp=timestamp.astimezone().isoformat(),
+        last_price=float(price),
+        lower_circuit_limit=float(lower),
+        upper_circuit_limit=float(upper),
+        depth=depth,
+    )
+    for name, value in (
+        ("last_price", price),
+        ("lower_circuit_limit", lower),
+        ("upper_circuit_limit", upper),
+    ):
+        rendered_float = f'"{name}":{float(value)}'.encode()
+        rendered_decimal = f'"{name}":{format(value, "f")}'.encode()
+        assert rendered_float in payload
+        payload = payload.replace(rendered_float, rendered_decimal)
     client = UpstoxFullQuoteV3Client(
-        _Transport(
-            _payload(
-                timestamp=timestamp.astimezone().isoformat(),
-                last_price=float(price),
-                lower_circuit_limit=float(lower),
-                upper_circuit_limit=float(upper),
-                depth=depth,
-            )
-        ),
+        _Transport(payload),
         clock=lambda: timestamp + quote_age,
     )
-    return client.fetch(_ISIN, "RELIANCE", _TOKEN)
+    return client.fetch(_ISIN, "RELIANCE", AccessToken(_TOKEN))
 
 
 def _history(
@@ -390,6 +399,7 @@ def test_v3_eligibility_turnover_threshold_is_exact_and_stops_later_effects(
         "turnover_window_sessions": 20,
         "median_turnover_inr": str(volume * 100),
         "minimum_median_turnover_inr": "10000000",
+        "median_turnover_meets_minimum": expected_status == "ELIGIBLE",
     }
     assert len(providers.calls) == expected_calls
     assert ledger["SUPPORTED_CORPORATE_ACTION_BLACKOUT"]["outcome"] == (
@@ -520,6 +530,12 @@ def test_v3_eligibility_enforces_exact_price_floor(
     ("lower", "upper", "expected_status", "expected_outcome"),
     (
         (Decimal("98"), Decimal("102"), "ELIGIBLE", "PASS"),
+        (
+            Decimal("98.00000000000000000000000000001"),
+            Decimal("102"),
+            "INELIGIBLE",
+            "FAIL",
+        ),
         (Decimal("98.01"), Decimal("102"), "INELIGIBLE", "FAIL"),
     ),
 )
@@ -551,7 +567,14 @@ def test_v3_eligibility_enforces_exact_circuit_distance(
 
     assert result["status"] == expected_status
     ledger = {entry["rule_id"]: entry for entry in result["explanation_ledger"]}
-    assert ledger["LOW_PRICE_AND_CIRCUIT_DISTANCE"]["outcome"] == expected_outcome
+    entry = ledger["LOW_PRICE_AND_CIRCUIT_DISTANCE"]
+    assert entry["outcome"] == expected_outcome
+    if lower == Decimal("98.00000000000000000000000000001"):
+        assert entry["reason_code"] == "LOWER_CIRCUIT_DISTANCE_BELOW_SAFETY_POLICY"
+        assert (
+            entry["derived_measurements"]["lower_circuit_distance_meets_minimum"]
+            is False
+        )
     assert len(providers.calls) == (3 if expected_status == "ELIGIBLE" else 1)
 
 
@@ -590,7 +613,13 @@ def test_v3_eligibility_enforces_exact_relative_spread(
 
     assert result["status"] == expected_status
     ledger = {entry["rule_id"]: entry for entry in result["explanation_ledger"]}
-    assert ledger["CURRENT_BOOK_LIQUIDITY"]["outcome"] == expected_outcome
+    entry = ledger["CURRENT_BOOK_LIQUIDITY"]
+    assert entry["outcome"] == expected_outcome
+    if expected_status == "INELIGIBLE":
+        assert (
+            entry["reason_code"] == "CURRENT_BOOK_RELATIVE_SPREAD_EXCEEDS_SAFETY_POLICY"
+        )
+        assert entry["derived_measurements"]["relative_spread_meets_maximum"] is False
     assert len(providers.calls) == (3 if expected_status == "ELIGIBLE" else 1)
 
 

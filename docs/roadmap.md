@@ -81,11 +81,15 @@ delivered the offline owner-staged NSE reference-package inspection path under
 collection, source-authentication, eligibility or actionability claim; a valid
 staging report remains `UNKNOWN`.
 
-**Sprint 54 is governed by [Issue #296](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/296),
-Milestone 46, and [Plan 68](plans/68-g03-source-and-criteria-admission.md).**
-It freezes the G03 source-capability and criterion-evidence boundary without
-new collection, provider adoption, thresholds, clearance, or actionability.
-Live Issue/Project state owns this Sprint's delivery status.
+Sprint 54 established the G03 source-and-criteria admission boundary under
+[Plan 68](plans/68-g03-source-and-criteria-admission.md). **Sprint 55 is governed
+by [Issue #299](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/299),
+Milestone 47, and [Plan 70](plans/70-automated-supported-signal-decisions.md).**
+It implements the first automatic provider-backed G03/G04 safety and causal
+research-candidate decision for one retained NSE equity. Its V3 ledger explains
+each eligible, ineligible, `NO_TRADE`, or `UNKNOWN` result with the source-bound
+rule, evidence references, measurements, and limitation. Live Issue/Project
+state owns this Sprint's delivery status and qualification claims.
 
 October7 accepted owner course correction: related tasks belong in usable
 delivery groups, with independent work in the same group allowed in parallel.

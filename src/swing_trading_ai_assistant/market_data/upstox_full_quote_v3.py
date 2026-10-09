@@ -12,6 +12,7 @@ from decimal import Decimal
 from typing import Final, cast
 from urllib.parse import urlencode
 
+from .credentials import AccessToken
 from .http import (
     HttpResponse,
     HttpResponseBodyTooLarge,
@@ -185,13 +186,11 @@ class UpstoxFullQuoteV3Client:
         self._transport = transport
         self._clock = clock
 
-    def fetch(self, isin: str, symbol: str, access_token: str) -> UpstoxFullQuoteV3:
-        """Read exactly one quote; no response body or token crosses this boundary."""
-        if (
-            _ISIN.fullmatch(isin) is None
-            or _SYMBOL.fullmatch(symbol) is None
-            or not _valid_token(access_token)
-        ):
+    def fetch(
+        self, isin: str, symbol: str, access_token: AccessToken
+    ) -> UpstoxFullQuoteV3:
+        """Read exactly one quote and reveal its credential only at this boundary."""
+        if _ISIN.fullmatch(isin) is None or _SYMBOL.fullmatch(symbol) is None:
             raise UpstoxFullQuoteUnavailableError("full quote request unavailable")
         instrument_key = f"NSE_EQ|{isin}"
         url = f"{UPSTOX_FULL_QUOTE_URL_V3}?{urlencode({'instrument_key': instrument_key})}"
@@ -201,7 +200,7 @@ class UpstoxFullQuoteV3Client:
                 {
                     "Content-Type": "application/json",
                     "Accept": "application/json",
-                    "Authorization": f"Bearer {access_token}",
+                    "Authorization": self._authorization_header(access_token),
                 },
             )
         except (
@@ -231,6 +230,16 @@ class UpstoxFullQuoteV3Client:
         except (ArithmeticError, TypeError, ValueError, OverflowError):
             raise UpstoxFullQuoteCorruptError("full quote response corrupt") from None
         return quote
+
+    @staticmethod
+    def _authorization_header(access_token: AccessToken) -> str:
+        """Construct the bearer header at the quote HTTP adapter boundary."""
+        if type(access_token) is not AccessToken:
+            raise UpstoxFullQuoteUnavailableError("full quote request unavailable")
+        token_value = access_token.reveal()
+        if not _valid_token(token_value):
+            raise UpstoxFullQuoteUnavailableError("full quote request unavailable")
+        return f"Bearer {token_value}"
 
 
 def _parse_quote(  # noqa: C901 - strict closed provider schema validation
@@ -359,7 +368,7 @@ def _depth_levels(value: object, *, side: str) -> tuple[tuple[Decimal, int, int]
     if type(value) is not list:
         raise UpstoxFullQuoteCorruptError("full quote response corrupt")
     levels_value = cast(list[object], value)
-    if len(levels_value) != 5:
+    if not 1 <= len(levels_value) <= 5:
         raise UpstoxFullQuoteCorruptError("full quote response corrupt")
     levels: list[tuple[Decimal, int, int]] = []
     for item in levels_value:

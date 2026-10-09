@@ -14,7 +14,7 @@ VOLUME_RUNTIME_SOURCE_SHA256_V1: Final[dict[str, str]] = {
     "src/swing_trading_ai_assistant/market_data/capture_forward_adjusted_ohlcv.py": "392431179a4ec08d18f117fc584c6c8b413e5646102f20618b8745bfa292b8b7",
     "src/swing_trading_ai_assistant/market_data/catalog.py": "ae17eac5475a39d5ff08173e9b2154c0cf33778f573e7d894656a2ba685294ac",
     "src/swing_trading_ai_assistant/market_data/cli.py": "4bd73e7a5ee79a61ac48d69664a5f19ac1421853c460a00d2b75735f291ffff6",
-    "src/swing_trading_ai_assistant/market_data/corporate_actions.py": "1d74c5cc7e94470452377491d5fa6ead801833bb4f17b4bae3305e73058cd9cc",
+    "src/swing_trading_ai_assistant/market_data/corporate_actions.py": "65507d4b4dc08f33a871716c77b5b04fbfdc01fbc08ef1d224a620991c4973fb",
     "src/swing_trading_ai_assistant/market_data/credentials.py": "bc6b8847a2c57647071d636a43bcb82b3521bfe435944ce289822fbf583b675b",
     "src/swing_trading_ai_assistant/market_data/current_cohort.py": "50d5e3198908a006be93ff4314fe7ceb5350785b1eb52bbb6dcf2fd468770bea",
     "src/swing_trading_ai_assistant/market_data/current_corporate_action_screen.py": "32f6d2b8b954ca64006308f6af7370fd6489614db172297d818cf2422b946724",

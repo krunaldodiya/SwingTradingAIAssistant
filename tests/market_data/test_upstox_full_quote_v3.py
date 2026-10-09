@@ -6,6 +6,7 @@ from decimal import Decimal
 
 import pytest
 
+from swing_trading_ai_assistant.market_data.credentials import AccessToken
 from swing_trading_ai_assistant.market_data.http import HttpResponse
 from swing_trading_ai_assistant.market_data.upstox_full_quote_v3 import (
     UpstoxFullQuoteAuthenticationError,
@@ -16,6 +17,7 @@ from swing_trading_ai_assistant.market_data.upstox_full_quote_v3 import (
 _ISIN = "INE002A01018"
 _SYMBOL = "RELIANCE"
 _TOKEN = "private-upstox-token"  # noqa: S105 - deterministic fake credential
+_ACCESS_TOKEN = AccessToken(_TOKEN)
 _RETRIEVED = datetime(2026, 10, 9, 4, 31, tzinfo=UTC)
 
 
@@ -104,7 +106,7 @@ def _client(payload: bytes | None = None, *, status: int = 200):
 def test_quote_client_binds_exact_nse_equity_identity_and_redacts_token() -> None:
     client, transport = _client()
 
-    quote = client.fetch(_ISIN, _SYMBOL, _TOKEN)
+    quote = client.fetch(_ISIN, _SYMBOL, _ACCESS_TOKEN)
 
     assert transport.calls == [
         (
@@ -145,14 +147,14 @@ def test_quote_client_rejects_schema_or_identity_substitution(payload: bytes) ->
     client, _ = _client(payload)
 
     with pytest.raises(UpstoxFullQuoteCorruptError):
-        client.fetch(_ISIN, _SYMBOL, _TOKEN)
+        client.fetch(_ISIN, _SYMBOL, _ACCESS_TOKEN)
 
 
 def test_quote_client_keeps_authentication_failure_typed_and_private() -> None:
     client, _ = _client(b'{"secret":"private-upstox-token"}', status=401)
 
     with pytest.raises(UpstoxFullQuoteAuthenticationError) as caught:
-        client.fetch(_ISIN, _SYMBOL, _TOKEN)
+        client.fetch(_ISIN, _SYMBOL, _ACCESS_TOKEN)
 
     assert _TOKEN not in str(caught.value)
 
@@ -175,4 +177,34 @@ def test_quote_client_rejects_depth_outside_reported_circuit_range() -> None:
     )
 
     with pytest.raises(UpstoxFullQuoteCorruptError):
-        client.fetch(_ISIN, _SYMBOL, _TOKEN)
+        client.fetch(_ISIN, _SYMBOL, _ACCESS_TOKEN)
+
+
+def test_quote_client_accepts_documented_shorter_depth_books() -> None:
+    payload = json.loads(_payload().decode("utf-8"))
+    quote_data = payload["data"][f"NSE_EQ:{_SYMBOL}"]
+    assert isinstance(quote_data, dict)
+    depth = quote_data["depth"]
+    assert isinstance(depth, dict)
+    depth["buy"] = depth["buy"][:2]
+    depth["sell"] = depth["sell"][:2]
+    client, _ = _client(json.dumps(payload, separators=(",", ":")).encode())
+
+    quote = client.fetch(_ISIN, _SYMBOL, _ACCESS_TOKEN)
+
+    assert quote.best_bid == Decimal("101.9")
+    assert quote.best_ask == Decimal("102.1")
+
+
+def test_quote_client_preserves_precision_needed_for_circuit_policy() -> None:
+    payload = _payload().replace(b'"last_price":102.0', b'"last_price":100')
+    payload = payload.replace(
+        b'"lower_circuit_limit":81.6',
+        b'"lower_circuit_limit":98.00000000000000000000000000001',
+    )
+    client, _ = _client(payload)
+
+    quote = client.fetch(_ISIN, _SYMBOL, _ACCESS_TOKEN)
+
+    assert quote.last_price == Decimal("100")
+    assert quote.lower_circuit_limit == Decimal("98.00000000000000000000000000001")

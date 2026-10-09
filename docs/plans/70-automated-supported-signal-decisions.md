@@ -1,4 +1,4 @@
-# Plan 69: automated supported signal decisions
+# Plan 70: automated supported signal decisions
 
 Status: accepted bounded specification under [Issue #299](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/299), Milestone 47. Owner and risk owner: Krunal Dodiya. Risk tier: R3 financial-research policy, provider provenance, private credentials and public decision contracts. Base: `9183bf4b82d4163935ad862c4774ea996eadb4dd`.
 
@@ -60,11 +60,11 @@ Policy identifier: `supported-signal-safety-policy@v1`. Values are fixed in code
 | `CURRENT_QUOTE_FRESHNESS_AND_INTEGRITY` | Provider timestamp is an aware instant within 15 minutes of adapter retrieval; price, circuits, top-of-book prices/quantities and last-trade time are finite, nonnegative where applicable, internally coherent, and quote price lies strictly between positive lower/upper circuit limits. | Schema, time, identity or coherence failure is `UNKNOWN`; a direct policy negative below is separate. |
 | `PROVIDER_OBSERVABLE_HISTORY` | BharatStock's returned sessions are unique, end exactly at the retained latest completed session, and contain at least 252 valid completed rows. | Fewer rows, an endpoint mismatch, invalid ordering/corruption or unavailable source is `UNKNOWN`. This is provider-observable completed history, not proof of listing age. |
 | `ROLLING_CASH_TURNOVER` | On the newest 20 returned completed rows, calculate the median of source-reported close × volume. The median must be at least INR 10,000,000 (one crore). | A below-threshold observed median is `INELIGIBLE`; absent/corrupt/misaligned rows are `UNKNOWN`. The metric is a research-liquidity screen, not a permitted order size or market-impact calculation. |
-| `CURRENT_BOOK_LIQUIDITY` | A positive best bid and best ask must exist; best bid < best ask; relative spread `(ask - bid) / ((ask + bid) / 2)` must be at most 2%; and both total buy and total sell quantity must be positive. | A measured depth/spread failure is `INELIGIBLE`; missing/malformed quote evidence is `UNKNOWN`. It does not prove fill probability. |
+| `CURRENT_BOOK_LIQUIDITY` | A positive best bid and best ask must exist; best bid < best ask; relative spread `(ask - bid) / ((ask + bid) / 2)` must be at most 2%; and both total buy and total sell quantity must be positive. The documented response may contain one through five ordered levels per side; this rule uses the best valid pair. | A measured depth/spread failure is `INELIGIBLE`; missing/malformed quote evidence is `UNKNOWN`. It does not prove fill probability. |
 | `LOW_PRICE_AND_CIRCUIT_DISTANCE` | The NSE-equity last price is at least INR 20. Its distance to both circuit limits, divided by last price, is at least 2%. | A measured price or circuit-distance failure is `INELIGIBLE`; unbound/invalid values are `UNKNOWN`. This screen does not label a stock manipulative. |
 | `SUPPORTED_CORPORATE_ACTION_BLACKOUT` | Strict Upstox corporate-action data is available. No supported dividend, bonus, split or rights event has an effective date within seven calendar days before or after the retained decision session. | An observed blackout event is `INELIGIBLE`; unavailable, corrupt, stale or ambiguous event data is `UNKNOWN`. Passing means no event of these provider-supported types was observed in this window; it does not clear all event risk. |
 
-The INR denomination applies only after exact `NSE_EQ` identity is established. The policy reports calculated threshold comparison values as derived evidence; it does not redistribute provider payloads. The rule never applies to another exchange, segment or asset class.
+The INR denomination applies only after exact `NSE_EQ` identity is established. The policy reports calculated threshold comparison values as derived evidence; it does not redistribute provider payloads. Circuit and spread threshold checks compare the underlying Decimal values directly, without accepting a rounded quotient as evidence. The rule never applies to another exchange, segment or asset class.
 
 Eligibility precedence is fixed: local integrity failure raises only to the closed public operator boundary; the first proved safety-policy failure is `INELIGIBLE` and ends later provider effects; absent a proved failure, any mandatory unavailable or invalid source/evidence is `UNKNOWN`; `ELIGIBLE` requires every rule to pass. A lower-priority provider effect is not opened after an earlier policy or source failure.
 
@@ -131,7 +131,7 @@ The coordinator owns integration, contract interpretation, tracker state, source
 - additive V3 eligibility and decision modules or V3 functions with new source-at-rest manifests;
 - bounded integration with `corporate_actions.py` only where required to keep `AccessToken.reveal()` at the Upstox provider boundary;
 - `stock_eligibility.py`, `signal_decisions.py`, `signal_decisions_cli.py`, their V3 manifests and focused tests;
-- Plan 69, Sprint 55/roadmap and first-use documentation necessary for the new commands.
+- Plan 70, Sprint 55/roadmap and first-use documentation necessary for the new commands.
 
 Existing V2 schemas, retained observations, BharatStock capture contracts, causal-fact calculations, source records, package dependencies, workflows and CI policy retain behavior. No manual safety package is used by V3. No source payload is persisted. No background monitoring, portfolio/hold/exit evaluation, list orchestration, AI call, ranking, backtest, broker operation, capital policy, new provider or Future issue is added.
 
