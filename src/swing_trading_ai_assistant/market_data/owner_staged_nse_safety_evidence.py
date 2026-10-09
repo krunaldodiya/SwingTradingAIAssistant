@@ -79,6 +79,13 @@ class _ArtifactSpec:
     reference_page: str
 
 
+@dataclass(frozen=True, slots=True)
+class _OpenedArtifact:
+    name: str
+    descriptor: int
+    metadata: os.stat_result
+
+
 _ARTIFACTS: Final = (
     _ArtifactSpec(
         "equity-trading.csv",
@@ -215,7 +222,7 @@ def _checked_entries(descriptor: int) -> None:
         raise ValueError("unexpected staged package entry")
 
 
-def _read_exact_artifact(parent: int, name: str) -> bytes:
+def _open_exact_artifact(parent: int, name: str) -> _OpenedArtifact:
     descriptor: int | None = None
     try:
         named_before = os.stat(name, dir_fd=parent, follow_symlinks=False)
@@ -231,32 +238,63 @@ def _read_exact_artifact(parent: int, name: str) -> bytes:
             or not same_metadata(named_before, opened_before)
         ):
             raise ValueError("unsafe staged artifact")
-        remaining = opened_before.st_size
-        chunks: list[bytes] = []
-        while remaining:
-            chunk = os.read(descriptor, remaining)
-            if not chunk:
-                raise ValueError("short staged artifact")
-            chunks.append(chunk)
-            remaining -= len(chunk)
-        raw = b"".join(chunks)
-        named_after = os.stat(name, dir_fd=parent, follow_symlinks=False)
-        opened_after = os.fstat(descriptor)
-        if (
-            len(raw) != opened_before.st_size
-            or not same_metadata(named_before, named_after)
-            or not same_metadata(opened_before, opened_after)
-            or not _private_artifact(named_after)
-        ):
-            raise ValueError("staged artifact changed")
-        return raw
+        opened = _OpenedArtifact(name, descriptor, opened_before)
+        descriptor = None
+        return opened
     finally:
         if descriptor is not None:
             os.close(descriptor)
 
 
+def _read_open_artifact(artifact: _OpenedArtifact) -> bytes:
+    opened_before = os.fstat(artifact.descriptor)
+    if not _private_artifact(opened_before) or not same_metadata(
+        artifact.metadata, opened_before
+    ):
+        raise ValueError("staged artifact changed")
+    remaining = artifact.metadata.st_size
+    chunks: list[bytes] = []
+    while remaining:
+        chunk = os.read(artifact.descriptor, remaining)
+        if not chunk:
+            raise ValueError("short staged artifact")
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    raw = b"".join(chunks)
+    opened_after = os.fstat(artifact.descriptor)
+    if len(raw) != artifact.metadata.st_size or not same_metadata(
+        artifact.metadata, opened_after
+    ):
+        raise ValueError("staged artifact changed")
+    return raw
+
+
+def _verify_open_artifact(parent: int, artifact: _OpenedArtifact) -> None:
+    named = os.stat(artifact.name, dir_fd=parent, follow_symlinks=False)
+    opened = os.fstat(artifact.descriptor)
+    if (
+        not _private_artifact(named)
+        or not _private_artifact(opened)
+        or not same_metadata(artifact.metadata, named)
+        or not same_metadata(artifact.metadata, opened)
+    ):
+        raise ValueError("staged artifact changed")
+
+
+def _close_open_artifacts(artifacts: list[_OpenedArtifact]) -> None:
+    close_failed = False
+    for artifact in reversed(artifacts):
+        try:
+            os.close(artifact.descriptor)
+        except OSError:
+            close_failed = True
+    if close_failed:
+        raise ValueError("staged artifact cleanup failed")
+
+
 def _fixed_package_bytes(operation: StorageRootLeaseOperation) -> dict[str, bytes]:
     package: int | None = None
+    opened_artifacts: list[_OpenedArtifact] = []
     try:
         operation.ensure_live()
         parent = operation.descriptor
@@ -274,12 +312,21 @@ def _fixed_package_bytes(operation: StorageRootLeaseOperation) -> dict[str, byte
         ):
             raise ValueError("unsafe staged package")
         _checked_entries(package)
-        artifacts: dict[str, bytes] = {}
         for spec in _ARTIFACTS:
             operation.ensure_live()
-            artifacts[spec.name] = _read_exact_artifact(package, spec.name)
+            opened_artifacts.append(_open_exact_artifact(package, spec.name))
             _package_binding(parent, package)
         _checked_entries(package)
+        artifacts: dict[str, bytes] = {}
+        for artifact in opened_artifacts:
+            operation.ensure_live()
+            artifacts[artifact.name] = _read_open_artifact(artifact)
+            for checked in opened_artifacts:
+                _verify_open_artifact(package, checked)
+            _package_binding(parent, package)
+        _checked_entries(package)
+        for artifact in opened_artifacts:
+            _verify_open_artifact(package, artifact)
         named_after = os.stat(_PACKAGE_NAME, dir_fd=parent, follow_symlinks=False)
         opened_after = os.fstat(package)
         if not same_metadata(named_before, named_after) or not same_metadata(
@@ -289,8 +336,11 @@ def _fixed_package_bytes(operation: StorageRootLeaseOperation) -> dict[str, byte
         operation.ensure_live()
         return artifacts
     finally:
-        if package is not None:
-            os.close(package)
+        try:
+            _close_open_artifacts(opened_artifacts)
+        finally:
+            if package is not None:
+                os.close(package)
 
 
 def _decode_rows(raw: bytes) -> list[list[str]]:

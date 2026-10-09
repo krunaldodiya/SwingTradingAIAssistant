@@ -21,6 +21,9 @@ from swing_trading_ai_assistant.market_data import (
     owner_staged_nse_safety_evidence as safety_evidence,
 )
 from swing_trading_ai_assistant.market_data.bharatstock import BharatStockClient
+from swing_trading_ai_assistant.market_data.current_cohort import (
+    current_cohort_runtime_code_identity_v1,
+)
 from swing_trading_ai_assistant.market_data.owner_staged_nse_safety_evidence import (
     MAX_ARTIFACT_BYTES_V1,
     MAX_FIELD_CHARACTERS_V1,
@@ -34,6 +37,9 @@ from swing_trading_ai_assistant.market_data.owner_staged_nse_safety_evidence_cli
 )
 from swing_trading_ai_assistant.market_data.owner_staged_nse_safety_evidence_runtime_identity_manifest import (
     OWNER_STAGED_NSE_SAFETY_EVIDENCE_RUNTIME_SOURCE_SHA256_V1,
+)
+from swing_trading_ai_assistant.market_data.runtime_identity_manifest import (
+    MARKET_DATA_RUNTIME_SOURCE_SHA256_V1,
 )
 from swing_trading_ai_assistant.market_data.stock_observations import (
     record_stock_observation_v1,
@@ -97,6 +103,20 @@ def _snapshot(root: Path) -> dict[str, tuple[str, int]]:
         for path in root.rglob("*")
         if path.is_file()
     }
+
+
+def _artifact_identity(package: Path) -> dict[str, tuple[int, int, int, int]]:
+    result: dict[str, tuple[int, int, int, int]] = {}
+    for path in package.iterdir():
+        metadata = path.stat()
+        if path.is_file():
+            result[path.name] = (
+                metadata.st_ino,
+                metadata.st_uid,
+                metadata.st_nlink,
+                metadata.st_mode & 0o777,
+            )
+    return result
 
 
 @pytest.fixture
@@ -376,24 +396,89 @@ def test_package_replacement_after_artifact_read_fails_closed(
 ) -> None:
     root, handle = retained_observation
     package = _stage_package(root)
-    original = safety_evidence._read_exact_artifact  # pyright: ignore[reportPrivateUsage]
+    original = safety_evidence._read_open_artifact  # pyright: ignore[reportPrivateUsage]
     replaced = False
 
-    def replace_after_read(parent: int, name: str) -> bytes:
+    def replace_after_read(artifact: safety_evidence._OpenedArtifact) -> bytes:  # pyright: ignore[reportPrivateUsage]
         nonlocal replaced
-        raw = original(parent, name)
-        if name == "equity-trading.csv":
-            artifact = package / name
-            artifact.unlink()
-            artifact.write_bytes(raw)
-            artifact.chmod(0o600)
+        raw = original(artifact)
+        if artifact.name == "equity-trading.csv":
+            path = package / artifact.name
+            path.unlink()
+            path.write_bytes(raw)
+            path.chmod(0o600)
             replaced = True
         return raw
 
-    monkeypatch.setattr(safety_evidence, "_read_exact_artifact", replace_after_read)
+    monkeypatch.setattr(safety_evidence, "_read_open_artifact", replace_after_read)
     with pytest.raises(OwnerStagedNseSafetyEvidenceUnavailableV1):
         inspect_owner_staged_nse_safety_evidence_v1(root, handle)
     assert replaced
+
+
+def test_cross_artifact_in_place_mutation_has_no_staged_output(
+    retained_observation: tuple[Path, str],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    root, handle = retained_observation
+    package = _stage_package(root)
+    before = _artifact_identity(package)
+    original = safety_evidence._read_open_artifact  # pyright: ignore[reportPrivateUsage]
+    mutated = False
+
+    def mutate_after_first_read(
+        artifact: safety_evidence._OpenedArtifact,  # pyright: ignore[reportPrivateUsage]
+    ) -> bytes:
+        nonlocal mutated
+        raw = original(artifact)
+        if artifact.name == "equity-trading.csv":
+            _write(
+                package,
+                artifact.name,
+                "SYMBOL,SERIES,ISIN NUMBER,DATE OF LISTING\n"
+                "PNB,EQ,INE160A01022,06-Jun-1995\n",
+            )
+            _write(package, "asm.csv", "SYMBOL\nPNB\n")
+            mutated = True
+        return raw
+
+    monkeypatch.setattr(safety_evidence, "_read_open_artifact", mutate_after_first_read)
+    assert (
+        cli_main(
+            [
+                "inspect",
+                "--storage-root",
+                str(root),
+                "--observation",
+                handle,
+                "--output",
+                "json",
+            ]
+        )
+        == 1
+    )
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert json.loads(captured.out) == {
+        "code": "STAGED_EVIDENCE_UNAVAILABLE",
+        "contract_version": "stock-safety-evidence@v1",
+        "status": "UNAVAILABLE",
+    }
+    assert '"status":"STAGED"' not in captured.out
+    assert "identity" not in captured.out
+    assert mutated
+    assert _artifact_identity(package) == before
+
+
+def test_generic_runtime_inventory_includes_staged_evidence_modules() -> None:
+    expected = {
+        "owner_staged_nse_safety_evidence.py",
+        "owner_staged_nse_safety_evidence_cli.py",
+        "owner_staged_nse_safety_evidence_runtime_identity_manifest.py",
+    }
+    assert expected <= MARKET_DATA_RUNTIME_SOURCE_SHA256_V1.keys()
+    assert len(current_cohort_runtime_code_identity_v1()) == 64
 
 
 def test_non_structure_observation_and_invalid_request_have_no_package_effect(
