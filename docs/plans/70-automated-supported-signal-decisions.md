@@ -66,6 +66,8 @@ Policy identifier: `supported-signal-safety-policy@v1`. Values are fixed in code
 
 The INR denomination applies only after exact `NSE_EQ` identity is established. The policy reports calculated threshold comparison values as derived evidence; it does not redistribute provider payloads. Circuit and spread threshold checks compare the underlying Decimal values directly, without accepting a rounded quotient as evidence. The rule never applies to another exchange, segment or asset class.
 
+Before any quote Decimal is canonicalized, rendered or used in policy arithmetic, the strict adapter requires a finite representation of at most 192 Decimal-object bytes, 128 coefficient digits, exponent from -128 through 128, and at most 258 fixed-point characters. A violation is malformed quote evidence and therefore yields the closed `UNKNOWN` path without constructing attacker-sized text or arithmetic precision.
+
 Eligibility precedence is fixed: local integrity failure raises only to the closed public operator boundary; the first proved safety-policy failure is `INELIGIBLE` and ends later provider effects; absent a proved failure, any mandatory unavailable or invalid source/evidence is `UNKNOWN`; `ELIGIBLE` requires every rule to pass. A lower-priority provider effect is not opened after an earlier policy or source failure.
 
 ## Frozen causal candidate policy

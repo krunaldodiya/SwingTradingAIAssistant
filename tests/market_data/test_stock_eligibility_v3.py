@@ -579,6 +579,50 @@ def test_v3_eligibility_enforces_exact_circuit_distance(
 
 
 @pytest.mark.parametrize(
+    ("upper", "expected_status", "expected_outcome", "expected_meets_minimum"),
+    (
+        (Decimal("102"), "ELIGIBLE", "PASS", True),
+        (Decimal("101"), "INELIGIBLE", "FAIL", False),
+    ),
+)
+def test_v3_eligibility_reports_upper_circuit_distance_truthfully(
+    tmp_path: Path,
+    upper: Decimal,
+    expected_status: str,
+    expected_outcome: str,
+    expected_meets_minimum: bool,
+) -> None:
+    observation = _structure_observation(tmp_path)
+    handle = record_stock_observation_v1(tmp_path, observation)
+    source = observation.packet.source("MARKET_STRUCTURE")
+    assert source is not None
+    providers = _Providers(
+        _quote(
+            source.admitted_sessions[-1],
+            price=Decimal("100"),
+            lower_circuit_limit=Decimal("98"),
+            upper_circuit_limit=upper,
+        ),
+        _history(observation),
+        _actions(observation),
+    )
+
+    result = _evaluate_stock_eligibility_from_admitted_record_v3(
+        observation, handle, providers=providers, clock=lambda: _NOW
+    )
+
+    assert result["status"] == expected_status
+    ledger = {entry["rule_id"]: entry for entry in result["explanation_ledger"]}
+    entry = ledger["LOW_PRICE_AND_CIRCUIT_DISTANCE"]
+    assert entry["outcome"] == expected_outcome
+    assert (
+        entry["derived_measurements"]["upper_circuit_distance_meets_minimum"]
+        is expected_meets_minimum
+    )
+    assert len(providers.calls) == (3 if expected_status == "ELIGIBLE" else 1)
+
+
+@pytest.mark.parametrize(
     ("best_bid", "best_ask", "expected_status", "expected_outcome"),
     (
         (Decimal("99"), Decimal("101"), "ELIGIBLE", "PASS"),

@@ -208,3 +208,32 @@ def test_quote_client_preserves_precision_needed_for_circuit_policy() -> None:
 
     assert quote.last_price == Decimal("100")
     assert quote.lower_circuit_limit == Decimal("98.00000000000000000000000000001")
+
+
+@pytest.mark.parametrize(
+    "unbounded_number",
+    (
+        b"1e-129",
+        (b"1" * 129) + b"e-128",
+        b"1e-999999999",
+    ),
+)
+def test_quote_client_rejects_unbounded_decimal_before_canonicalization(
+    unbounded_number: bytes,
+) -> None:
+    payload = _payload().replace(
+        b'"net_change":1.0', b'"net_change":' + unbounded_number
+    )
+    client, _ = _client(payload)
+
+    with pytest.raises(UpstoxFullQuoteCorruptError):
+        client.fetch(_ISIN, _SYMBOL, _ACCESS_TOKEN)
+
+
+def test_quote_client_accepts_decimal_representation_at_exact_boundary() -> None:
+    payload = _payload().replace(b'"net_change":1.0', b'"net_change":1e-128')
+    client, _ = _client(payload)
+
+    quote = client.fetch(_ISIN, _SYMBOL, _ACCESS_TOKEN)
+
+    assert quote.last_price == Decimal("102")

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -30,6 +31,11 @@ _ISIN: Final = re.compile(r"INE[A-Z0-9]{8}[0-9]\Z")
 _SYMBOL: Final = re.compile(r"[A-Z0-9][A-Z0-9&._-]{0,63}\Z")
 _DIGEST: Final = re.compile(r"[0-9a-f]{64}\Z")
 _MAX_DECIMAL: Final = Decimal("1e18")
+_MAX_DECIMAL_COEFFICIENT_DIGITS: Final = 128
+_MIN_DECIMAL_EXPONENT: Final = -128
+_MAX_DECIMAL_EXPONENT: Final = 128
+_MAX_CANONICAL_DECIMAL_CHARACTERS: Final = 258
+_MAX_DECIMAL_OBJECT_BYTES: Final = 192
 _QUOTE_FIELDS: Final = frozenset(
     {
         "ohlc",
@@ -435,7 +441,7 @@ def _finite_decimal_value(value: object) -> Decimal:
     if type(value) not in {int, Decimal}:
         raise UpstoxFullQuoteCorruptError("full quote response corrupt")
     result = Decimal(cast(int | Decimal, value))
-    if not result.is_finite() or abs(result) > _MAX_DECIMAL:
+    if not _bounded_decimal_representation(result) or abs(result) > _MAX_DECIMAL:
         raise UpstoxFullQuoteCorruptError("full quote response corrupt")
     return result
 
@@ -447,11 +453,44 @@ def _nonnegative_int(value: object) -> int:
 
 
 def _positive_decimal(value: object) -> bool:
-    return type(value) is Decimal and value.is_finite() and 0 < value <= _MAX_DECIMAL
+    return (
+        type(value) is Decimal
+        and _bounded_decimal_representation(value)
+        and 0 < value <= _MAX_DECIMAL
+    )
 
 
 def _nonnegative_decimal(value: object) -> bool:
-    return type(value) is Decimal and value.is_finite() and 0 <= value <= _MAX_DECIMAL
+    return (
+        type(value) is Decimal
+        and _bounded_decimal_representation(value)
+        and 0 <= value <= _MAX_DECIMAL
+    )
+
+
+def _bounded_decimal_representation(value: object) -> bool:
+    """Validate provider decimal storage before fixed-point rendering."""
+    if (
+        type(value) is not Decimal
+        or sys.getsizeof(value) > _MAX_DECIMAL_OBJECT_BYTES
+        or not value.is_finite()
+    ):
+        return False
+    sign, digits, exponent = value.as_tuple()
+    if (
+        type(exponent) is not int
+        or len(digits) > _MAX_DECIMAL_COEFFICIENT_DIGITS
+        or not _MIN_DECIMAL_EXPONENT <= exponent <= _MAX_DECIMAL_EXPONENT
+    ):
+        return False
+    fixed_characters = (
+        len(digits) + exponent
+        if exponent >= 0
+        else len(digits) + 1
+        if -exponent < len(digits)
+        else 2 - exponent
+    ) + sign
+    return fixed_characters <= _MAX_CANONICAL_DECIMAL_CHARACTERS
 
 
 def _valid_instrument_key(value: object) -> bool:
@@ -481,6 +520,8 @@ def _timestamp(value: datetime) -> str:
 
 
 def _decimal_text(value: Decimal) -> str:
+    if not _bounded_decimal_representation(value):
+        raise ValueError("invalid bounded decimal")
     return format(value, "f")
 
 

@@ -502,7 +502,7 @@ def _price_and_circuit_measurements(
             quote.lower_circuit_limit, 100, quote.last_price, 98
         ),
         "upper_circuit_distance_meets_minimum": _scaled_decimal_at_most(
-            quote.upper_circuit_limit, 100, quote.last_price, 102
+            quote.last_price, 102, quote.upper_circuit_limit, 100
         ),
     }
 
