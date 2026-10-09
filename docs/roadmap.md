@@ -66,11 +66,18 @@ and [PR #291](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/291)
 delivered the usable retained observation and comparison workflow under
 [Plan 64](plans/64-retained-stock-observation-workflow.md).
 
-**Sprint 52 is in progress:** [Issue #292](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/292)
-is repairing the initial supported-decision implementation under
-[Plan 66](plans/66-source-bound-supported-decision-repair.md). It establishes a
-retained-observation, fail-closed decision boundary; G03 and G04 remain open
-until source-backed eligibility and actionability evidence is available.
+**Sprint 52 is delivered:** [Issue #292](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/292)
+and [PR #293](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/293)
+delivered the repaired retained-observation decision boundary under
+[Plan 66](plans/66-source-bound-supported-decision-repair.md), main
+`b1840fab6509e4343958e17e3792bf9e8d586675`. Its `UNKNOWN` eligibility and
+`NO_TRADE` decision output preserve the G03/G04 source/policy block.
+
+**Sprint 53 is in progress:** [Issue #294](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/294)
+and [Plan 67](plans/67-owner-staged-nse-safety-evidence.md) define one offline
+owner-staged NSE reference-package inspection path. It has no automated source
+collection, source-authentication, eligibility or actionability claim. A valid
+staging report remains `UNKNOWN`; G03 and G04 remain open.
 
 October7 accepted owner course correction: related tasks belong in usable
 delivery groups, with independent work in the same group allowed in parallel.
