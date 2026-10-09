@@ -70,8 +70,14 @@ Publication follows successful main CI and rechecks the exact current main SHA,
 clean source, wheel/image labels, package privacy, immutable tag collision,
 fresh registry pull, digest and restricted runtime behavior. Rebuilding for a
 new main commit produces a new image and requires its own distribution proof;
-it does not repeat the full pytest suite. Existing timeouts remain 60 minutes
-for quality, main fallback and publication, and five minutes for actor rejection.
+it does not repeat the full pytest suite. Existing timeouts remain 120 minutes
+for quality and main fallback, 60 minutes for publication, and five minutes for
+actor rejection. The 120-minute quality/main bounds follow
+[cancelled quality attempt 37887915394/1](https://github.com/krunaldodiya/SwingTradingAIAssistant/actions/runs/37887915394):
+its full selection and coverage gate passed, distributions built, and the
+required Linux verifier began after about 85 minutes but was cancelled by the
+former 90-minute cap. The correction leaves the selected gates, runner,
+concurrency, privacy controls and publication cap unchanged.
 No retry is automatic; inspect the failure and remaining allowance before an
 explicitly authorized retry.
 
@@ -93,7 +99,7 @@ Before publishing a ready candidate or starting/retrying a run, record:
    approval and readback; a repo policy file does not configure GitHub billing.
 3. Enough remaining allowance for the bounded candidate and release path, allowing
    for all active jobs and other repositories. A normal Linux path has up to
-   60 minutes quality + 60 minutes fallback (only if admission cannot be reused)
+   120 minutes quality + 120 minutes fallback (only if admission cannot be reused)
    + 60 minutes publication, plus short checks and GitHub job rounding. Use observed
    durations to plan capacity; configured timeouts are bounds, not cost estimates.
 4. If usage, remaining allowance, stop enforcement or scope is unavailable or
