@@ -39,11 +39,20 @@ completed the source-bound repair in
 `b1840fab6509e4343958e17e3792bf9e8d586675`. The installed boundary returns
 `NO_TRADE` from retained admitted observations while G03/G04 remain open.
 
-**Sprint 53 is in progress:** [Issue #294](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/294)
-implements [Plan 67](plans/67-owner-staged-nse-safety-evidence.md): an offline
-inspection of a fixed owner-staged NSE reference package. It does not collect or
-authenticate source data and can only return `UNKNOWN` eligibility, preserving
-the outstanding G03/G04 source-capability work.
+**Sprint 53 is delivered:** [Issue #294](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/294)
+and [PR #295](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/295)
+delivered [Plan 67](plans/67-owner-staged-nse-safety-evidence.md)'s offline
+owner-staged NSE reference-package inspection, main
+`a826f530e2d9dde7757e7245edbafd3ba90200e2`. It does not collect or authenticate
+source data and can only return `UNKNOWN` eligibility, preserving the outstanding
+G03/G04 source-capability work.
+
+**Sprint 54 is governed by [Issue #296](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/296),
+Milestone 46, and [Plan 68](plans/68-g03-source-and-criteria-admission.md).**
+It freezes the exact source-capability and criterion-evidence handoff before a
+G03 implementation. No source acquisition, provider, threshold, eligibility,
+or actionability behavior is admitted; live Issue/Project state owns delivery
+status.
 
 **Sprint50 design is delivered** through Issue288/PR289/main
 `0bba1769619cad7c6159c986e8c42c690f04d3b7`, with both complete independent
