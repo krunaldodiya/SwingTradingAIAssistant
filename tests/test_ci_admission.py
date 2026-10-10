@@ -1,5 +1,7 @@
 """Behavioral contracts for exact-tree CI admission reuse."""
 
+# Issue #250 scheduler observation intentionally selects the full CI gate.
+
 from __future__ import annotations
 
 import hashlib
