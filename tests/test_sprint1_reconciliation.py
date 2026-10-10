@@ -138,6 +138,14 @@ _REQUIRED_CI_FRAGMENTS = (
     '          --receipt "$RUNNER_TEMP/linux-distribution-receipt.json"',
     '          jq -c . "$RUNNER_TEMP/linux-distribution-receipt.json" | tee -a "$GITHUB_STEP_SUMMARY"',
 )
+_ADMISSION_FULL_GATE_BLOCKS = (
+    "      - name: Issue exact-tree CI admission\n"
+    "        if: steps.changes.outputs.full_gate == 'true'\n"
+    "        env:",
+    "      - name: Record exact-tree CI admission in GitHub\n"
+    "        if: steps.changes.outputs.full_gate == 'true'\n"
+    "        run: |",
+)
 
 
 def _lines(text: str) -> list[str]:
@@ -229,6 +237,7 @@ def validate_ci_workflow(text: str) -> None:
         commands.count(authoritative_gate) != 2
         or commands.count(_RELEASE_BUILD) != 2
         or any(fragment not in jobs_text for fragment in _REQUIRED_CI_FRAGMENTS)
+        or any(block not in jobs_text for block in _ADMISSION_FULL_GATE_BLOCKS)
         or jobs_text.count("continue-on-error: true") != 1
         or commands.count(admitted_condition) != 1
         or commands.count(fallback_condition) != 5
@@ -286,6 +295,16 @@ def test_ci_structural_contract_rejects_privilege_pin_activity_and_gate_regressi
         ),
         workflow.replace("          exit 1", "          exit 0", 1),
         workflow.replace(" --annotation", ""),
+        workflow.replace(
+            "      - name: Issue exact-tree CI admission\n"
+            "        if: steps.changes.outputs.full_gate == 'true'\n",
+            "      - name: Issue exact-tree CI admission\n",
+        ),
+        workflow.replace(
+            "      - name: Record exact-tree CI admission in GitHub\n"
+            "        if: steps.changes.outputs.full_gate == 'true'\n",
+            "      - name: Record exact-tree CI admission in GitHub\n",
+        ),
         workflow.replace(
             "CI_ADMISSION_TRANSPORT: check-annotation",
             "CI_ADMISSION_TRANSPORT: artifact",

@@ -176,6 +176,7 @@ jobs:
           jq -c . "$RUNNER_TEMP/linux-distribution-receipt.json" | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Issue exact-tree CI admission
+        if: steps.changes.outputs.full_gate == 'true'
         env:
           CI_WORKFLOW_REF: ${{ github.workflow_ref }}
           CI_WORKFLOW_SHA: ${{ github.workflow_sha }}
@@ -184,6 +185,7 @@ jobs:
           --output "$RUNNER_TEMP/ci-admission.json" --annotation
 
       - name: Record exact-tree CI admission in GitHub
+        if: steps.changes.outputs.full_gate == 'true'
         run: |
           set -euo pipefail
           jq -c . "$RUNNER_TEMP/ci-admission.json" | tee -a "$GITHUB_STEP_SUMMARY"
