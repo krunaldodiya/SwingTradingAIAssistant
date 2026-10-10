@@ -168,7 +168,7 @@ def test_invalid_price_evidence_is_member_local(rows: list[dict[str, object]]) -
 
 @pytest.mark.parametrize(
     "malformed_decimal",
-    (b"1e-999999999", b"1e" + b"9" * 500),
+    (b"1e-999999999", b"1e" + b"9" * 500, b"1." + b"1" * 511),
 )
 def test_rejects_unbounded_decimal_before_history_projection(
     malformed_decimal: bytes,

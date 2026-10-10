@@ -4,7 +4,7 @@ from typing import Final
 
 STOCK_ELIGIBILITY_RUNTIME_SOURCE_SHA256_V3: Final[dict[str, str]] = {
     "src/swing_trading_ai_assistant/market_data/stock_eligibility_v3.py": "4cc4b808ab6b5e5cace2967ba7588a0363c8fa5e89be47c811878e0d510d52da",
-    "src/swing_trading_ai_assistant/market_data/bharatstock.py": "d8526292962a7ebc885ee4d27d6c3fe7eb8c154f96e5eeb3372287c87704d840",
+    "src/swing_trading_ai_assistant/market_data/bharatstock.py": "15b98327b6eff6a8e5b2c95cca1ab726872e11a7461f145487e81535b41728e3",
     "src/swing_trading_ai_assistant/market_data/corporate_actions.py": "65507d4b4dc08f33a871716c77b5b04fbfdc01fbc08ef1d224a620991c4973fb",
     "src/swing_trading_ai_assistant/market_data/credentials.py": "bc6b8847a2c57647071d636a43bcb82b3521bfe435944ce289822fbf583b675b",
     "src/swing_trading_ai_assistant/market_data/http.py": "ef5becb9960502f2808c3353099fc285de4d908d2eae7da65816266e2d02cd6e",

@@ -71,12 +71,12 @@ def _bounded_decimal_representation(value: object) -> bool:
     return fixed_characters <= _MAX_CANONICAL_DECIMAL_CHARACTERS
 
 
-def _bounded_positive_decimal(value: object) -> bool:
-    return (
-        type(value) is Decimal
-        and _bounded_decimal_representation(value)
-        and 0 < value <= _MAX_NUMBER
-    )
+def _positive_decimal(value: object) -> bool:
+    return type(value) is Decimal and value.is_finite() and 0 < value <= _MAX_NUMBER
+
+
+def _bounded_provider_positive_decimal(value: object) -> bool:
+    return _positive_decimal(value) and _bounded_decimal_representation(value)
 
 
 def _bounded_json_decimal(value: str) -> Decimal:
@@ -151,7 +151,7 @@ class BharatStockDailyPrice:
         )
         if (
             type(self.session) is not date
-            or any(not _bounded_positive_decimal(value) for value in values)
+            or any(not _positive_decimal(value) for value in values)
             or type(self.volume) is not int
             or not 0 <= self.volume < 1 << 63
             or not self.low
@@ -253,7 +253,7 @@ def _decimal(value: object) -> Decimal:
     ):
         raise ValueError("invalid price value")
     result = Decimal(cast(int | Decimal, value))
-    if not _bounded_positive_decimal(result):
+    if not _bounded_provider_positive_decimal(result):
         raise ValueError("invalid price value")
     return result
 

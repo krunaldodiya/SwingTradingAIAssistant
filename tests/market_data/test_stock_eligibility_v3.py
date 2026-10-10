@@ -356,7 +356,7 @@ def test_v3_eligibility_keeps_provider_authentication_unknown_and_private(
 
 @pytest.mark.parametrize(
     "malformed_decimal",
-    (b"1e-999999999", b"1e" + b"9" * 500),
+    (b"1e-999999999", b"1e" + b"9" * 500, b"1." + b"1" * 511),
 )
 def test_v3_public_sdk_closes_malformed_bharatstock_decimal_evidence(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, malformed_decimal: bytes

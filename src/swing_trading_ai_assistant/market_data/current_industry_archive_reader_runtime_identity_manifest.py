@@ -8,7 +8,7 @@ CURRENT_INDUSTRY_ARCHIVE_READER_RUNTIME_SOURCE_SHA256_V1: Final[dict[str, str]] 
     "src/swing_trading_ai_assistant/market_data/account_rate_limit.py": "655e233e28f14934efd4133fb873acc23efa44e4efa5b88b3b1cb574a0bb4752",
     "src/swing_trading_ai_assistant/market_data/adjusted_daily/service.py": "e2b2b892581274ec93e79faca17cb426ce2db35845510271080a005b9ec6b49b",
     "src/swing_trading_ai_assistant/market_data/adjusted_daily/service_v3.py": "c66ade0093744edd0cc600d8e8cb518f9276b76f9feba9644d79ef06a5b3d45f",
-    "src/swing_trading_ai_assistant/market_data/bharatstock.py": "d8526292962a7ebc885ee4d27d6c3fe7eb8c154f96e5eeb3372287c87704d840",
+    "src/swing_trading_ai_assistant/market_data/bharatstock.py": "15b98327b6eff6a8e5b2c95cca1ab726872e11a7461f145487e81535b41728e3",
     "src/swing_trading_ai_assistant/market_data/bharatstock_capture.py": "674f3dae944d1dfe6854ac63397ac61e26cecc7991231647cb7d5ec23d8a8eb1",
     "src/swing_trading_ai_assistant/market_data/bounded_nifty50_workflow.py": "a19c2a4c1ddcd1dbf281e8c92f7db0f21f51eadf5aa394310118c5595270dde5",
     "src/swing_trading_ai_assistant/market_data/capture_forward_adjusted_ohlcv.py": "392431179a4ec08d18f117fc584c6c8b413e5646102f20618b8745bfa292b8b7",
