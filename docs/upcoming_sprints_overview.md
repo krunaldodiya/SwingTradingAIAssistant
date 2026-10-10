@@ -47,12 +47,14 @@ owner-staged NSE reference-package inspection, main
 source data and can only return `UNKNOWN` eligibility, preserving the outstanding
 G03/G04 source-capability work.
 
-**Sprint 54 is governed by [Issue #296](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/296),
-Milestone 46, and [Plan 68](plans/68-g03-source-and-criteria-admission.md).**
-It freezes the exact source-capability and criterion-evidence handoff before a
-G03 implementation. No source acquisition, provider, threshold, eligibility,
-or actionability behavior is admitted; live Issue/Project state owns delivery
-status.
+Sprint 54 froze the G03 source-capability and criterion-evidence handoff under
+[Plan 68](plans/68-g03-source-and-criteria-admission.md). **Sprint 55 is governed
+by [Issue #299](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/299),
+Milestone 47, and [Plan 70](plans/70-automated-supported-signal-decisions.md).**
+It introduces the first automatic provider-backed V3 eligibility and causal
+research-candidate decision for one retained NSE equity. Its bounded explanation
+ledger records why each rule passed, failed, or remained unknown. Live
+Issue/Project state owns delivery and source-qualification status.
 
 **Sprint50 design is delivered** through Issue288/PR289/main
 `0bba1769619cad7c6159c986e8c42c690f04d3b7`, with both complete independent

@@ -33,6 +33,7 @@ from swing_trading_ai_assistant.market_data.corporate_actions import (
     CorporateActionUnavailableError,
     UpstoxCorporateActionsClientV1,
 )
+from swing_trading_ai_assistant.market_data.credentials import AccessToken
 from swing_trading_ai_assistant.market_data.http import HttpResponse
 from swing_trading_ai_assistant.market_data.storage_root_lease import StorageRootLease
 
@@ -166,6 +167,36 @@ def test_upstox_client_uses_the_official_isin_endpoint_and_all_frozen_types() ->
     assert snapshot.source_release == "corporate-actions-v1"
     assert snapshot.retrieved_at == _RETRIEVED
     assert _TOKEN.encode() not in snapshot.canonical_json_bytes()
+
+
+def test_strict_upstox_client_rejects_a_redirected_response() -> None:
+    url = f"https://api.upstox.com/v2/fundamentals/{_ISIN}/corporate-actions"
+    transport = RecordingTransport(
+        HttpResponse(
+            200,
+            _provider_payload(),
+            request_url=url,
+            response_url="https://unexpected.example/corporate-actions",
+        )
+    )
+    client = UpstoxCorporateActionsClientV1(transport, clock=lambda: _RETRIEVED)
+
+    with pytest.raises(CorporateActionCorruptError, match="response corrupt"):
+        client.fetch_strict(_ISIN, _TOKEN)
+
+
+def test_strict_upstox_client_accepts_an_opaque_access_token() -> None:
+    client, transport = _client(_provider_payload("Dividend"))
+
+    snapshot = client.fetch_strict_with_access_token(_ISIN, AccessToken(_TOKEN))
+
+    assert snapshot.isin == _ISIN
+    assert transport.calls == [
+        (
+            f"https://api.upstox.com/v2/fundamentals/{_ISIN}/corporate-actions",
+            {"Accept": "application/json", "Authorization": f"Bearer {_TOKEN}"},
+        )
+    ]
 
 
 def test_provider_json_object_order_is_irrelevant_but_duplicates_fail_closed() -> None:

@@ -166,6 +166,36 @@ def test_invalid_price_evidence_is_member_local(rows: list[dict[str, object]]) -
     assert error.value.member_local
 
 
+@pytest.mark.parametrize(
+    "malformed_decimal",
+    (b"1e-999999999", b"1e" + b"9" * 500, b"1." + b"1" * 511),
+)
+def test_rejects_unbounded_decimal_before_history_projection(
+    malformed_decimal: bytes,
+) -> None:
+    row = _row("2026-08-27")
+    for field in ("open", "high", "low", "close"):
+        row[field] = 1.0
+    body = _page([row]).body
+    for field in ("open", "high", "low", "close"):
+        body = body.replace(
+            f'"{field}": 1.0'.encode(),
+            f'"{field}": '.encode() + malformed_decimal,
+            1,
+        )
+    client = BharatStockClient(
+        api_key="test-key",
+        transport=_Transport(_identity(), HttpResponse(200, body)),
+    )
+
+    with pytest.raises(BharatStockError) as error:
+        client.history(_MEMBER, _START, _END)
+
+    assert error.value.category == "RESPONSE_INVALID"
+    assert error.value.member_local
+    assert client.requests_used == 2
+
+
 def test_exhausted_request_budget_stops_before_next_http_effect() -> None:
     transport = _Transport(_identity(), _page([_row("2026-08-27")]))
     client = BharatStockClient(api_key="test-key", transport=transport, max_requests=1)

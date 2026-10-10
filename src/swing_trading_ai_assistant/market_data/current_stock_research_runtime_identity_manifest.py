@@ -3,13 +3,13 @@
 from typing import Final
 
 CURRENT_STOCK_RESEARCH_RUNTIME_SOURCE_SHA256_V1: Final[dict[str, str]] = {
-    "src/swing_trading_ai_assistant/market_data/bharatstock.py": "4f43a61d44f9a907cc9274ab3ca3403854049b1c39f379b5730ca3d044bc78a1",
+    "src/swing_trading_ai_assistant/market_data/bharatstock.py": "15b98327b6eff6a8e5b2c95cca1ab726872e11a7461f145487e81535b41728e3",
     "src/swing_trading_ai_assistant/market_data/bharatstock_capture.py": "674f3dae944d1dfe6854ac63397ac61e26cecc7991231647cb7d5ec23d8a8eb1",
-    "src/swing_trading_ai_assistant/market_data/bharatstock_capture_runtime_identity_manifest.py": "6af0ea593fb19b39a5219780b81d2227432264af25d0c496ea579fc9682c5b65",
+    "src/swing_trading_ai_assistant/market_data/bharatstock_capture_runtime_identity_manifest.py": "32108c51b73313749d42864483fe50541807fb00b33ae1655499b5177082c297",
     "src/swing_trading_ai_assistant/market_data/capture_forward_adjusted_ohlcv.py": "392431179a4ec08d18f117fc584c6c8b413e5646102f20618b8745bfa292b8b7",
     "src/swing_trading_ai_assistant/market_data/catalog.py": "ae17eac5475a39d5ff08173e9b2154c0cf33778f573e7d894656a2ba685294ac",
     "src/swing_trading_ai_assistant/market_data/cli.py": "4bd73e7a5ee79a61ac48d69664a5f19ac1421853c460a00d2b75735f291ffff6",
-    "src/swing_trading_ai_assistant/market_data/corporate_actions.py": "1d74c5cc7e94470452377491d5fa6ead801833bb4f17b4bae3305e73058cd9cc",
+    "src/swing_trading_ai_assistant/market_data/corporate_actions.py": "65507d4b4dc08f33a871716c77b5b04fbfdc01fbc08ef1d224a620991c4973fb",
     "src/swing_trading_ai_assistant/market_data/current_event_notice.py": "0bf3a93e1b777a5d0062b99814681f02b0d9e206448e46f7edcb8fbebff12fef",
     "src/swing_trading_ai_assistant/market_data/current_evidence_acquisition.py": "0e6055ac79b3b3269d1dff64d641aba8f0812ad95b0a80b3b71e64ac4fae8e2c",
     "src/swing_trading_ai_assistant/market_data/current_evidence_acquisition_runtime_identity_manifest.py": "5820a46e8fd127f937ed3d512d2d99f181f0405640b30421b520d70761b98d2e",
