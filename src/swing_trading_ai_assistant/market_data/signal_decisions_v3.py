@@ -894,6 +894,7 @@ def _evaluate_signal_decision_from_admitted_records_v3(
     current: CurrentStockResearchResultV2,
     current_handle: str,
     *,
+    storage_root: object,
     providers: _DecisionProviders,
     clock: Callable[[], datetime],
 ) -> dict[str, object]:
@@ -905,6 +906,8 @@ def _evaluate_signal_decision_from_admitted_records_v3(
             type(handle) is not str or _DIGEST.fullmatch(handle) is None
             for handle in (previous_handle, current_handle)
         )
+        or not isinstance(storage_root, Path)
+        or not storage_root.is_absolute()
         or not callable(clock)
     ):
         raise ValueError("invalid admitted observations")
@@ -913,6 +916,7 @@ def _evaluate_signal_decision_from_admitted_records_v3(
         _evaluate_stock_eligibility_from_admitted_record_v3(
             current,
             current_handle,
+            storage_root=storage_root,
             providers=providers,
             clock=clock,
         )
@@ -948,6 +952,7 @@ def evaluate_signal_decision_from_records_v3(
         previous_handle,
         current_observation,
         current_handle,
+        storage_root=root,
         providers=_LiveProviders(clock=_utc_now),
         clock=_utc_now,
     )

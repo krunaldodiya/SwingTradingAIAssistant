@@ -75,7 +75,7 @@ The fixed safety rules make the reason concrete:
 | --- | --- |
 | `CANONICAL_NSE_EQUITY_IDENTITY` | Whether the retained observation binds exactly one NSE EQ symbol, ISIN, mapping and structure source. |
 | `CURRENT_UPSTOX_QUOTE_BINDING` | Whether the current Upstox instrument token and symbol exactly bind the retained ISIN and effective symbol. |
-| `CURRENT_QUOTE_FRESHNESS_AND_INTEGRITY` | Quote timestamp, retrieval time, completed-session alignment and circuit coherence. |
+| `CURRENT_QUOTE_FRESHNESS_AND_INTEGRITY` | Quote timestamp, retrieval time, official-session alignment and circuit coherence. |
 | `LOW_PRICE_AND_CIRCUIT_DISTANCE` | Current price, INR 20 floor, both circuit distances, the 2% threshold, and whether each exact comparison passed. |
 | `CURRENT_BOOK_LIQUIDITY` | Best bid/ask, relative spread, positive two-sided quantities, the 2% maximum spread, and the exact comparison outcome. |
 | `PROVIDER_OBSERVABLE_HISTORY` | Whether at least 252 valid completed rows end at the retained decision session. |
@@ -88,6 +88,13 @@ ledger. `UNKNOWN` means a required fact could not be trusted; it never means the
 stock is cleared. Rows after the first decisive stop are present as
 `NOT_EVALUATED`, so the output also states why the tool did not make lower
 priority reads.
+
+During market hours, the saved 21 daily sessions deliberately stop at the last
+finished market day. The current quote is still usable if it belongs to exactly
+the next official market session and both its timestamp and retrieval happen
+while that session is open. The tool uses the saved official schedule instead
+of guessing from weekdays: it rejects holidays, weekends, a quote before opening
+or after closing, a later skipped session, and any missing or changed schedule.
 
 ## Evaluate a causal research candidate
 
