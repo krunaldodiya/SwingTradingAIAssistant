@@ -27,6 +27,11 @@ line. For each V3 evaluation it makes at most four serial provider reads:
 There is no retry, provider fallback, record write, background monitoring, or
 broker action. A missing configured credential, provider refusal, malformed
 response, stale evidence, or mismatched identity is an explicit closed result.
+The `CURRENT_UPSTOX_QUOTE_BINDING` ledger row distinguishes a malformed or
+identity-mismatched quote (`UPSTOX_QUOTE_IDENTITY_OR_SCHEMA_INVALID`) from
+credential rejection, rate limiting, other provider HTTP responses, and a true
+transport/unavailable failure. Each remains `UNKNOWN`; the command does not
+include the provider response body or exception text and does not retry.
 
 ## Run the automated safety screen
 

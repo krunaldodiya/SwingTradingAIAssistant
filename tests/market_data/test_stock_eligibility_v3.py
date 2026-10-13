@@ -42,6 +42,11 @@ from swing_trading_ai_assistant.market_data.stock_observations import (
 )
 from swing_trading_ai_assistant.market_data.upstox_full_quote_v3 import (
     UpstoxFullQuoteAuthenticationError,
+    UpstoxFullQuoteAuthorizationError,
+    UpstoxFullQuoteCorruptError,
+    UpstoxFullQuoteProviderResponseError,
+    UpstoxFullQuoteRateLimitedError,
+    UpstoxFullQuoteUnavailableError,
     UpstoxFullQuoteV3,
     UpstoxFullQuoteV3Client,
 )
@@ -330,13 +335,43 @@ def test_v3_eligibility_proves_low_price_ineligible_without_later_effects(
     assert ledger["PROVIDER_OBSERVABLE_HISTORY"]["outcome"] == "NOT_EVALUATED"
 
 
-def test_v3_eligibility_keeps_provider_authentication_unknown_and_private(
-    tmp_path: Path,
+@pytest.mark.parametrize(
+    ("failure", "reason_code"),
+    (
+        (
+            UpstoxFullQuoteAuthenticationError("private provider detail"),
+            "UPSTOX_QUOTE_AUTHENTICATION_FAILED",
+        ),
+        (
+            UpstoxFullQuoteAuthorizationError("private provider detail"),
+            "UPSTOX_QUOTE_AUTHORIZATION_FAILED",
+        ),
+        (
+            UpstoxFullQuoteRateLimitedError("private provider detail"),
+            "UPSTOX_QUOTE_RATE_LIMITED",
+        ),
+        (
+            UpstoxFullQuoteProviderResponseError("private provider detail"),
+            "UPSTOX_QUOTE_PROVIDER_RESPONSE_INVALID",
+        ),
+        (
+            UpstoxFullQuoteCorruptError("private provider detail"),
+            "UPSTOX_QUOTE_IDENTITY_OR_SCHEMA_INVALID",
+        ),
+        (
+            UpstoxFullQuoteUnavailableError("private provider detail"),
+            "UPSTOX_QUOTE_UNAVAILABLE",
+        ),
+        (RuntimeError("private provider detail"), "UPSTOX_QUOTE_UNAVAILABLE"),
+    ),
+)
+def test_v3_eligibility_preserves_safe_quote_failure_classification(
+    tmp_path: Path, failure: Exception, reason_code: str
 ) -> None:
     observation = _structure_observation(tmp_path)
     handle = record_stock_observation_v1(tmp_path, observation)
     providers = _Providers(
-        UpstoxFullQuoteAuthenticationError("quote failure"),
+        failure,
         _history(observation),
         _actions(observation),
     )
@@ -351,6 +386,8 @@ def test_v3_eligibility_keeps_provider_authentication_unknown_and_private(
     ]
     ledger = {entry["rule_id"]: entry for entry in result["explanation_ledger"]}
     assert ledger["CURRENT_UPSTOX_QUOTE_BINDING"]["outcome"] == "UNKNOWN"
+    assert ledger["CURRENT_UPSTOX_QUOTE_BINDING"]["reason_code"] == reason_code
+    assert "private provider detail" not in str(result)
     assert _TOKEN not in str(result)
 
 
@@ -496,7 +533,7 @@ def test_v3_public_sdk_closes_oversized_upstox_integer_evidence(
     assert result["status"] == "UNKNOWN"
     ledger = {entry["rule_id"]: entry for entry in result["explanation_ledger"]}
     assert ledger["CURRENT_UPSTOX_QUOTE_BINDING"]["reason_code"] == (
-        "UPSTOX_QUOTE_UNAVAILABLE"
+        "UPSTOX_QUOTE_IDENTITY_OR_SCHEMA_INVALID"
     )
     assert ledger["PROVIDER_OBSERVABLE_HISTORY"]["outcome"] == "NOT_EVALUATED"
 

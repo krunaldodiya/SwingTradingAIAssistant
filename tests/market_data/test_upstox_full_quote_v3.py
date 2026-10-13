@@ -104,6 +104,18 @@ def _client(payload: bytes | None = None, *, status: int = 200):
     return UpstoxFullQuoteV3Client(transport, clock=lambda: _RETRIEVED), transport
 
 
+def _payload_for_identity(isin: str, symbol: str) -> bytes:
+    payload = json.loads(_payload())
+    data = payload["data"]
+    assert isinstance(data, dict)
+    quote = data.pop(f"NSE_EQ:{_SYMBOL}")
+    assert isinstance(quote, dict)
+    quote["instrument_token"] = f"NSE_EQ|{isin}"
+    quote["symbol"] = symbol
+    data[f"NSE_EQ:{symbol}"] = quote
+    return json.dumps(payload, separators=(",", ":")).encode()
+
+
 def test_quote_client_binds_exact_nse_equity_identity_and_redacts_token() -> None:
     client, transport = _client()
 
@@ -131,6 +143,25 @@ def test_quote_client_binds_exact_nse_equity_identity_and_redacts_token() -> Non
     assert len(quote.response_sha256) == 64
     assert len(quote.quote_identity_sha256) == 64
     assert _TOKEN.encode() not in quote.canonical_json_bytes()
+
+
+@pytest.mark.parametrize(
+    ("isin", "symbol"),
+    (
+        ("INE467B01029", "TCS"),
+        ("INE917I01010", "BAJAJ-AUTO"),
+        ("INE101A01026", "M&M"),
+    ),
+)
+def test_quote_client_maps_provider_key_from_each_requested_equity(
+    isin: str, symbol: str
+) -> None:
+    client, _ = _client(_payload_for_identity(isin, symbol))
+
+    quote = client.fetch(isin, symbol, _ACCESS_TOKEN)
+
+    assert quote.instrument_key == f"NSE_EQ|{isin}"
+    assert quote.symbol == symbol
 
 
 @pytest.mark.parametrize(

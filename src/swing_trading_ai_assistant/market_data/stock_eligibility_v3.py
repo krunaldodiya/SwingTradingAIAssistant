@@ -31,7 +31,15 @@ from .stock_eligibility_v3_runtime_identity_manifest import (
     STOCK_ELIGIBILITY_RUNTIME_SOURCE_SHA256_V3,
 )
 from .stock_observations import read_stock_observation_v1
-from .upstox_full_quote_v3 import UpstoxFullQuoteV3, UpstoxFullQuoteV3Client
+from .upstox_full_quote_v3 import (
+    UpstoxFullQuoteAuthenticationError,
+    UpstoxFullQuoteAuthorizationError,
+    UpstoxFullQuoteCorruptError,
+    UpstoxFullQuoteProviderResponseError,
+    UpstoxFullQuoteRateLimitedError,
+    UpstoxFullQuoteV3,
+    UpstoxFullQuoteV3Client,
+)
 
 SCHEMA: Final = "stock-eligibility@v3"
 SAFETY_POLICY_IDENTIFIER: Final = "supported-signal-safety-policy@v1"
@@ -408,6 +416,39 @@ def _quote_binding(
     return quote
 
 
+def _quote_failure_reason(error: BaseException) -> tuple[str, str]:
+    """Keep provider failures distinct without exposing exception details."""
+    if isinstance(error, UpstoxFullQuoteCorruptError):
+        return (
+            "UPSTOX_QUOTE_IDENTITY_OR_SCHEMA_INVALID",
+            "Upstox returned a quote, but its identity or response structure did not satisfy the supported quote contract.",
+        )
+    if isinstance(error, UpstoxFullQuoteAuthenticationError):
+        return (
+            "UPSTOX_QUOTE_AUTHENTICATION_FAILED",
+            "Upstox rejected the configured quote credential, so the safety screen cannot continue.",
+        )
+    if isinstance(error, UpstoxFullQuoteAuthorizationError):
+        return (
+            "UPSTOX_QUOTE_AUTHORIZATION_FAILED",
+            "The configured Upstox credential is not authorized for the quote request, so the safety screen cannot continue.",
+        )
+    if isinstance(error, UpstoxFullQuoteRateLimitedError):
+        return (
+            "UPSTOX_QUOTE_RATE_LIMITED",
+            "Upstox rate limited the bounded quote request, so the safety screen cannot continue.",
+        )
+    if isinstance(error, UpstoxFullQuoteProviderResponseError):
+        return (
+            "UPSTOX_QUOTE_PROVIDER_RESPONSE_INVALID",
+            "Upstox did not return a successful quote response, so the safety screen cannot continue.",
+        )
+    return (
+        "UPSTOX_QUOTE_UNAVAILABLE",
+        "A current exact-identity Upstox quote could not be obtained, so the safety screen cannot substitute another source or security.",
+    )
+
+
 def _quote_integrity(
     quote: UpstoxFullQuoteV3, latest_session: date
 ) -> tuple[bool, str, dict[str, object]]:
@@ -740,13 +781,14 @@ def _evaluate_stock_eligibility_from_admitted_record_v3(  # noqa: C901 - explici
     )
     try:
         quote_value = providers.get_quote(context.isin, context.symbol)
-    except BaseException:  # noqa: BLE001 - closed provider and interruption boundary
+    except BaseException as error:  # noqa: BLE001 - closed provider/interruption boundary
+        reason_code, explanation = _quote_failure_reason(error)
         ledger.append(
             _entry(
                 "CURRENT_UPSTOX_QUOTE_BINDING",
                 "UNKNOWN",
-                "UPSTOX_QUOTE_UNAVAILABLE",
-                "A current exact-identity Upstox quote could not be obtained, so the safety screen cannot substitute another source or security.",
+                reason_code,
+                explanation,
             )
         )
         return _unknown(
