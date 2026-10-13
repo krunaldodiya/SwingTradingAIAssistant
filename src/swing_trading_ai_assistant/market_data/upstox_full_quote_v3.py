@@ -463,12 +463,17 @@ def _nonnegative_int(value: object) -> int:
 
 def _nonnegative_quantity(value: object) -> int:
     """Accept documented numeric totals only when their quantity is integral."""
-    if type(value) not in {int, Decimal}:
+    if type(value) is int:
+        return _nonnegative_int(value)
+    if type(value) is not Decimal or not _bounded_decimal_representation(value):
         raise UpstoxFullQuoteCorruptError("full quote response corrupt")
-    result = _nonnegative_decimal_value(value)
-    if result != result.to_integral_value() or result > _MAX_PROVIDER_INTEGER:
+    if (
+        value < 0
+        or value != value.to_integral_value()
+        or value > Decimal(_MAX_PROVIDER_INTEGER)
+    ):
         raise UpstoxFullQuoteCorruptError("full quote response corrupt")
-    return int(result)
+    return int(value)
 
 
 def _positive_decimal(value: object) -> bool:

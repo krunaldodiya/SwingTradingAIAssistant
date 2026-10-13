@@ -172,7 +172,13 @@ def test_quote_client_maps_provider_key_from_each_requested_equity(
 
 @pytest.mark.parametrize(
     "quantity",
-    ("1.5", "-1.0", '"15000"', "9223372036854775808"),
+    (
+        "1.5",
+        "-1.0",
+        '"15000"',
+        "9223372036854775808",
+        "9223372036854775808.0",
+    ),
 )
 def test_quote_client_rejects_invalid_total_quantity(quantity: str) -> None:
     payload = _payload().replace(
@@ -183,6 +189,28 @@ def test_quote_client_rejects_invalid_total_quantity(quantity: str) -> None:
 
     with pytest.raises(UpstoxFullQuoteCorruptError):
         client.fetch(_ISIN, _SYMBOL, _ACCESS_TOKEN)
+
+
+@pytest.mark.parametrize(
+    "quantity",
+    (
+        "1000000000000000001",
+        "9223372036854775807",
+        "9223372036854775807.0",
+    ),
+)
+def test_quote_client_accepts_integral_total_quantity_through_int64_limit(
+    quantity: str,
+) -> None:
+    payload = _payload().replace(
+        b'"total_buy_quantity":15000',
+        f'"total_buy_quantity":{quantity}'.encode(),
+    )
+    client, _ = _client(payload)
+
+    quote = client.fetch(_ISIN, _SYMBOL, _ACCESS_TOKEN)
+
+    assert quote.total_buy_quantity == int(Decimal(quantity))
 
 
 @pytest.mark.parametrize(
