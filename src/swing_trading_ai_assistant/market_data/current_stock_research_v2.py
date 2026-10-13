@@ -769,7 +769,13 @@ def _research_current_stock_v2(  # noqa: C901 - explicit stage boundaries are in
                     sessions=completed_sessions[-count:],
                     deadline=window.deadline,
                     calendar=calendar,
-                    terminal_missing_diagnostic=terminal_missing_diagnostic,
+                    # A current Structure observation must end on the latest
+                    # officially completed session. Name the exact case where
+                    # the provider has every earlier requested row but not that
+                    # final row, rather than reporting a generic history gap.
+                    terminal_missing_diagnostic=(
+                        terminal_missing_diagnostic or question == "CURRENT_STRUCTURE"
+                    ),
                 )
                 for count in {feature_windows[item] for item in requested_price}
             }

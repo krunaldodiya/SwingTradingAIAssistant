@@ -13,6 +13,14 @@ First create and retain one or more `CURRENT_STRUCTURE` observations with
 an absolute observation root. `evaluate-v3` needs an earlier and a later
 observation for the same possible setup.
 
+If `CURRENT_STRUCTURE` is `NOT_READY` and its `MARKET_STRUCTURE` reason is
+`LATEST_SESSION_MISSING`, the market-day list is valid but BharatStock did not
+return the latest completed day's price row. The tool does not guess that row
+or silently substitute older data: run it again after BharatStock publishes the
+missing daily record. Other missing or mismatched rows remain
+`HISTORY_INCOMPLETE` and still need investigation; a specific latest-day gap is
+not treated as proof that the whole source or the stock is unusable.
+
 The command obtains its bounded current evidence automatically. It uses the
 configured provider credentials only at the existing provider boundaries; no
 token, API key, raw provider payload, or source file is accepted on the command

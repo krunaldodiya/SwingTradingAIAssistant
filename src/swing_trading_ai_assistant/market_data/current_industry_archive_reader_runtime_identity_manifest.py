@@ -29,7 +29,7 @@ CURRENT_INDUSTRY_ARCHIVE_READER_RUNTIME_SOURCE_SHA256_V1: Final[dict[str, str]] 
     "src/swing_trading_ai_assistant/market_data/current_research_binding_v2.py": "977e48cc06e5cfccb27fc6576d4f27a93fac7e6e6f815aceb9d07e028625a442",
     "src/swing_trading_ai_assistant/market_data/current_same_pass_daily_v4.py": "1a423896676eb4b983c58ca5035bf29f29156fefd3b982462168c5e6232ec402",
     "src/swing_trading_ai_assistant/market_data/current_stock_research.py": "1cb067767faa60dd6a35ff44e434b2cc2e071f3cfbb71cd371c6b8a781ba590e",
-    "src/swing_trading_ai_assistant/market_data/current_stock_research_v2.py": "19ac1aaa846ff53dfe112bc3dfcc9be53324f61545d1667608a04d55b447b3e0",
+    "src/swing_trading_ai_assistant/market_data/current_stock_research_v2.py": "7ee3c38f2771fc1a5919442eb6f64cc76dd5f7529e307c671cd1bbf2bf3cdf99",
     "src/swing_trading_ai_assistant/market_data/daily_ohlcv.py": "dd0dab2e0b1cc0f1fa1365593475e492e1bd7fcfed58ed3e9aa02352fa52301c",
     "src/swing_trading_ai_assistant/market_data/download_preparation.py": "ddbd15438a7428997245b43d332f356f18a0c00c2e0a0f6b09a4572a67ec2bbf",
     "src/swing_trading_ai_assistant/market_data/equity_admission.py": "e644285c325613344e63bc76465b64311e2338729af228746b409f234c1af54e",
@@ -90,5 +90,5 @@ CURRENT_INDUSTRY_ARCHIVE_READER_RUNTIME_SOURCE_SHA256_V1: Final[dict[str, str]] 
     "src/swing_trading_ai_assistant/volume_analysis/request.py": "241fa165aa3e684037499a187d18779f835997ce9c064a6a32a2c542dc6ecc97",
     "src/swing_trading_ai_assistant/volume_analysis/service.py": "3c23777c5825f2b4c46c6b5ff9de184826c25910688ef2ec432dfc86da096893",
     "src/swing_trading_ai_assistant/market_data/setup_screen.py": "99879e80ba7f7b353e9dab1491244f5289ecb72cf11fa4defbddb2d734246a8c",
-    "src/swing_trading_ai_assistant/market_data/setup_screen_runtime_identity_manifest.py": "27e933c2cbd1888d561dc2d1baec9264ecbae9f6bf6a9db0e6d929d9687f2b16",
+    "src/swing_trading_ai_assistant/market_data/setup_screen_runtime_identity_manifest.py": "79defbc655ec70f7aac01e5a0008e0bd0449d526608054614a424c6107590007",
 }

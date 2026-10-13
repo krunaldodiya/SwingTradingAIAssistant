@@ -1085,6 +1085,32 @@ def test_v2_current_structure_with_21_official_sessions_is_ready(
     assert not packet_v2.bharatstock_research_packet_semantics_are_valid_v2(tampered)
 
 
+def test_current_structure_names_a_missing_latest_provider_session(
+    tmp_path: Path,
+) -> None:
+    clock, sources = _Clock(), _OfficialSources()
+    prices = _Prices(clock)
+    prices.full_history = True
+    prices.missing_last = True
+
+    result = research_current_stock_v2(
+        "PNB",
+        tmp_path,
+        question="CURRENT_STRUCTURE",
+        clock=clock,
+        calendar_transport=sources,
+        snapshot_transport=sources,
+        price_client=cast(BharatStockClient, prices),
+    )
+
+    assert result.status == "NOT_READY"
+    assert result.packet is not None
+    structure = result.packet.members[0].features[0]
+    assert structure.availability == "INSUFFICIENT_EVIDENCE"
+    assert structure.reason == "LATEST_SESSION_MISSING"
+    assert structure.fact is None
+
+
 def test_v2_current_structure_finds_21_sessions_across_holiday_margin(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
