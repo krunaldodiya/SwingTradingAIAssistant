@@ -35,7 +35,7 @@ def run_demo(*args: str) -> subprocess.CompletedProcess[str]:
         ),
         (
             "CURRENT_STRUCTURE",
-            "f1d6a011728fbe3e69435e1e9d9547b8f1620ea9bc029f7a5ca1beb47b46c027",
+            "f415862bb52a32d9e24257847dfe896d15889aceb4243bc24ab6c42cf270a2cd",
         ),
     ],
 )

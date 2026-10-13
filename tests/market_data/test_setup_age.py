@@ -25,6 +25,9 @@ from test_setup_observation_comparison import _args, _observe, _TimedPrices
 from test_setup_screen import _service
 
 from swing_trading_ai_assistant.market_data.bharatstock import BharatStockClient
+from swing_trading_ai_assistant.market_data.current_evidence_acquisition import (
+    UPSTOX_HOLIDAYS_URL,
+)
 from swing_trading_ai_assistant.research_comparison import (
     setup_observation_comparison as encoding,
 )
@@ -107,12 +110,14 @@ class _AgePrices(_TimedPrices):
         )
 
 
-def _advanced(root, days, closures=()):
+def _advanced(root, days, closures=(), *, calendar_failure=False):
     root.mkdir(mode=0o700)
     clock, sources = _Clock(), _watchlist_sources()
     clock.value = _NOW + timedelta(days=days)
     if closures:
         _declare_closures(sources, list(closures))
+    if calendar_failure:
+        sources.failure_url = UPSTOX_HOLIDAYS_URL
     return _service()(
         "PNB",
         root,
@@ -148,10 +153,12 @@ def test_revised_calendar_overlap_with_unchanged_event_has_no_count(tmp_path):
     assert report["completed_sessions_elapsed"] is None
 
 
-def test_unavailable_calendar_never_infers_age(tmp_path):
+def test_calendar_provider_failure_never_infers_age(tmp_path):
     previous = _observe(tmp_path / "previous")
-    current = _advanced(tmp_path / "current", 6, (date(2026, 8, 28),))
-    assert current.code == "INSUFFICIENT_COMPLETED_SESSIONS"
+    current = _advanced(tmp_path / "current", 6, calendar_failure=True)
+    assert current.status == "UNAVAILABLE"
+    assert current.stage == "calendar"
+    assert current.code == "HTTP_FAILURE"
     report = _age(previous, current)
     assert report["status"] == "NON_COMPARABLE"
     assert report["reason"] == "CANONICAL_STOCK_UNAVAILABLE"
