@@ -79,13 +79,13 @@ from .storage_root_lease import StorageRootLeaseError
 
 CONTRACT_VERSION_V2: Final = "current-stock-research@v2"
 _IST: Final = ZoneInfo("Asia/Kolkata")
-# Preserve the shared bounded acquisition contract. Weekday holidays can leave
-# fewer than 21 completed sessions: report Structure insufficiency while
-# preserving independently supported geometry and comparison facts.
+# Shorter questions need only a small calendar window. A 21-session Structure
+# window needs more calendar margin to cross holidays; this affects only
+# official schedule coverage, not the number of BharatStock sessions captured.
 _LOOKBACK_DAYS: Final = 32
-# The opt-in agent fallback needs S plus 21 predecessors. Preserve the default
-# question's 32-day selection while allowing a bounded holiday margin for P.
-_PREVIOUS_LOOKBACK_DAYS: Final = 40
+# The existing bounded schedule limit also covers S plus 21 predecessors and
+# ordinary holiday margins for the public 21-session research questions.
+_EXTENDED_LOOKBACK_DAYS: Final = 40
 _LIMITATIONS: Final = (
     "current_research_question_readiness_only",
     "source_reported_bharatstock_ohlc",
@@ -683,8 +683,13 @@ def _research_current_stock_v2(  # noqa: C901 - explicit stage boundaries are in
                 coverage_from=selection.astimezone(_IST).date()
                 - timedelta(
                     days=(
-                        _PREVIOUS_LOOKBACK_DAYS
-                        if previous_session or terminal_missing_diagnostic
+                        _EXTENDED_LOOKBACK_DAYS
+                        if (
+                            previous_session
+                            or terminal_missing_diagnostic
+                            or question
+                            in {"CURRENT_STRUCTURE", "INTEGRATED_CURRENT_RESEARCH"}
+                        )
                         else _LOOKBACK_DAYS
                     )
                     - 1

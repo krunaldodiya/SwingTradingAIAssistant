@@ -631,6 +631,7 @@ class _Prices:
         self.after_history: Callable[[], None] | None = None
         self.missing_last = False
         self.full_history = False
+        self.closed_days: set[date] = set()
 
     def history(
         self,
@@ -663,6 +664,7 @@ class _Prices:
                         start + timedelta(days=index)
                         for index in range((end - start).days + 1)
                         if (start + timedelta(days=index)).weekday() < 5
+                        and start + timedelta(days=index) not in self.closed_days
                     )
                     if self.full_history
                     else tuple(dict.fromkeys((start, end)))
@@ -876,7 +878,7 @@ def test_v2_integrated_short_calendar_retains_independent_windows_without_struct
         sources,
         [
             clock.value.date() - timedelta(days=offset)
-            for offset in range(32)
+            for offset in range(40)
             if clock.value.date() - timedelta(days=offset) not in retained_sessions
         ],
     )
@@ -1081,6 +1083,48 @@ def test_v2_current_structure_with_21_official_sessions_is_ready(
         packet_v2._digest(preimage),  # pyright: ignore[reportPrivateUsage]
     )
     assert not packet_v2.bharatstock_research_packet_semantics_are_valid_v2(tampered)
+
+
+def test_v2_current_structure_finds_21_sessions_across_holiday_margin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clock, sources = _Clock(), _OfficialSources()
+    prices = _Prices(clock)
+    prices.full_history = True
+    closures = [date(2026, 8, 3), date(2026, 8, 10)]
+    prices.closed_days.update(closures)
+    _declare_closures(sources, closures)
+    attempted_windows: list[tuple[date, ...]] = []
+    original_capture = workflow_v2._capture_window
+
+    def capture_and_record(
+        *args: object, **kwargs: object
+    ) -> tuple[capture_api.CaptureResultV2, capture_api.CaptureRequestV2]:
+        request = cast(capture_api.CaptureRequestV2, args[0])
+        attempted_windows.append(request.sessions)
+        return original_capture(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(workflow_v2, "_capture_window", capture_and_record)
+    root = tmp_path / "structure-holiday-margin"
+    root.mkdir(mode=0o700)
+
+    result = research_current_stock_v2(
+        "PNB",
+        root,
+        question="CURRENT_STRUCTURE",
+        clock=clock,
+        calendar_transport=sources,
+        snapshot_transport=sources,
+        price_client=cast(BharatStockClient, prices),
+    )
+
+    assert result.status == "READY", (result.stage, result.code)
+    assert len(attempted_windows) == 1
+    assert attempted_windows[0] == tuple(sorted(attempted_windows[0]))
+    assert len(attempted_windows[0]) == 21
+    assert not set(attempted_windows[0]).intersection(closures)
+    assert attempted_windows[0][-1] == date(2026, 8, 25)
+    assert len(prices.calls) == 1
 
 
 def test_v2_failed_two_session_slot_keeps_independent_price_and_structure(
@@ -3095,7 +3139,7 @@ def test_agent_swing_run_prior_window_survives_two_holidays_at_calendar_edge(
         price_client=cast(BharatStockClient, prices),
     )
     assert default.packet is not None
-    assert len(default.packet.feature_slots[2].requested_sessions) == 20
+    assert len(default.packet.feature_slots[2].requested_sessions) == 21
 
     def current(symbol, root, *, question, refresh=False):
         return research_current_stock_v2(

@@ -40,8 +40,9 @@ official close, S is already the prior completed trading session.
    wider outcome blocks fallback. The versioned mode may acquire up to 40
    calendar days of official schedule on its initial, confirmation, and
    P-anchored requests solely to establish S plus 21 prior sessions after
-   holidays; the default
-   public V2 question retains its 32-day request.
+   holidays; the public V2 question uses the same bounded official schedule
+   coverage when it needs a 21-session window. A later calendar-coverage
+   correction is recorded below; selected price sessions remain unchanged.
    All three opt-in observations must retain the same official schedule identity;
    a revision between confirmation and P blocks fallback even if the last 21
    trading dates did not change.
@@ -87,6 +88,17 @@ The versioned agent result exposes `latest_official_completed_session`,
 `fallback_outcome` for each stock. Its selected facts retain their source and
 capture identities. Switching back to the default `v1` agent contract restores
 S-only selection without deleting valid captured evidence.
+
+## 21-session calendar coverage correction (Sprint 55)
+
+On 2026-10-13, Sprint 55 source qualification showed that a 32-calendar-day
+official schedule window can contain fewer than 21 completed NSE sessions
+after ordinary weekday holidays, even when older usable source history exists.
+For `CURRENT_STRUCTURE` and `INTEGRATED_CURRENT_RESEARCH`, calendar metadata is
+therefore acquired with the existing 40-calendar-day bound. The selected
+BharatStock request still contains exactly the latest 21 completed official
+sessions; the wider calendar window is not a 40-day price-data request and
+does not add a provider, fallback, or retry.
 
 ## Acceptance examples for implementation
 
