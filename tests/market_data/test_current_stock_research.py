@@ -18,6 +18,7 @@ from types import SimpleNamespace
 from typing import Literal, cast
 from urllib.request import HTTPSHandler
 from urllib.response import addinfourl
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -63,6 +64,7 @@ from swing_trading_ai_assistant.market_data.current_stock_research_v2 import (
 from swing_trading_ai_assistant.market_data.http import (
     HttpResponse,
     HttpResponseHeaders,
+    HttpTransport,
 )
 from swing_trading_ai_assistant.market_data.instrument_snapshot import (
     InstrumentSnapshotClientV1,
@@ -1083,6 +1085,52 @@ def test_v2_current_structure_with_21_official_sessions_is_ready(
         packet_v2._digest(preimage),  # pyright: ignore[reportPrivateUsage]
     )
     assert not packet_v2.bharatstock_research_packet_semantics_are_valid_v2(tampered)
+
+
+def test_v2_default_calendar_window_is_40_days_for_single_session_question(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "single-session-40-day-calendar"
+    root.mkdir(mode=0o700)
+    clock, sources = _Clock(), _OfficialSources()
+    coverage_starts: list[date] = []
+    original_acquire = workflow_v2.acquire_current_calendar_evidence_v1
+
+    def record_calendar_request(
+        *,
+        transport: HttpTransport,
+        clock: Callable[[], datetime],
+        coverage_from: date,
+        as_of: datetime,
+    ) -> CurrentCalendarEvidenceBundleV1:
+        coverage_starts.append(coverage_from)
+        return original_acquire(
+            transport=transport,
+            clock=clock,
+            coverage_from=coverage_from,
+            as_of=as_of,
+        )
+
+    monkeypatch.setattr(
+        workflow_v2,
+        "acquire_current_calendar_evidence_v1",
+        record_calendar_request,
+    )
+    result = research_current_stock_v2(
+        "PNB",
+        root,
+        question="LATEST_COMPLETED_CANDLE",
+        clock=clock,
+        calendar_transport=sources,
+        snapshot_transport=sources,
+        price_client=cast(BharatStockClient, _Prices(clock)),
+    )
+
+    expected_start = clock.value.astimezone(
+        ZoneInfo("Asia/Kolkata")
+    ).date() - timedelta(days=39)
+    assert coverage_starts == [expected_start]
+    assert result.status == "READY"
 
 
 def test_current_structure_names_a_missing_latest_provider_session(

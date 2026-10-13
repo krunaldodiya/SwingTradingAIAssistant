@@ -48,6 +48,19 @@ unchanged `current-stock-observation-comparison@v1` core. Output binds both
 record handles and the existing complete comparison. All stock, question,
 basis, chronology, availability and fact-delta rules remain unchanged.
 
+Owner-approved correction (2026-10-13): every V2 question uses the existing
+bounded 40-calendar-day official schedule window. This is a search window, not
+the number of sessions to capture. The composed schedule contains only
+exchange-open sessions, so weekends and official NSE closures do not count;
+only sessions completed at the selection time are eligible. Each question
+selects only its latest required sessions directly from that schedule (one,
+two, or 21) and makes one BharatStock capture request for those selected
+sessions. It does not first capture or require an intermediate buffer. If
+fewer than 21 completed sessions exist in the bounded schedule, Structure
+remains insufficient; integrated research may still retain its independently
+available shorter windows. The V2 producer does not scan or substitute the
+restored archive when the official schedule window is insufficient.
+
 Public envelopes use `stock-observations@v1`; copied JSON/hash is not admission.
 Malformed requests return exit2/redacted request_invalid with no source effect.
 Read/storage/version/source refusal returns exit1 and a sanitized explicit
