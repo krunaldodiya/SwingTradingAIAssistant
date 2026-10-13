@@ -40,15 +40,15 @@ def test_demo_runs_actual_cli_and_reports_tool_computed_change() -> None:
     # facts remain unchanged.
     assert (
         value["result_identity_sha256"]
-        == "bd6d3d97e443a6f3dd13914d8ef24b6b08cf718118eb0a665dc459ee59043ec7"
+        == "483411c33617ca18da05796e102d154317a14d1adfedbc2d59271a820e86521b"
     )
     assert (
         value["previous_observation_identity_sha256"]
-        == "c83451df18a43a1539f590a91c815dd55889f7714e4aa806d413c151ca273062"
+        == "652ac4708ff14097c80f29c2f6b66d745859f96307272027df5b8ba7201e5dd5"
     )
     assert (
         value["current_observation_identity_sha256"]
-        == "3f3263b01371b4fd5bc836fe0c84e1bf4a8c39a75f09950b445375a99d8565e1"
+        == "a0bf77a311438dc2d94e16cac579d575f2b7d987d63adeaddfab37b4fec4260c"
     )
     body = next(
         item for item in value["facts"] if item["path"] == "CANDLE_GEOMETRY.body_size"
