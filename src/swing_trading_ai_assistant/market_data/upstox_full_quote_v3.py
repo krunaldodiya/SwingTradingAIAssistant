@@ -320,8 +320,8 @@ def _parse_quote(  # noqa: C901 - strict closed provider schema validation
     _positive_decimal_value(raw["average_price"])
     _nonnegative_decimal_value(raw["oi"])
     _finite_decimal_value(raw["net_change"])
-    total_buy = _nonnegative_int(raw["total_buy_quantity"])
-    total_sell = _nonnegative_int(raw["total_sell_quantity"])
+    total_buy = _nonnegative_quantity(raw["total_buy_quantity"])
+    total_sell = _nonnegative_quantity(raw["total_sell_quantity"])
     _nonnegative_decimal_value(raw["oi_day_high"])
     _nonnegative_decimal_value(raw["oi_day_low"])
     _positive_decimal_value(raw["prev_close_price"])
@@ -459,6 +459,16 @@ def _nonnegative_int(value: object) -> int:
     if type(value) is not int or not 0 <= value <= _MAX_PROVIDER_INTEGER:
         raise UpstoxFullQuoteCorruptError("full quote response corrupt")
     return value
+
+
+def _nonnegative_quantity(value: object) -> int:
+    """Accept documented numeric totals only when their quantity is integral."""
+    if type(value) not in {int, Decimal}:
+        raise UpstoxFullQuoteCorruptError("full quote response corrupt")
+    result = _nonnegative_decimal_value(value)
+    if result != result.to_integral_value() or result > _MAX_PROVIDER_INTEGER:
+        raise UpstoxFullQuoteCorruptError("full quote response corrupt")
+    return int(result)
 
 
 def _positive_decimal(value: object) -> bool:

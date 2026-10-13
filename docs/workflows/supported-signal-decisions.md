@@ -32,6 +32,11 @@ identity-mismatched quote (`UPSTOX_QUOTE_IDENTITY_OR_SCHEMA_INVALID`) from
 credential rejection, rate limiting, other provider HTTP responses, and a true
 transport/unavailable failure. Each remains `UNKNOWN`; the command does not
 include the provider response body or exception text and does not retry.
+The provider documents total buy/sell quantities as JSON numbers. The adapter
+accepts an integer-valued number (including a decimal-form number such as
+`15000.0`) and converts it to an integer quantity; fractional, negative,
+out-of-range, or non-numeric quantities remain invalid. This rule applies to
+every requested equity, not a ticker-specific response shape.
 
 ## Run the automated safety screen
 

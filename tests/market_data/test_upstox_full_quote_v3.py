@@ -156,12 +156,33 @@ def test_quote_client_binds_exact_nse_equity_identity_and_redacts_token() -> Non
 def test_quote_client_maps_provider_key_from_each_requested_equity(
     isin: str, symbol: str
 ) -> None:
-    client, _ = _client(_payload_for_identity(isin, symbol))
+    payload = _payload_for_identity(isin, symbol)
+    payload = payload.replace(
+        b'"total_buy_quantity":15000', b'"total_buy_quantity":15000.0'
+    ).replace(b'"total_sell_quantity":12000', b'"total_sell_quantity":12000.000')
+    client, _ = _client(payload)
 
     quote = client.fetch(isin, symbol, _ACCESS_TOKEN)
 
     assert quote.instrument_key == f"NSE_EQ|{isin}"
     assert quote.symbol == symbol
+    assert quote.total_buy_quantity == 15_000
+    assert quote.total_sell_quantity == 12_000
+
+
+@pytest.mark.parametrize(
+    "quantity",
+    ("1.5", "-1.0", '"15000"', "9223372036854775808"),
+)
+def test_quote_client_rejects_invalid_total_quantity(quantity: str) -> None:
+    payload = _payload().replace(
+        b'"total_buy_quantity":15000',
+        f'"total_buy_quantity":{quantity}'.encode(),
+    )
+    client, _ = _client(payload)
+
+    with pytest.raises(UpstoxFullQuoteCorruptError):
+        client.fetch(_ISIN, _SYMBOL, _ACCESS_TOKEN)
 
 
 @pytest.mark.parametrize(
