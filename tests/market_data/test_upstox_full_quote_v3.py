@@ -145,6 +145,63 @@ def test_quote_client_binds_exact_nse_equity_identity_and_redacts_token() -> Non
     assert _TOKEN.encode() not in quote.canonical_json_bytes()
 
 
+def test_quote_client_accepts_equity_quote_without_derivative_or_cas_fields() -> None:
+    payload = json.loads(_payload().decode("utf-8"))
+    quote_data = payload["data"][f"NSE_EQ:{_SYMBOL}"]
+    assert isinstance(quote_data, dict)
+    # Upstox documents OI/previous OI for F&O instruments and CAS data for the
+    # closing-auction session; neither group is required on every equity quote.
+    for field in (
+        "oi",
+        "previous_oi",
+        "indicative_equilibrium_price",
+        "reference_price",
+        "indicative_equilibrium_quantity",
+        "indicative_imbalance_quantity_total",
+        "indicative_imbalance_quantity_market",
+        "cas_eligible",
+    ):
+        quote_data.pop(field)
+    client, _ = _client(json.dumps(payload, separators=(",", ":")).encode())
+
+    quote = client.fetch(_ISIN, _SYMBOL, _ACCESS_TOKEN)
+
+    assert quote.instrument_key == f"NSE_EQ|{_ISIN}"
+    assert quote.symbol == _SYMBOL
+    assert quote.last_price == Decimal("102")
+    assert quote.total_buy_quantity == 15_000
+    assert quote.total_sell_quantity == 12_000
+
+
+def test_quote_client_rejects_partial_closing_auction_snapshot() -> None:
+    payload = json.loads(_payload().decode("utf-8"))
+    quote_data = payload["data"][f"NSE_EQ:{_SYMBOL}"]
+    assert isinstance(quote_data, dict)
+    quote_data.pop("cas_eligible")
+    client, _ = _client(json.dumps(payload, separators=(",", ":")).encode())
+
+    with pytest.raises(UpstoxFullQuoteCorruptError):
+        client.fetch(_ISIN, _SYMBOL, _ACCESS_TOKEN)
+
+
+def test_quote_client_rejects_missing_required_policy_field() -> None:
+    payload = json.loads(_payload().decode("utf-8"))
+    quote_data = payload["data"][f"NSE_EQ:{_SYMBOL}"]
+    assert isinstance(quote_data, dict)
+    quote_data.pop("last_price")
+    client, _ = _client(json.dumps(payload, separators=(",", ":")).encode())
+
+    with pytest.raises(UpstoxFullQuoteCorruptError):
+        client.fetch(_ISIN, _SYMBOL, _ACCESS_TOKEN)
+
+
+def test_quote_client_still_validates_optional_derivative_values() -> None:
+    client, _ = _client(_payload(oi=-1))
+
+    with pytest.raises(UpstoxFullQuoteCorruptError):
+        client.fetch(_ISIN, _SYMBOL, _ACCESS_TOKEN)
+
+
 @pytest.mark.parametrize(
     ("isin", "symbol"),
     (

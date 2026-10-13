@@ -38,6 +38,13 @@ accepts an integer-valued number (including a decimal-form number such as
 out-of-range, or non-numeric quantities remain invalid. This rule applies to
 every requested equity, not a ticker-specific response shape.
 
+The quote parser requires the exact NSE-equity identity, timestamp, last-trade
+time, price, circuit limits, depth, and total quantities used by the policy.
+It permits only documented quote fields. F&O `oi`/`previous_oi` and the CAS
+field group may be absent outside their applicable instruments/session; when
+present, each value is still validated, and a partial CAS group remains
+invalid. Unknown fields and malformed required values remain closed outcomes.
+
 ## Run the automated safety screen
 
 ```bash

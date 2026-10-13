@@ -35,6 +35,15 @@ The source contract is limited to:
 
 No NSE downloader, browser automation, manual source staging, new provider, token handoff, source fallback, persistence/replay model, or source-origin attestation system is introduced. Upstox's published instrument model identifies `NSE_EQ` equity instruments by exchange, ISIN and unique instrument key; the contract accepts only that exact segment/type identity. [Upstox Instruments](https://upstox.com/developer/api-documentation/instruments/)
 
+The quote parser requires the exact NSE-equity identity, provider timestamp,
+last-trade time, last price, circuit limits, depth, and total buy/sell
+quantities used by this policy. It accepts only the documented quote-field
+allow-list and still validates every recognized optional field when present.
+The documented F&O `oi` and `previous_oi` fields and the complete CAS field
+group are optional for an ordinary equity quote; a partial CAS group or an
+unknown field remains invalid. Missing optional fields do not supply evidence
+to any safety rule.
+
 ## First working slice and effect bound
 
 The public V3 SDK accepts only an absolute storage root plus retained observation handle(s), just like V2. It accepts no raw quote, history, corporate-action, symbol, ISIN, safety boolean, endpoint, token, threshold or caller-authored decision data.
