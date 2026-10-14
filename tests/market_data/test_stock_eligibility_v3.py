@@ -30,6 +30,7 @@ from swing_trading_ai_assistant.market_data.corporate_actions import (
 )
 from swing_trading_ai_assistant.market_data.credentials import AccessToken
 from swing_trading_ai_assistant.market_data.http import HttpResponse
+from swing_trading_ai_assistant.market_data.schedule_evidence import ScheduleSession
 from swing_trading_ai_assistant.market_data.stock_eligibility_v3 import (
     _MAX_RESULT_BYTES,
     _canonical_bytes,
@@ -42,6 +43,11 @@ from swing_trading_ai_assistant.market_data.stock_observations import (
 )
 from swing_trading_ai_assistant.market_data.upstox_full_quote_v3 import (
     UpstoxFullQuoteAuthenticationError,
+    UpstoxFullQuoteAuthorizationError,
+    UpstoxFullQuoteCorruptError,
+    UpstoxFullQuoteProviderResponseError,
+    UpstoxFullQuoteRateLimitedError,
+    UpstoxFullQuoteUnavailableError,
     UpstoxFullQuoteV3,
     UpstoxFullQuoteV3Client,
 )
@@ -117,6 +123,7 @@ def _structure_observation(
 def _quote(
     session: date,
     *,
+    timestamp: datetime | None = None,
     price: Decimal = Decimal("134"),
     lower_circuit_limit: Decimal | None = None,
     upper_circuit_limit: Decimal | None = None,
@@ -124,8 +131,11 @@ def _quote(
     best_ask: Decimal | None = None,
     quote_age: timedelta = timedelta(minutes=1),
 ) -> UpstoxFullQuoteV3:
-    timestamp = datetime.combine(session, datetime.min.time(), UTC) + timedelta(
-        hours=4, minutes=30
+    timestamp = (
+        datetime.combine(session, datetime.min.time(), UTC)
+        + timedelta(hours=9, minutes=59)
+        if timestamp is None
+        else timestamp
     )
     lower = (
         (Decimal("10") if price < Decimal("50") else Decimal("50"))
@@ -179,6 +189,27 @@ def _quote(
         clock=lambda: timestamp + quote_age,
     )
     return client.fetch(_ISIN, "RELIANCE", AccessToken(_TOKEN))
+
+
+def _immediate_successor_session(root: Path, observation: object) -> ScheduleSession:
+    context = stock_eligibility_v3_module._admit_observation(  # pyright: ignore[reportPrivateUsage]
+        observation
+    )
+    assert context is not None
+    schedule = stock_eligibility_v3_module._resolve_retained_schedule(  # pyright: ignore[reportPrivateUsage]
+        root, context
+    )
+    assert schedule is not None
+    successor = next(
+        (
+            session
+            for session in schedule.sessions
+            if session.trade_date > context.latest_completed_session
+        ),
+        None,
+    )
+    assert successor is not None
+    return successor
 
 
 def _history(
@@ -276,7 +307,11 @@ def test_v3_eligibility_automatically_passes_bounded_safety_gates(
     )
 
     result = _evaluate_stock_eligibility_from_admitted_record_v3(
-        observation, handle, providers=providers, clock=lambda: _NOW
+        observation,
+        handle,
+        storage_root=tmp_path,
+        providers=providers,
+        clock=lambda: _NOW,
     )
 
     assert result["schema"] == "stock-eligibility@v3"
@@ -302,6 +337,115 @@ def test_v3_eligibility_automatically_passes_bounded_safety_gates(
     assert len(result["result_identity_sha256"]) == 64
 
 
+def test_v3_eligibility_accepts_fresh_quote_in_immediate_open_successor_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A market-hours capture ends yesterday; today's open quote must remain usable."""
+    observation = _structure_observation(tmp_path)
+    handle = record_stock_observation_v1(tmp_path, observation)
+    source = observation.packet.source("MARKET_STRUCTURE")
+    assert source is not None
+    successor = _immediate_successor_session(tmp_path, observation)
+    assert successor.trade_date > source.admitted_sessions[-1]
+    providers = _Providers(
+        _quote(
+            successor.trade_date,
+            timestamp=successor.open_at + timedelta(minutes=45),
+        ),
+        _history(observation),
+        _actions(observation),
+    )
+    monkeypatch.setattr(
+        stock_eligibility_v3_module,
+        "_LiveProviders",
+        lambda *, clock: providers,
+    )
+
+    result = stock_eligibility_v3_module.evaluate_stock_eligibility_from_record_v3(
+        tmp_path, handle
+    )
+
+    assert result["status"] == "ELIGIBLE"
+    assert providers.calls == [
+        "quote:INE002A01018:RELIANCE",
+        "history",
+        "actions:INE002A01018",
+    ]
+
+
+@pytest.mark.parametrize("boundary", ("before_open", "at_close"))
+def test_v3_eligibility_rejects_quote_outside_immediate_open_successor_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, boundary: str
+) -> None:
+    observation = _structure_observation(tmp_path)
+    handle = record_stock_observation_v1(tmp_path, observation)
+    successor = _immediate_successor_session(tmp_path, observation)
+    timestamp = (
+        successor.open_at - timedelta(minutes=1)
+        if boundary == "before_open"
+        else successor.close_at
+    )
+    providers = _Providers(
+        _quote(successor.trade_date, timestamp=timestamp),
+        _history(observation),
+        _actions(observation),
+    )
+    monkeypatch.setattr(
+        stock_eligibility_v3_module,
+        "_LiveProviders",
+        lambda *, clock: providers,
+    )
+
+    result = stock_eligibility_v3_module.evaluate_stock_eligibility_from_record_v3(
+        tmp_path, handle
+    )
+
+    assert result["status"] == "UNKNOWN"
+    ledger = {entry["rule_id"]: entry for entry in result["explanation_ledger"]}
+    integrity = ledger["CURRENT_QUOTE_FRESHNESS_AND_INTEGRITY"]
+    assert integrity["outcome"] == "UNKNOWN"
+    assert integrity["reason_code"] == "QUOTE_TIMESTAMP_OUTSIDE_NEXT_OPEN_SESSION"
+    assert providers.calls == ["quote:INE002A01018:RELIANCE"]
+
+
+def test_v3_eligibility_stops_before_provider_when_retained_schedule_is_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    observation = _structure_observation(tmp_path)
+    handle = record_stock_observation_v1(tmp_path, observation)
+    source = observation.packet.source("MARKET_STRUCTURE")
+    assert source is not None
+    schedule_path = (
+        tmp_path
+        / "calendar-schedules"
+        / "sha256"
+        / f"{source.schedule_evidence_sha256}.json"
+    )
+    schedule_path.unlink()
+    providers = _Providers(
+        _quote(source.admitted_sessions[-1]),
+        _history(observation),
+        _actions(observation),
+    )
+    monkeypatch.setattr(
+        stock_eligibility_v3_module,
+        "_LiveProviders",
+        lambda *, clock: providers,
+    )
+
+    result = stock_eligibility_v3_module.evaluate_stock_eligibility_from_record_v3(
+        tmp_path, handle
+    )
+
+    assert result["status"] == "UNKNOWN"
+    ledger = {entry["rule_id"]: entry for entry in result["explanation_ledger"]}
+    identity = ledger["CANONICAL_NSE_EQUITY_IDENTITY"]
+    assert identity["outcome"] == "UNKNOWN"
+    assert identity["reason_code"] == "CURRENT_STRUCTURE_SCHEDULE_EVIDENCE_UNAVAILABLE"
+    assert ledger["CURRENT_UPSTOX_QUOTE_BINDING"]["outcome"] == "NOT_EVALUATED"
+    assert providers.calls == []
+
+
 def test_v3_eligibility_proves_low_price_ineligible_without_later_effects(
     tmp_path: Path,
 ) -> None:
@@ -318,7 +462,11 @@ def test_v3_eligibility_proves_low_price_ineligible_without_later_effects(
     )
 
     result = _evaluate_stock_eligibility_from_admitted_record_v3(
-        observation, handle, providers=providers, clock=lambda: _NOW
+        observation,
+        handle,
+        storage_root=tmp_path,
+        providers=providers,
+        clock=lambda: _NOW,
     )
 
     assert result["status"] == "INELIGIBLE"
@@ -330,19 +478,53 @@ def test_v3_eligibility_proves_low_price_ineligible_without_later_effects(
     assert ledger["PROVIDER_OBSERVABLE_HISTORY"]["outcome"] == "NOT_EVALUATED"
 
 
-def test_v3_eligibility_keeps_provider_authentication_unknown_and_private(
-    tmp_path: Path,
+@pytest.mark.parametrize(
+    ("failure", "reason_code"),
+    (
+        (
+            UpstoxFullQuoteAuthenticationError("private provider detail"),
+            "UPSTOX_QUOTE_AUTHENTICATION_FAILED",
+        ),
+        (
+            UpstoxFullQuoteAuthorizationError("private provider detail"),
+            "UPSTOX_QUOTE_AUTHORIZATION_FAILED",
+        ),
+        (
+            UpstoxFullQuoteRateLimitedError("private provider detail"),
+            "UPSTOX_QUOTE_RATE_LIMITED",
+        ),
+        (
+            UpstoxFullQuoteProviderResponseError("private provider detail"),
+            "UPSTOX_QUOTE_PROVIDER_RESPONSE_INVALID",
+        ),
+        (
+            UpstoxFullQuoteCorruptError("private provider detail"),
+            "UPSTOX_QUOTE_IDENTITY_OR_SCHEMA_INVALID",
+        ),
+        (
+            UpstoxFullQuoteUnavailableError("private provider detail"),
+            "UPSTOX_QUOTE_UNAVAILABLE",
+        ),
+        (RuntimeError("private provider detail"), "UPSTOX_QUOTE_UNAVAILABLE"),
+    ),
+)
+def test_v3_eligibility_preserves_safe_quote_failure_classification(
+    tmp_path: Path, failure: Exception, reason_code: str
 ) -> None:
     observation = _structure_observation(tmp_path)
     handle = record_stock_observation_v1(tmp_path, observation)
     providers = _Providers(
-        UpstoxFullQuoteAuthenticationError("quote failure"),
+        failure,
         _history(observation),
         _actions(observation),
     )
 
     result = _evaluate_stock_eligibility_from_admitted_record_v3(
-        observation, handle, providers=providers, clock=lambda: _NOW
+        observation,
+        handle,
+        storage_root=tmp_path,
+        providers=providers,
+        clock=lambda: _NOW,
     )
 
     assert result["status"] == "UNKNOWN"
@@ -351,6 +533,8 @@ def test_v3_eligibility_keeps_provider_authentication_unknown_and_private(
     ]
     ledger = {entry["rule_id"]: entry for entry in result["explanation_ledger"]}
     assert ledger["CURRENT_UPSTOX_QUOTE_BINDING"]["outcome"] == "UNKNOWN"
+    assert ledger["CURRENT_UPSTOX_QUOTE_BINDING"]["reason_code"] == reason_code
+    assert "private provider detail" not in str(result)
     assert _TOKEN not in str(result)
 
 
@@ -496,7 +680,7 @@ def test_v3_public_sdk_closes_oversized_upstox_integer_evidence(
     assert result["status"] == "UNKNOWN"
     ledger = {entry["rule_id"]: entry for entry in result["explanation_ledger"]}
     assert ledger["CURRENT_UPSTOX_QUOTE_BINDING"]["reason_code"] == (
-        "UPSTOX_QUOTE_UNAVAILABLE"
+        "UPSTOX_QUOTE_IDENTITY_OR_SCHEMA_INVALID"
     )
     assert ledger["PROVIDER_OBSERVABLE_HISTORY"]["outcome"] == "NOT_EVALUATED"
 
@@ -513,7 +697,11 @@ def test_v3_eligibility_treats_tampered_provider_projection_as_unknown(
     providers = _Providers(quote, _history(observation), _actions(observation))
 
     result = _evaluate_stock_eligibility_from_admitted_record_v3(
-        observation, handle, providers=providers, clock=lambda: _NOW
+        observation,
+        handle,
+        storage_root=tmp_path,
+        providers=providers,
+        clock=lambda: _NOW,
     )
 
     assert result["status"] == "UNKNOWN"
@@ -549,7 +737,11 @@ def test_v3_eligibility_turnover_threshold_is_exact_and_stops_later_effects(
     )
 
     result = _evaluate_stock_eligibility_from_admitted_record_v3(
-        observation, handle, providers=providers, clock=lambda: _NOW
+        observation,
+        handle,
+        storage_root=tmp_path,
+        providers=providers,
+        clock=lambda: _NOW,
     )
 
     assert result["status"] == expected_status
@@ -584,7 +776,11 @@ def test_v3_eligibility_rejects_misaligned_history_without_action_read(
     )
 
     result = _evaluate_stock_eligibility_from_admitted_record_v3(
-        observation, handle, providers=providers, clock=lambda: _NOW
+        observation,
+        handle,
+        storage_root=tmp_path,
+        providers=providers,
+        clock=lambda: _NOW,
     )
 
     assert result["status"] == "UNKNOWN"
@@ -610,7 +806,11 @@ def test_v3_eligibility_rejects_supported_action_inside_blackout_window(
     )
 
     result = _evaluate_stock_eligibility_from_admitted_record_v3(
-        observation, handle, providers=providers, clock=lambda: _NOW
+        observation,
+        handle,
+        storage_root=tmp_path,
+        providers=providers,
+        clock=lambda: _NOW,
     )
 
     assert result["status"] == "INELIGIBLE"
@@ -645,7 +845,11 @@ def test_v3_eligibility_enforces_exact_history_session_boundary(
     )
 
     result = _evaluate_stock_eligibility_from_admitted_record_v3(
-        observation, handle, providers=providers, clock=lambda: _NOW
+        observation,
+        handle,
+        storage_root=tmp_path,
+        providers=providers,
+        clock=lambda: _NOW,
     )
 
     assert result["status"] == expected_status
@@ -678,7 +882,11 @@ def test_v3_eligibility_enforces_exact_price_floor(
     )
 
     result = _evaluate_stock_eligibility_from_admitted_record_v3(
-        observation, handle, providers=providers, clock=lambda: _NOW
+        observation,
+        handle,
+        storage_root=tmp_path,
+        providers=providers,
+        clock=lambda: _NOW,
     )
 
     assert result["status"] == expected_status
@@ -723,7 +931,11 @@ def test_v3_eligibility_enforces_exact_circuit_distance(
     )
 
     result = _evaluate_stock_eligibility_from_admitted_record_v3(
-        observation, handle, providers=providers, clock=lambda: _NOW
+        observation,
+        handle,
+        storage_root=tmp_path,
+        providers=providers,
+        clock=lambda: _NOW,
     )
 
     assert result["status"] == expected_status
@@ -769,7 +981,11 @@ def test_v3_eligibility_reports_upper_circuit_distance_truthfully(
     )
 
     result = _evaluate_stock_eligibility_from_admitted_record_v3(
-        observation, handle, providers=providers, clock=lambda: _NOW
+        observation,
+        handle,
+        storage_root=tmp_path,
+        providers=providers,
+        clock=lambda: _NOW,
     )
 
     assert result["status"] == expected_status
@@ -813,7 +1029,11 @@ def test_v3_eligibility_enforces_exact_relative_spread(
     )
 
     result = _evaluate_stock_eligibility_from_admitted_record_v3(
-        observation, handle, providers=providers, clock=lambda: _NOW
+        observation,
+        handle,
+        storage_root=tmp_path,
+        providers=providers,
+        clock=lambda: _NOW,
     )
 
     assert result["status"] == expected_status
@@ -852,7 +1072,11 @@ def test_v3_eligibility_enforces_exact_quote_freshness_boundary(
     )
 
     result = _evaluate_stock_eligibility_from_admitted_record_v3(
-        observation, handle, providers=providers, clock=lambda: _NOW
+        observation,
+        handle,
+        storage_root=tmp_path,
+        providers=providers,
+        clock=lambda: _NOW,
     )
 
     assert result["status"] == expected_status
@@ -894,7 +1118,11 @@ def test_v3_eligibility_enforces_exact_corporate_action_blackout_boundary(
     )
 
     result = _evaluate_stock_eligibility_from_admitted_record_v3(
-        observation, handle, providers=providers, clock=lambda: _NOW
+        observation,
+        handle,
+        storage_root=tmp_path,
+        providers=providers,
+        clock=lambda: _NOW,
     )
 
     assert result["status"] == expected_status

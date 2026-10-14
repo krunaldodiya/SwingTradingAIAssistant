@@ -19,6 +19,7 @@ from swing_trading_ai_assistant.research_packet.bharatstock_v2 import (
 )
 
 from .bharatstock import BharatStockClient, BharatStockHistory, BharatStockInstrument
+from .bharatstock_capture import schedule_identity_v2
 from .corporate_actions import (
     CorporateActionSnapshotV1,
     UpstoxCorporateActionsClientV1,
@@ -27,11 +28,28 @@ from .credentials import AccessToken, EnvironmentAccessTokenProvider
 from .current_stock_research_v2 import CurrentStockResearchResultV2
 from .http import UrllibHttpTransport
 from .runtime_source_verifier import runtime_source_sha256
+from .schedule_evidence import (
+    ExpectedSessionSchedule,
+    ScheduleEvidenceStore,
+    ScheduleOutcome,
+    ScheduleSession,
+    schedule_covers_full_calendar_range,
+    schedule_digest,
+)
 from .stock_eligibility_v3_runtime_identity_manifest import (
     STOCK_ELIGIBILITY_RUNTIME_SOURCE_SHA256_V3,
 )
 from .stock_observations import read_stock_observation_v1
-from .upstox_full_quote_v3 import UpstoxFullQuoteV3, UpstoxFullQuoteV3Client
+from .storage_root_lease import StorageRootLease, StorageRootLeaseError
+from .upstox_full_quote_v3 import (
+    UpstoxFullQuoteAuthenticationError,
+    UpstoxFullQuoteAuthorizationError,
+    UpstoxFullQuoteCorruptError,
+    UpstoxFullQuoteProviderResponseError,
+    UpstoxFullQuoteRateLimitedError,
+    UpstoxFullQuoteV3,
+    UpstoxFullQuoteV3Client,
+)
 
 SCHEMA: Final = "stock-eligibility@v3"
 SAFETY_POLICY_IDENTIFIER: Final = "supported-signal-safety-policy@v1"
@@ -50,11 +68,14 @@ _MAX_RESULT_BYTES: Final = 128 * 1024
 _SOURCES: Final = (
     "src/swing_trading_ai_assistant/market_data/stock_eligibility_v3.py",
     "src/swing_trading_ai_assistant/market_data/bharatstock.py",
+    "src/swing_trading_ai_assistant/market_data/bharatstock_capture.py",
     "src/swing_trading_ai_assistant/market_data/corporate_actions.py",
     "src/swing_trading_ai_assistant/market_data/credentials.py",
     "src/swing_trading_ai_assistant/market_data/http.py",
     "src/swing_trading_ai_assistant/market_data/runtime_source_verifier.py",
+    "src/swing_trading_ai_assistant/market_data/schedule_evidence.py",
     "src/swing_trading_ai_assistant/market_data/stock_observations.py",
+    "src/swing_trading_ai_assistant/market_data/storage_root_lease.py",
     "src/swing_trading_ai_assistant/market_data/upstox_full_quote_v3.py",
 )
 _LIMITATIONS: Final = (
@@ -96,6 +117,9 @@ class _AdmittedObservation:
     mapping_identity_sha256: str
     structure_source_identity_sha256: str
     capture_revision_identity_sha256: str
+    schedule_evidence_sha256: str
+    schedule_source: str
+    schedule_source_release: str
     schedule_identity_sha256: str
 
 
@@ -266,6 +290,9 @@ def _admit_observation(
         mapping.mapping_identity_sha256,
         source.source_identity_sha256,
         source.capture_revision_identity_sha256,
+        source.schedule_evidence_sha256,
+        source.schedule_source,
+        source.schedule_source_release,
         source.schedule_identity_sha256,
     )
 
@@ -315,6 +342,7 @@ def _base_evidence(context: _AdmittedObservation) -> dict[str, object]:
         "mapping_identity_sha256": context.mapping_identity_sha256,
         "market_structure_source_identity_sha256": context.structure_source_identity_sha256,
         "capture_revision_identity_sha256": context.capture_revision_identity_sha256,
+        "schedule_evidence_sha256": context.schedule_evidence_sha256,
         "schedule_identity_sha256": context.schedule_identity_sha256,
         "latest_completed_session": context.latest_completed_session.isoformat(),
     }
@@ -408,8 +436,94 @@ def _quote_binding(
     return quote
 
 
+def _quote_failure_reason(error: BaseException) -> tuple[str, str]:
+    """Keep provider failures distinct without exposing exception details."""
+    if isinstance(error, UpstoxFullQuoteCorruptError):
+        return (
+            "UPSTOX_QUOTE_IDENTITY_OR_SCHEMA_INVALID",
+            "Upstox returned a quote, but its identity or response structure did not satisfy the supported quote contract.",
+        )
+    if isinstance(error, UpstoxFullQuoteAuthenticationError):
+        return (
+            "UPSTOX_QUOTE_AUTHENTICATION_FAILED",
+            "Upstox rejected the configured quote credential, so the safety screen cannot continue.",
+        )
+    if isinstance(error, UpstoxFullQuoteAuthorizationError):
+        return (
+            "UPSTOX_QUOTE_AUTHORIZATION_FAILED",
+            "The configured Upstox credential is not authorized for the quote request, so the safety screen cannot continue.",
+        )
+    if isinstance(error, UpstoxFullQuoteRateLimitedError):
+        return (
+            "UPSTOX_QUOTE_RATE_LIMITED",
+            "Upstox rate limited the bounded quote request, so the safety screen cannot continue.",
+        )
+    if isinstance(error, UpstoxFullQuoteProviderResponseError):
+        return (
+            "UPSTOX_QUOTE_PROVIDER_RESPONSE_INVALID",
+            "Upstox did not return a successful quote response, so the safety screen cannot continue.",
+        )
+    return (
+        "UPSTOX_QUOTE_UNAVAILABLE",
+        "A current exact-identity Upstox quote could not be obtained, so the safety screen cannot substitute another source or security.",
+    )
+
+
+def _scheduled_session(
+    schedule: ExpectedSessionSchedule, trade_date: date
+) -> ScheduleSession | None:
+    return next(
+        (session for session in schedule.sessions if session.trade_date == trade_date),
+        None,
+    )
+
+
+def _resolve_retained_schedule(
+    storage_root: Path, context: _AdmittedObservation
+) -> ExpectedSessionSchedule | None:
+    """Resolve only the exact schedule bound into the retained structure record."""
+    root_identity = StorageRootLease.admit_existing_private_identity(storage_root)
+    if root_identity is None:
+        return None
+    admission = StorageRootLease.try_admit_read_existing(storage_root, root_identity)
+    lease = admission.lease
+    if lease is None:
+        return None
+    try:
+        with lease:
+            resolved = ScheduleEvidenceStore(storage_root, lease).resolve(
+                context.schedule_evidence_sha256
+            )
+    except (OSError, StorageRootLeaseError):
+        return None
+    if (
+        resolved.outcome is ScheduleOutcome.FAILED
+        or resolved.schedule is None
+        or resolved.digest != context.schedule_evidence_sha256
+    ):
+        return None
+    schedule = resolved.schedule
+    try:
+        matches = (
+            schedule_digest(schedule) == context.schedule_evidence_sha256
+            and schedule.source == context.schedule_source
+            and schedule.source_release == context.schedule_source_release
+            and schedule_identity_v2(schedule) == context.schedule_identity_sha256
+            and _scheduled_session(schedule, context.latest_completed_session)
+            is not None
+            and schedule_covers_full_calendar_range(
+                schedule, context.latest_completed_session, schedule.covered_to
+            )
+        )
+    except ValueError:
+        return None
+    return schedule if matches else None
+
+
 def _quote_integrity(
-    quote: UpstoxFullQuoteV3, latest_session: date
+    quote: UpstoxFullQuoteV3,
+    latest_session: date,
+    schedule: ExpectedSessionSchedule,
 ) -> tuple[bool, str, dict[str, object]]:
     age = quote.retrieved_at - quote.quote_timestamp
     quote_session = quote.quote_timestamp.astimezone(_IST).date()
@@ -422,8 +536,39 @@ def _quote_integrity(
     }
     if age < timedelta() or age > _QUOTE_MAX_AGE:
         return False, "QUOTE_TIMESTAMP_OUTSIDE_FRESHNESS_WINDOW", details
-    if quote_session != latest_session:
-        return False, "QUOTE_SESSION_DOES_NOT_MATCH_RETAINED_SESSION", details
+    retained_session = _scheduled_session(schedule, latest_session)
+    if retained_session is None:
+        return False, "RETAINED_SCHEDULE_MISSING_COMPLETED_SESSION", details
+    if quote_session < latest_session:
+        return False, "QUOTE_SESSION_PRECEDES_RETAINED_SESSION", details
+    if not schedule_covers_full_calendar_range(schedule, latest_session, quote_session):
+        return False, "RETAINED_SCHEDULE_DOES_NOT_COVER_QUOTE_SESSION", details
+    if quote_session == latest_session:
+        if quote.retrieved_at < retained_session.close_at:
+            return False, "QUOTE_RETRIEVED_BEFORE_RETAINED_SESSION_CLOSED", details
+        details["quote_session_alignment"] = "RETAINED_COMPLETED_SESSION"
+    else:
+        successor = next(
+            (
+                session
+                for session in schedule.sessions
+                if session.trade_date > latest_session
+            ),
+            None,
+        )
+        if successor is None or quote_session != successor.trade_date:
+            return (
+                False,
+                "QUOTE_SESSION_DOES_NOT_MATCH_IMMEDIATE_SCHEDULED_SUCCESSOR",
+                details,
+            )
+        details["immediate_next_scheduled_session"] = successor.trade_date.isoformat()
+        if not (
+            successor.open_at <= quote.quote_timestamp <= quote.retrieved_at
+            and quote.retrieved_at < successor.close_at
+        ):
+            return False, "QUOTE_TIMESTAMP_OUTSIDE_NEXT_OPEN_SESSION", details
+        details["quote_session_alignment"] = "NEXT_SCHEDULED_OPEN_SESSION"
     if not quote.lower_circuit_limit < quote.last_price < quote.upper_circuit_limit:
         return False, "QUOTE_PRICE_OUTSIDE_CIRCUIT_BOUNDS", details
     return True, "CURRENT_QUOTE_IS_FRESH_AND_INTERNALLY_COHERENT", details
@@ -675,6 +820,7 @@ def _evaluate_stock_eligibility_from_admitted_record_v3(  # noqa: C901 - explici
     observation: object,
     observation_identity_sha256: str,
     *,
+    storage_root: object,
     providers: _V3Providers,
     clock: Callable[[], datetime],
 ) -> dict[str, object]:
@@ -686,6 +832,8 @@ def _evaluate_stock_eligibility_from_admitted_record_v3(  # noqa: C901 - explici
     if (
         type(observation_identity_sha256) is not str
         or _DIGEST.fullmatch(observation_identity_sha256) is None
+        or not isinstance(storage_root, Path)
+        or not storage_root.is_absolute()
         or not callable(clock)
     ):
         raise ValueError("invalid admitted observation")
@@ -722,6 +870,25 @@ def _evaluate_stock_eligibility_from_admitted_record_v3(  # noqa: C901 - explici
             remaining=rule_ids,
             stopping_rule_id="CANONICAL_NSE_EQUITY_IDENTITY",
         )
+    schedule = _resolve_retained_schedule(storage_root, context)
+    if schedule is None:
+        ledger.append(
+            _entry(
+                "CANONICAL_NSE_EQUITY_IDENTITY",
+                "UNKNOWN",
+                "CURRENT_STRUCTURE_SCHEDULE_EVIDENCE_UNAVAILABLE",
+                "The retained current-structure record no longer has the exact official schedule needed to align a live quote safely.",
+            )
+        )
+        return _unknown(
+            symbol=context.symbol,
+            observation_identity_sha256=observation_identity_sha256,
+            runtime=runtime,
+            ledger=ledger,
+            verified_evidence=None,
+            remaining=rule_ids,
+            stopping_rule_id="CANONICAL_NSE_EQUITY_IDENTITY",
+        )
     evidence = _base_evidence(context)
     ledger.append(
         _entry(
@@ -740,13 +907,14 @@ def _evaluate_stock_eligibility_from_admitted_record_v3(  # noqa: C901 - explici
     )
     try:
         quote_value = providers.get_quote(context.isin, context.symbol)
-    except BaseException:  # noqa: BLE001 - closed provider and interruption boundary
+    except BaseException as error:  # noqa: BLE001 - closed provider/interruption boundary
+        reason_code, explanation = _quote_failure_reason(error)
         ledger.append(
             _entry(
                 "CURRENT_UPSTOX_QUOTE_BINDING",
                 "UNKNOWN",
-                "UPSTOX_QUOTE_UNAVAILABLE",
-                "A current exact-identity Upstox quote could not be obtained, so the safety screen cannot substitute another source or security.",
+                reason_code,
+                explanation,
             )
         )
         return _unknown(
@@ -794,7 +962,7 @@ def _evaluate_stock_eligibility_from_admitted_record_v3(  # noqa: C901 - explici
         )
     )
     integrity_ok, integrity_code, integrity_measurements = _quote_integrity(
-        quote, context.latest_completed_session
+        quote, context.latest_completed_session, schedule
     )
     if not integrity_ok:
         ledger.append(
@@ -821,7 +989,7 @@ def _evaluate_stock_eligibility_from_admitted_record_v3(  # noqa: C901 - explici
             "CURRENT_QUOTE_FRESHNESS_AND_INTEGRITY",
             "PASS",
             integrity_code,
-            "The quote timestamp is fresh relative to provider retrieval, aligns to the retained completed session and has coherent circuit bounds.",
+            "The quote timestamp is fresh relative to provider retrieval, aligns to the retained completed session or its immediate open scheduled successor, and has coherent circuit bounds.",
             {"quote_identity_sha256": quote.quote_identity_sha256},
             integrity_measurements,
         )
@@ -1109,6 +1277,7 @@ def evaluate_stock_eligibility_from_record_v3(
     return _evaluate_stock_eligibility_from_admitted_record_v3(
         read_stock_observation_v1(root, handle),
         handle,
+        storage_root=root,
         providers=_LiveProviders(clock=_utc_now),
         clock=_utc_now,
     )

@@ -70,6 +70,29 @@ _QUOTE_FIELDS: Final = frozenset(
         "cas_eligible",
     }
 )
+_OPTIONAL_QUOTE_FIELDS: Final = frozenset(
+    {
+        "oi",
+        "previous_oi",
+        "indicative_equilibrium_price",
+        "reference_price",
+        "indicative_equilibrium_quantity",
+        "indicative_imbalance_quantity_total",
+        "indicative_imbalance_quantity_market",
+        "cas_eligible",
+    }
+)
+_REQUIRED_QUOTE_FIELDS: Final = _QUOTE_FIELDS - _OPTIONAL_QUOTE_FIELDS
+_CAS_QUOTE_FIELDS: Final = frozenset(
+    {
+        "indicative_equilibrium_price",
+        "reference_price",
+        "indicative_equilibrium_quantity",
+        "indicative_imbalance_quantity_total",
+        "indicative_imbalance_quantity_market",
+        "cas_eligible",
+    }
+)
 
 
 class UpstoxFullQuoteError(RuntimeError):
@@ -284,7 +307,10 @@ def _parse_quote(  # noqa: C901 - strict closed provider schema validation
         raise UpstoxFullQuoteCorruptError("full quote response corrupt")
     quote = data_object[response_key]
     raw = _object(quote)
-    if frozenset(raw) != _QUOTE_FIELDS:
+    raw_fields = frozenset(raw)
+    if not _REQUIRED_QUOTE_FIELDS.issubset(raw_fields) or not raw_fields.issubset(
+        _QUOTE_FIELDS
+    ):
         raise UpstoxFullQuoteCorruptError("full quote response corrupt")
     if raw["instrument_token"] != instrument_key or raw["symbol"] != symbol:
         raise UpstoxFullQuoteCorruptError("full quote response corrupt")
@@ -318,10 +344,11 @@ def _parse_quote(  # noqa: C901 - strict closed provider schema validation
     ):
         raise UpstoxFullQuoteCorruptError("full quote response corrupt")
     _positive_decimal_value(raw["average_price"])
-    _nonnegative_decimal_value(raw["oi"])
+    if "oi" in raw:
+        _nonnegative_decimal_value(raw["oi"])
     _finite_decimal_value(raw["net_change"])
-    total_buy = _nonnegative_int(raw["total_buy_quantity"])
-    total_sell = _nonnegative_int(raw["total_sell_quantity"])
+    total_buy = _nonnegative_quantity(raw["total_buy_quantity"])
+    total_sell = _nonnegative_quantity(raw["total_sell_quantity"])
     _nonnegative_decimal_value(raw["oi_day_high"])
     _nonnegative_decimal_value(raw["oi_day_low"])
     _positive_decimal_value(raw["prev_close_price"])
@@ -329,14 +356,19 @@ def _parse_quote(  # noqa: C901 - strict closed provider schema validation
     year_low = _positive_decimal_value(raw["year_low"])
     if year_low > year_high:
         raise UpstoxFullQuoteCorruptError("full quote response corrupt")
-    _nonnegative_decimal_value(raw["previous_oi"])
-    _nonnegative_decimal_value(raw["indicative_equilibrium_price"])
-    _positive_decimal_value(raw["reference_price"])
-    _nonnegative_int(raw["indicative_equilibrium_quantity"])
-    _nonnegative_int(raw["indicative_imbalance_quantity_total"])
-    _nonnegative_int(raw["indicative_imbalance_quantity_market"])
-    if type(raw["cas_eligible"]) is not bool:
+    if "previous_oi" in raw:
+        _nonnegative_decimal_value(raw["previous_oi"])
+    cas_fields = _CAS_QUOTE_FIELDS.intersection(raw_fields)
+    if cas_fields and cas_fields != _CAS_QUOTE_FIELDS:
         raise UpstoxFullQuoteCorruptError("full quote response corrupt")
+    if cas_fields:
+        _nonnegative_decimal_value(raw["indicative_equilibrium_price"])
+        _positive_decimal_value(raw["reference_price"])
+        _nonnegative_int(raw["indicative_equilibrium_quantity"])
+        _nonnegative_int(raw["indicative_imbalance_quantity_total"])
+        _nonnegative_int(raw["indicative_imbalance_quantity_market"])
+        if type(raw["cas_eligible"]) is not bool:
+            raise UpstoxFullQuoteCorruptError("full quote response corrupt")
     values: dict[str, object] = {
         "instrument_key": instrument_key,
         "symbol": symbol,
@@ -459,6 +491,21 @@ def _nonnegative_int(value: object) -> int:
     if type(value) is not int or not 0 <= value <= _MAX_PROVIDER_INTEGER:
         raise UpstoxFullQuoteCorruptError("full quote response corrupt")
     return value
+
+
+def _nonnegative_quantity(value: object) -> int:
+    """Accept documented numeric totals only when their quantity is integral."""
+    if type(value) is int:
+        return _nonnegative_int(value)
+    if type(value) is not Decimal or not _bounded_decimal_representation(value):
+        raise UpstoxFullQuoteCorruptError("full quote response corrupt")
+    if (
+        value < 0
+        or value != value.to_integral_value()
+        or value > Decimal(_MAX_PROVIDER_INTEGER)
+    ):
+        raise UpstoxFullQuoteCorruptError("full quote response corrupt")
+    return int(value)
 
 
 def _positive_decimal(value: object) -> bool:

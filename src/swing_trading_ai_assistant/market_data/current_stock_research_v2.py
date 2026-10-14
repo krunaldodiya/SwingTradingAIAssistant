@@ -79,13 +79,10 @@ from .storage_root_lease import StorageRootLeaseError
 
 CONTRACT_VERSION_V2: Final = "current-stock-research@v2"
 _IST: Final = ZoneInfo("Asia/Kolkata")
-# Preserve the shared bounded acquisition contract. Weekday holidays can leave
-# fewer than 21 completed sessions: report Structure insufficiency while
-# preserving independently supported geometry and comparison facts.
-_LOOKBACK_DAYS: Final = 32
-# The opt-in agent fallback needs S plus 21 predecessors. Preserve the default
-# question's 32-day selection while allowing a bounded holiday margin for P.
-_PREVIOUS_LOOKBACK_DAYS: Final = 40
+# Use one holiday-tolerant schedule window for every V2 question. This is a
+# calendar search bound, not a capture size: each question still selects only
+# its latest required completed market-open sessions.
+_LOOKBACK_DAYS: Final = 40
 _LIMITATIONS: Final = (
     "current_research_question_readiness_only",
     "source_reported_bharatstock_ohlc",
@@ -681,14 +678,7 @@ def _research_current_stock_v2(  # noqa: C901 - explicit stage boundaries are in
                 ),
                 clock=window.now,
                 coverage_from=selection.astimezone(_IST).date()
-                - timedelta(
-                    days=(
-                        _PREVIOUS_LOOKBACK_DAYS
-                        if previous_session or terminal_missing_diagnostic
-                        else _LOOKBACK_DAYS
-                    )
-                    - 1
-                ),
+                - timedelta(days=_LOOKBACK_DAYS - 1),
                 as_of=window.deadline,
             )
             window.ensure_live()
@@ -764,7 +754,13 @@ def _research_current_stock_v2(  # noqa: C901 - explicit stage boundaries are in
                     sessions=completed_sessions[-count:],
                     deadline=window.deadline,
                     calendar=calendar,
-                    terminal_missing_diagnostic=terminal_missing_diagnostic,
+                    # A current Structure observation must end on the latest
+                    # officially completed session. Name the exact case where
+                    # the provider has every earlier requested row but not that
+                    # final row, rather than reporting a generic history gap.
+                    terminal_missing_diagnostic=(
+                        terminal_missing_diagnostic or question == "CURRENT_STRUCTURE"
+                    ),
                 )
                 for count in {feature_windows[item] for item in requested_price}
             }

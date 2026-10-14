@@ -9,5 +9,5 @@ CURRENT_SUPPLIED_COHORT_MARKET_REGIME_RUNTIME_SOURCE_DIGESTS_V1: Final = {
     "src/swing_trading_ai_assistant/market_data/storage_root_lease.py": "f93eac4f668dbdb0e236a3a54452a8d022c5700e91452536acafb1300b22f6ff",
     "src/swing_trading_ai_assistant/market_regime/current_supplied_cohort.py": "12427bef3c388607d7a6558826ee38b29eba2b4d73f5342443a3f09494adf2fe",
     "src/swing_trading_ai_assistant/market_data/setup_screen.py": "99879e80ba7f7b353e9dab1491244f5289ecb72cf11fa4defbddb2d734246a8c",
-    "src/swing_trading_ai_assistant/market_data/setup_screen_runtime_identity_manifest.py": "51c305acc3dc668a3d6241d61d0865edb93d1cc2fe5cf4db31d3beea77a3b441",
+    "src/swing_trading_ai_assistant/market_data/setup_screen_runtime_identity_manifest.py": "9807e86c40843955738a04ab422ef2de914db8b90ce67bab4d44799ef8a963d4",
 }

@@ -28,12 +28,21 @@ The owner's October 9 direction requires automatic research through already conf
 
 The source contract is limited to:
 
-1. The retained BharatStock `CURRENT_STRUCTURE` observation for exact canonical identity, the current 21 completed sessions, and causal structure.
+1. The retained BharatStock `CURRENT_STRUCTURE` observation and its immutable official schedule for exact canonical identity, the current 21 completed sessions, safe live-quote session alignment, and causal structure.
 2. A new Upstox Full Market Quotes V3 request to `GET /v3/market-quote/quotes` for exactly `NSE_EQ|<ISIN>`. The official API documents a 500-instrument maximum and exchange snapshots; this contract makes exactly one-instrument requests. The response's `instrument_token` and `symbol` must bind the retained ISIN and effective NSE symbol. [Upstox Full Market Quotes V3](https://upstox.com/developer/api-documentation/get-full-market-quote-v3/)
 3. One direct BharatStock history request ending at the retained observation's latest completed session. It supplies only provider-observable completed history and rolling price-volume measurements; it does not prove an exchange listing date.
 4. One strict Upstox corporate-actions request for the retained ISIN. It supplies only the provider's documented dividend, bonus, split and rights records and their announced/effective/record dates. It is not a general disclosure, surveillance, news, or event-risk feed. [Upstox Corporate Actions](https://upstox.com/developer/api-documentation/get-corporate-actions/)
 
 No NSE downloader, browser automation, manual source staging, new provider, token handoff, source fallback, persistence/replay model, or source-origin attestation system is introduced. Upstox's published instrument model identifies `NSE_EQ` equity instruments by exchange, ISIN and unique instrument key; the contract accepts only that exact segment/type identity. [Upstox Instruments](https://upstox.com/developer/api-documentation/instruments/)
+
+The quote parser requires the exact NSE-equity identity, provider timestamp,
+last-trade time, last price, circuit limits, depth, and total buy/sell
+quantities used by this policy. It accepts only the documented quote-field
+allow-list and still validates every recognized optional field when present.
+The documented F&O `oi` and `previous_oi` fields and the complete CAS field
+group are optional for an ordinary equity quote; a partial CAS group or an
+unknown field remains invalid. Missing optional fields do not supply evidence
+to any safety rule.
 
 ## First working slice and effect bound
 
@@ -57,16 +66,26 @@ Policy identifier: `supported-signal-safety-policy@v1`. Values are fixed in code
 | --- | --- | --- |
 | `CANONICAL_NSE_EQUITY_IDENTITY` | Retained packet has one valid `NSE` / `EQUITY` / `EQ` member and its effective symbol, mapping and structure source all bind. | Invalid local admission is terminal; unavailable admitted structure is `UNKNOWN`. |
 | `CURRENT_UPSTOX_QUOTE_BINDING` | The one V3 quote response is `success`, contains exactly one `NSE_EQ` quote, and its `instrument_token` is `NSE_EQ|<retained ISIN>` while its symbol equals the retained effective symbol. | A failed equality or invalid quote is `UNKNOWN`, never a substituted security. |
-| `CURRENT_QUOTE_FRESHNESS_AND_INTEGRITY` | Provider timestamp is an aware instant within 15 minutes of adapter retrieval; price, circuits, top-of-book prices/quantities and last-trade time are finite, nonnegative where applicable, internally coherent, and quote price lies strictly between positive lower/upper circuit limits. | Schema, time, identity or coherence failure is `UNKNOWN`; a direct policy negative below is separate. |
+| `CURRENT_QUOTE_FRESHNESS_AND_INTEGRITY` | Provider timestamp is an aware instant within 15 minutes of adapter retrieval; price, circuits, top-of-book prices/quantities and last-trade time are finite, nonnegative where applicable, internally coherent, and quote price lies strictly between positive lower/upper circuit limits. Its time must also align with the retained official schedule. | Schema, time, identity or coherence failure is `UNKNOWN`; a direct policy negative below is separate. |
 | `PROVIDER_OBSERVABLE_HISTORY` | BharatStock's returned sessions are unique, end exactly at the retained latest completed session, and contain at least 252 valid completed rows. | Fewer rows, an endpoint mismatch, invalid ordering/corruption or unavailable source is `UNKNOWN`. This is provider-observable completed history, not proof of listing age. |
 | `ROLLING_CASH_TURNOVER` | On the newest 20 returned completed rows, calculate the median of source-reported close × volume. The median must be at least INR 10,000,000 (one crore). | A below-threshold observed median is `INELIGIBLE`; absent/corrupt/misaligned rows are `UNKNOWN`. The metric is a research-liquidity screen, not a permitted order size or market-impact calculation. |
 | `CURRENT_BOOK_LIQUIDITY` | A positive best bid and best ask must exist; best bid < best ask; relative spread `(ask - bid) / ((ask + bid) / 2)` must be at most 2%; and both total buy and total sell quantity must be positive. The documented response may contain one through five ordered levels per side; this rule uses the best valid pair. | A measured depth/spread failure is `INELIGIBLE`; missing/malformed quote evidence is `UNKNOWN`. It does not prove fill probability. |
 | `LOW_PRICE_AND_CIRCUIT_DISTANCE` | The NSE-equity last price is at least INR 20. Its distance to both circuit limits, divided by last price, is at least 2%. | A measured price or circuit-distance failure is `INELIGIBLE`; unbound/invalid values are `UNKNOWN`. This screen does not label a stock manipulative. |
 | `SUPPORTED_CORPORATE_ACTION_BLACKOUT` | Strict Upstox corporate-action data is available. No supported dividend, bonus, split or rights event has an effective date within seven calendar days before or after the retained decision session. | An observed blackout event is `INELIGIBLE`; unavailable, corrupt, stale or ambiguous event data is `UNKNOWN`. Passing means no event of these provider-supported types was observed in this window; it does not clear all event risk. |
 
+During market hours, the 21 daily structure bars correctly end at the last fully
+closed session, usually yesterday. A fresh quote may therefore align either to
+that retained completed session after its official close, or to exactly the next
+scheduled session while both the quote timestamp and its retrieval are inside
+that session's official open window. The retained schedule must be available,
+match the record's saved identity, and classify every date in between. A
+weekend, holiday, pre-open quote, post-close quote, skipped session, missing
+schedule, or mismatched schedule yields `UNKNOWN`; the tool does not guess from
+calendar dates or make a provider fallback read.
+
 The INR denomination applies only after exact `NSE_EQ` identity is established. The policy reports calculated threshold comparison values as derived evidence; it does not redistribute provider payloads. Circuit and spread threshold checks compare the underlying Decimal values directly, without accepting a rounded quotient as evidence. The rule never applies to another exchange, segment or asset class.
 
-Before any Upstox quote or BharatStock history Decimal is canonicalized, rendered or used in policy arithmetic, its strict adapter requires a finite representation of at most 192 Decimal-object bytes, 128 coefficient digits, exponent from -128 through 128, and at most 258 fixed-point characters. Upstox count and timestamp integers must be nonnegative and at most `2^63 - 1`. A violation is malformed provider evidence and therefore yields the closed `UNKNOWN` path without constructing attacker-sized text, arithmetic precision or public-output fields.
+Before any Upstox quote or BharatStock history Decimal is canonicalized, rendered or used in policy arithmetic, its strict adapter requires a finite representation of at most 192 Decimal-object bytes, 128 coefficient digits, exponent from -128 through 128, and at most 258 fixed-point characters. Upstox count and timestamp integers must be nonnegative and at most `2^63 - 1`. The V3 quote's documented numeric `total_buy_quantity` and `total_sell_quantity` fields are accepted only when nonnegative, integral, and no greater than `2^63 - 1`; decimal-form integral JSON numbers are normalized to integers, while fractional quantities remain invalid. A violation is malformed provider evidence and therefore yields the closed `UNKNOWN` path without constructing attacker-sized text, arithmetic precision or public-output fields.
 
 Eligibility precedence is fixed: local integrity failure raises only to the closed public operator boundary; the first proved safety-policy failure is `INELIGIBLE` and ends later provider effects; absent a proved failure, any mandatory unavailable or invalid source/evidence is `UNKNOWN`; `ELIGIBLE` requires every rule to pass. A lower-priority provider effect is not opened after an earlier policy or source failure.
 

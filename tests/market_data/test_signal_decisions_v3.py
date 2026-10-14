@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+from datetime import timedelta
 from decimal import Decimal
 from inspect import signature
 from pathlib import Path
@@ -12,6 +13,7 @@ from test_current_stock_research import _NOW
 from test_stock_eligibility_v3 import (
     _actions,
     _history,
+    _immediate_successor_session,
     _Providers,
     _quote,
     _structure_observation,
@@ -40,13 +42,26 @@ def _retained_pair(
     return previous, previous_handle, current, current_handle
 
 
-def _providers(current: object, *, price: Decimal = Decimal("134")) -> _Providers:
+def _providers(
+    current: object,
+    *,
+    price: Decimal = Decimal("134"),
+    storage_root: Path | None = None,
+) -> _Providers:
     packet = current.packet
     assert packet is not None
     source = packet.source("MARKET_STRUCTURE")
     assert source is not None
+    quote = _quote(source.admitted_sessions[-1], price=price)
+    if storage_root is not None:
+        successor = _immediate_successor_session(storage_root, current)
+        quote = _quote(
+            successor.trade_date,
+            timestamp=successor.open_at + timedelta(minutes=45),
+            price=price,
+        )
     return _Providers(
-        _quote(source.admitted_sessions[-1], price=price),
+        quote,
         _history(current),
         _actions(current),
     )
@@ -58,12 +73,14 @@ def _evaluate(
     current: object,
     current_handle: str,
     providers: _Providers,
+    storage_root: Path,
 ) -> dict[str, object]:
     return decision_module._evaluate_signal_decision_from_admitted_records_v3(
         previous,
         previous_handle,
         current,
         current_handle,
+        storage_root=storage_root,
         providers=providers,
         clock=lambda: _NOW,
     )
@@ -94,9 +111,11 @@ def test_v3_decision_returns_a_complete_explanation_for_candidate(
     tmp_path: Path,
 ) -> None:
     previous, previous_handle, current, current_handle = _retained_pair(tmp_path)
-    providers = _providers(current)
+    providers = _providers(current, storage_root=tmp_path)
 
-    result = _evaluate(previous, previous_handle, current, current_handle, providers)
+    result = _evaluate(
+        previous, previous_handle, current, current_handle, providers, tmp_path
+    )
 
     assert result["schema"] == "stock-signal-decision@v3"
     assert result["disposition"] == "RESEARCH_CANDIDATE"
@@ -168,7 +187,9 @@ def test_v3_decision_stops_before_causal_analysis_when_safety_fails(
     monkeypatch.setattr(
         decision_module, "assemble_setup_evidence_v4", causal_must_not_run
     )
-    result = _evaluate(previous, previous_handle, current, current_handle, providers)
+    result = _evaluate(
+        previous, previous_handle, current, current_handle, providers, tmp_path
+    )
 
     assert result["disposition"] == "NO_TRADE"
     assert result["decision_code"] == "SAFETY_POLICY_INELIGIBLE"
@@ -201,7 +222,9 @@ def test_v3_decision_keeps_unavailable_safety_evidence_unknown_and_private(
     monkeypatch.setattr(
         decision_module, "assemble_setup_evidence_v4", causal_must_not_run
     )
-    result = _evaluate(previous, previous_handle, current, current_handle, providers)
+    result = _evaluate(
+        previous, previous_handle, current, current_handle, providers, tmp_path
+    )
 
     assert result["disposition"] == "UNKNOWN"
     assert result["decision_code"] == "SAFETY_EVIDENCE_UNAVAILABLE"
@@ -217,7 +240,9 @@ def test_v3_decision_rejects_replayed_observation_with_reason(
     current_handle = record_stock_observation_v1(tmp_path, current)
     providers = _providers(current)
 
-    result = _evaluate(current, current_handle, current, current_handle, providers)
+    result = _evaluate(
+        current, current_handle, current, current_handle, providers, tmp_path
+    )
 
     assert result["disposition"] == "NO_TRADE"
     assert result["decision_code"] == "CAUSAL_REPLAY_HAS_NO_NEW_CONFIRMATION"
@@ -232,7 +257,9 @@ def test_v3_decision_rejects_quote_at_structural_stop_reference(
     previous, previous_handle, current, current_handle = _retained_pair(tmp_path)
     providers = _providers(current, price=Decimal("90"))
 
-    result = _evaluate(previous, previous_handle, current, current_handle, providers)
+    result = _evaluate(
+        previous, previous_handle, current, current_handle, providers, tmp_path
+    )
 
     assert result["disposition"] == "NO_TRADE"
     assert result["decision_code"] == "CAUSAL_CURRENT_QUOTE_AT_OR_BELOW_STRUCTURAL_STOP"
@@ -267,7 +294,12 @@ def test_v3_decision_enforces_exact_candidate_age_window(
     )
 
     result = _evaluate(
-        previous, previous_handle, current, current_handle, _providers(current)
+        previous,
+        previous_handle,
+        current,
+        current_handle,
+        _providers(current),
+        tmp_path,
     )
 
     assert result["disposition"] == expected_disposition
@@ -290,7 +322,12 @@ def test_v3_decision_rejects_observed_structural_invalidation(
     )
 
     result = _evaluate(
-        previous, previous_handle, current, current_handle, _providers(current)
+        previous,
+        previous_handle,
+        current,
+        current_handle,
+        _providers(current),
+        tmp_path,
     )
 
     assert result["disposition"] == "NO_TRADE"
@@ -314,7 +351,9 @@ def test_v3_decision_rejects_non_above_completed_relation(
     )
     providers = _providers(current)
 
-    result = _evaluate(previous, previous_handle, current, current_handle, providers)
+    result = _evaluate(
+        previous, previous_handle, current, current_handle, providers, tmp_path
+    )
 
     assert result["disposition"] == "NO_TRADE"
     assert result["decision_code"] == "CAUSAL_BROKEN_HIGH_RELATION_NOT_ABOVE"

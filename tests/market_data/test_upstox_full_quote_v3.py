@@ -104,6 +104,18 @@ def _client(payload: bytes | None = None, *, status: int = 200):
     return UpstoxFullQuoteV3Client(transport, clock=lambda: _RETRIEVED), transport
 
 
+def _payload_for_identity(isin: str, symbol: str) -> bytes:
+    payload = json.loads(_payload())
+    data = payload["data"]
+    assert isinstance(data, dict)
+    quote = data.pop(f"NSE_EQ:{_SYMBOL}")
+    assert isinstance(quote, dict)
+    quote["instrument_token"] = f"NSE_EQ|{isin}"
+    quote["symbol"] = symbol
+    data[f"NSE_EQ:{symbol}"] = quote
+    return json.dumps(payload, separators=(",", ":")).encode()
+
+
 def test_quote_client_binds_exact_nse_equity_identity_and_redacts_token() -> None:
     client, transport = _client()
 
@@ -131,6 +143,131 @@ def test_quote_client_binds_exact_nse_equity_identity_and_redacts_token() -> Non
     assert len(quote.response_sha256) == 64
     assert len(quote.quote_identity_sha256) == 64
     assert _TOKEN.encode() not in quote.canonical_json_bytes()
+
+
+def test_quote_client_accepts_equity_quote_without_derivative_or_cas_fields() -> None:
+    payload = json.loads(_payload().decode("utf-8"))
+    quote_data = payload["data"][f"NSE_EQ:{_SYMBOL}"]
+    assert isinstance(quote_data, dict)
+    # Upstox documents OI/previous OI for F&O instruments and CAS data for the
+    # closing-auction session; neither group is required on every equity quote.
+    for field in (
+        "oi",
+        "previous_oi",
+        "indicative_equilibrium_price",
+        "reference_price",
+        "indicative_equilibrium_quantity",
+        "indicative_imbalance_quantity_total",
+        "indicative_imbalance_quantity_market",
+        "cas_eligible",
+    ):
+        quote_data.pop(field)
+    client, _ = _client(json.dumps(payload, separators=(",", ":")).encode())
+
+    quote = client.fetch(_ISIN, _SYMBOL, _ACCESS_TOKEN)
+
+    assert quote.instrument_key == f"NSE_EQ|{_ISIN}"
+    assert quote.symbol == _SYMBOL
+    assert quote.last_price == Decimal("102")
+    assert quote.total_buy_quantity == 15_000
+    assert quote.total_sell_quantity == 12_000
+
+
+def test_quote_client_rejects_partial_closing_auction_snapshot() -> None:
+    payload = json.loads(_payload().decode("utf-8"))
+    quote_data = payload["data"][f"NSE_EQ:{_SYMBOL}"]
+    assert isinstance(quote_data, dict)
+    quote_data.pop("cas_eligible")
+    client, _ = _client(json.dumps(payload, separators=(",", ":")).encode())
+
+    with pytest.raises(UpstoxFullQuoteCorruptError):
+        client.fetch(_ISIN, _SYMBOL, _ACCESS_TOKEN)
+
+
+def test_quote_client_rejects_missing_required_policy_field() -> None:
+    payload = json.loads(_payload().decode("utf-8"))
+    quote_data = payload["data"][f"NSE_EQ:{_SYMBOL}"]
+    assert isinstance(quote_data, dict)
+    quote_data.pop("last_price")
+    client, _ = _client(json.dumps(payload, separators=(",", ":")).encode())
+
+    with pytest.raises(UpstoxFullQuoteCorruptError):
+        client.fetch(_ISIN, _SYMBOL, _ACCESS_TOKEN)
+
+
+def test_quote_client_still_validates_optional_derivative_values() -> None:
+    client, _ = _client(_payload(oi=-1))
+
+    with pytest.raises(UpstoxFullQuoteCorruptError):
+        client.fetch(_ISIN, _SYMBOL, _ACCESS_TOKEN)
+
+
+@pytest.mark.parametrize(
+    ("isin", "symbol"),
+    (
+        ("INE467B01029", "TCS"),
+        ("INE917I01010", "BAJAJ-AUTO"),
+        ("INE101A01026", "M&M"),
+    ),
+)
+def test_quote_client_maps_provider_key_from_each_requested_equity(
+    isin: str, symbol: str
+) -> None:
+    payload = _payload_for_identity(isin, symbol)
+    payload = payload.replace(
+        b'"total_buy_quantity":15000', b'"total_buy_quantity":15000.0'
+    ).replace(b'"total_sell_quantity":12000', b'"total_sell_quantity":12000.000')
+    client, _ = _client(payload)
+
+    quote = client.fetch(isin, symbol, _ACCESS_TOKEN)
+
+    assert quote.instrument_key == f"NSE_EQ|{isin}"
+    assert quote.symbol == symbol
+    assert quote.total_buy_quantity == 15_000
+    assert quote.total_sell_quantity == 12_000
+
+
+@pytest.mark.parametrize(
+    "quantity",
+    (
+        "1.5",
+        "-1.0",
+        '"15000"',
+        "9223372036854775808",
+        "9223372036854775808.0",
+    ),
+)
+def test_quote_client_rejects_invalid_total_quantity(quantity: str) -> None:
+    payload = _payload().replace(
+        b'"total_buy_quantity":15000',
+        f'"total_buy_quantity":{quantity}'.encode(),
+    )
+    client, _ = _client(payload)
+
+    with pytest.raises(UpstoxFullQuoteCorruptError):
+        client.fetch(_ISIN, _SYMBOL, _ACCESS_TOKEN)
+
+
+@pytest.mark.parametrize(
+    "quantity",
+    (
+        "1000000000000000001",
+        "9223372036854775807",
+        "9223372036854775807.0",
+    ),
+)
+def test_quote_client_accepts_integral_total_quantity_through_int64_limit(
+    quantity: str,
+) -> None:
+    payload = _payload().replace(
+        b'"total_buy_quantity":15000',
+        f'"total_buy_quantity":{quantity}'.encode(),
+    )
+    client, _ = _client(payload)
+
+    quote = client.fetch(_ISIN, _SYMBOL, _ACCESS_TOKEN)
+
+    assert quote.total_buy_quantity == int(Decimal(quantity))
 
 
 @pytest.mark.parametrize(

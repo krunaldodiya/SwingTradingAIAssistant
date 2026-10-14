@@ -13,6 +13,14 @@ First create and retain one or more `CURRENT_STRUCTURE` observations with
 an absolute observation root. `evaluate-v3` needs an earlier and a later
 observation for the same possible setup.
 
+If `CURRENT_STRUCTURE` is `NOT_READY` and its `MARKET_STRUCTURE` reason is
+`LATEST_SESSION_MISSING`, the market-day list is valid but BharatStock did not
+return the latest completed day's price row. The tool does not guess that row
+or silently substitute older data: run it again after BharatStock publishes the
+missing daily record. Other missing or mismatched rows remain
+`HISTORY_INCOMPLETE` and still need investigation; a specific latest-day gap is
+not treated as proof that the whole source or the stock is unusable.
+
 The command obtains its bounded current evidence automatically. It uses the
 configured provider credentials only at the existing provider boundaries; no
 token, API key, raw provider payload, or source file is accepted on the command
@@ -27,6 +35,23 @@ line. For each V3 evaluation it makes at most four serial provider reads:
 There is no retry, provider fallback, record write, background monitoring, or
 broker action. A missing configured credential, provider refusal, malformed
 response, stale evidence, or mismatched identity is an explicit closed result.
+The `CURRENT_UPSTOX_QUOTE_BINDING` ledger row distinguishes a malformed or
+identity-mismatched quote (`UPSTOX_QUOTE_IDENTITY_OR_SCHEMA_INVALID`) from
+credential rejection, rate limiting, other provider HTTP responses, and a true
+transport/unavailable failure. Each remains `UNKNOWN`; the command does not
+include the provider response body or exception text and does not retry.
+The provider documents total buy/sell quantities as JSON numbers. The adapter
+accepts an integer-valued number (including a decimal-form number such as
+`15000.0`) and converts it to an integer quantity; fractional, negative,
+out-of-range, or non-numeric quantities remain invalid. This rule applies to
+every requested equity, not a ticker-specific response shape.
+
+The quote parser requires the exact NSE-equity identity, timestamp, last-trade
+time, price, circuit limits, depth, and total quantities used by the policy.
+It permits only documented quote fields. F&O `oi`/`previous_oi` and the CAS
+field group may be absent outside their applicable instruments/session; when
+present, each value is still validated, and a partial CAS group remains
+invalid. Unknown fields and malformed required values remain closed outcomes.
 
 ## Run the automated safety screen
 
@@ -50,7 +75,7 @@ The fixed safety rules make the reason concrete:
 | --- | --- |
 | `CANONICAL_NSE_EQUITY_IDENTITY` | Whether the retained observation binds exactly one NSE EQ symbol, ISIN, mapping and structure source. |
 | `CURRENT_UPSTOX_QUOTE_BINDING` | Whether the current Upstox instrument token and symbol exactly bind the retained ISIN and effective symbol. |
-| `CURRENT_QUOTE_FRESHNESS_AND_INTEGRITY` | Quote timestamp, retrieval time, completed-session alignment and circuit coherence. |
+| `CURRENT_QUOTE_FRESHNESS_AND_INTEGRITY` | Quote timestamp, retrieval time, official-session alignment and circuit coherence. |
 | `LOW_PRICE_AND_CIRCUIT_DISTANCE` | Current price, INR 20 floor, both circuit distances, the 2% threshold, and whether each exact comparison passed. |
 | `CURRENT_BOOK_LIQUIDITY` | Best bid/ask, relative spread, positive two-sided quantities, the 2% maximum spread, and the exact comparison outcome. |
 | `PROVIDER_OBSERVABLE_HISTORY` | Whether at least 252 valid completed rows end at the retained decision session. |
@@ -63,6 +88,13 @@ ledger. `UNKNOWN` means a required fact could not be trusted; it never means the
 stock is cleared. Rows after the first decisive stop are present as
 `NOT_EVALUATED`, so the output also states why the tool did not make lower
 priority reads.
+
+During market hours, the saved 21 daily sessions deliberately stop at the last
+finished market day. The current quote is still usable if it belongs to exactly
+the next official market session and both its timestamp and retrieval happen
+while that session is open. The tool uses the saved official schedule instead
+of guessing from weekdays: it rejects holidays, weekends, a quote before opening
+or after closing, a later skipped session, and any missing or changed schedule.
 
 ## Evaluate a causal research candidate
 

@@ -36,19 +36,19 @@ def test_demo_runs_actual_cli_and_reports_tool_computed_change() -> None:
     assert value["status"] == "COMPARABLE"
     assert value["question"] == "PRICE_BEHAVIOR"
     # Observations bind the current research runtime, including market-data CLI
-    # bytes. The BharatStock boundary update advances that identity; independent
-    # base/candidate execution proves every non-identity report field is unchanged.
+    # bytes. The bounded runtime change advances those identities; the synthetic
+    # facts remain unchanged.
     assert (
         value["result_identity_sha256"]
-        == "60ae2fa612dda106e25bed00073700c1cd4b4eedd583a8f180416c80acd2323f"
+        == "483411c33617ca18da05796e102d154317a14d1adfedbc2d59271a820e86521b"
     )
     assert (
         value["previous_observation_identity_sha256"]
-        == "dd1a6091949ae76bc73b10c072e9f6335a5c070a34edec2c51387df816ca71c2"
+        == "652ac4708ff14097c80f29c2f6b66d745859f96307272027df5b8ba7201e5dd5"
     )
     assert (
         value["current_observation_identity_sha256"]
-        == "1eb4f45631dfd1a5e62747ba407e984057143de753cdfea0cf2239f612a3503c"
+        == "a0bf77a311438dc2d94e16cac579d575f2b7d987d63adeaddfab37b4fec4260c"
     )
     body = next(
         item for item in value["facts"] if item["path"] == "CANDLE_GEOMETRY.body_size"
