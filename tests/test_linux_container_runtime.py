@@ -5,6 +5,7 @@ import importlib.util
 import json
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -21,6 +22,41 @@ def load(monkeypatch):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def test_positive_research_fixture_identity_matches_distribution_verifier(
+    monkeypatch, tmp_path
+):
+    """Keep the installed-package fixture check bound to the synthetic demo."""
+    api = load(monkeypatch)
+    env = {
+        "HOME": str(tmp_path),
+        "TMPDIR": str(tmp_path),
+        "PATH": "/usr/bin:/bin",
+        "LANG": "C.UTF-8",
+        "PYTHONDONTWRITEBYTECODE": "1",
+    }
+    assert set(env) == {"HOME", "TMPDIR", "PATH", "LANG", "PYTHONDONTWRITEBYTECODE"}
+    assert not {"BHARATSTOCK_API_KEY", "UPSTOX_ACCESS_TOKEN", "PYTHONPATH"} & set(env)
+    result = subprocess.run(  # noqa: S603 - fixed local synthetic demonstration
+        [
+            sys.executable,
+            "-I",
+            str(ROOT / "examples" / "single_stock_research_demo.py"),
+            "--scenario",
+            "complete",
+        ],
+        cwd=tmp_path,
+        capture_output=True,
+        check=False,
+        env=env,
+        timeout=90,
+    )
+
+    assert result.returncode == 0, result.stderr.decode()
+    value = json.loads(result.stdout)
+    assert value["status"] == "READY"
+    assert value["packet"]["result_identity_sha256"] == api.EXPECTED_SYNTHETIC_IDENTITY
 
 
 def _age_output(scenario):
