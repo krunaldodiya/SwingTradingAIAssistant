@@ -114,6 +114,12 @@ def test_format_scan_table_renders_summary_and_candidates() -> None:
                     "supporting_stop_reference_inr": "1442.5",
                     "risk_per_share_inr": "315.6",
                     "invalidation_condition": "Daily close strictly below supporting stop reference",
+                    "smc_price_action": {
+                        "retest_state": "EXPANDING_ABOVE",
+                        "breakout_distance_percent": "+12.63%",
+                        "demand_zone_support_inr": "1442.5",
+                        "demand_zone_width_inr": "118.5",
+                    },
                 },
                 "safety_eligibility": {"status": "ELIGIBLE"},
             }
