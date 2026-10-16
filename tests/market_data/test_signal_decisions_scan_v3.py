@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
 from pathlib import Path
 from typing import cast
 
@@ -22,6 +23,7 @@ from swing_trading_ai_assistant.market_data.current_stock_research_v2 import (
 from swing_trading_ai_assistant.market_data.signal_decisions_scan_v3 import (
     BRIEF_SCHEMA,
     SCAN_SCHEMA,
+    _evaluate_anti_manipulation_safety,
     format_scan_table,
     scan_signal_decisions_v3,
 )
@@ -46,7 +48,7 @@ def test_scan_signal_decisions_v3_returns_valid_schema(
 
     providers = _Providers(
         _quote(latest_session),
-        _history(observation),
+        _history(observation, volume=3_000_000),
         _actions(observation),
     )
     monkeypatch.setattr(
@@ -172,7 +174,7 @@ def test_cli_scan_subcommand_json_and_table(
 
     providers = _Providers(
         _quote(latest_session),
-        _history(observation),
+        _history(observation, volume=3_000_000),
         _actions(observation),
     )
     monkeypatch.setattr(
@@ -210,3 +212,65 @@ def test_cli_scan_subcommand_json_and_table(
     captured_table = capsys.readouterr()
     assert code_table == 0
     assert "SWING TRADING CANDIDATE SCAN" in captured_table.out
+
+
+def test_anti_manipulation_safety_filters() -> None:
+    # 1. Healthy large-cap/midcap passes
+    pass_ok, reason = _evaluate_anti_manipulation_safety(
+        "LTM",
+        Decimal("4390.00"),
+        {},
+        {
+            "verified_evidence": {
+                "history_sessions_count": 252,
+                "median_daily_cash_turnover_inr": "2210000000",
+            }
+        },
+    )
+    assert pass_ok is True
+    assert reason is None
+
+    # 2. Sub-50 penny stock rejected
+    penny_ok, penny_reason = _evaluate_anti_manipulation_safety(
+        "UCOBANK",
+        Decimal("23.56"),
+        {},
+        {
+            "verified_evidence": {
+                "history_sessions_count": 252,
+                "median_daily_cash_turnover_inr": "100000000",
+            }
+        },
+    )
+    assert penny_ok is False
+    assert "PENNY_STOCK_EXCLUDED" in str(penny_reason)
+
+    # 3. Illiquid small-cap rejected (< 25 Cr turnover)
+    illiquid_ok, illiquid_reason = _evaluate_anti_manipulation_safety(
+        "ZYDUSWELL",
+        Decimal("509.95"),
+        {},
+        {
+            "verified_evidence": {
+                "history_sessions_count": 252,
+                "median_daily_cash_turnover_inr": "86000000",
+            }
+        },
+    )
+    assert illiquid_ok is False
+    assert "ILLIQUID_SMALLCAP_EXCLUDED" in str(illiquid_reason)
+
+    # 4. Newly listed stock rejected (< 120 sessions)
+    ipo_ok, ipo_reason = _evaluate_anti_manipulation_safety(
+        "NEW_IPO",
+        Decimal("350.00"),
+        {},
+        {
+            "verified_evidence": {
+                "history_sessions_count": 45,
+                "median_daily_cash_turnover_inr": "500000000",
+            }
+        },
+    )
+    assert ipo_ok is False
+    assert "NEWLY_LISTED_EXCLUDED" in str(ipo_reason)

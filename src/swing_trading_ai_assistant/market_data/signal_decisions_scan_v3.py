@@ -498,7 +498,62 @@ def _find_retained_observation(
     return None
 
 
-def _scan_stock(
+def _evaluate_anti_manipulation_safety(
+    symbol: str,
+    current_price: Decimal | None,
+    bars: dict[date, dict[str, Any]],
+    eligibility_result: dict[str, object],
+) -> tuple[bool, str | None]:
+    """Enforce strict anti-manipulation and asset-quality floors.
+
+    1. Rejects newly listed stocks with < 120 historical sessions (< 6 months).
+    2. Rejects penny/low-priced stocks with price < INR 50.00.
+    3. Rejects illiquid operator small-caps with 20-day median turnover < INR 25.0 Crore.
+    """
+    if current_price is None:
+        return True, None
+
+    # 1. Penny / Low-Priced Stock Exclusion (< INR 50.00)
+    if current_price < Decimal("50.00"):
+        return False, f"PENNY_STOCK_EXCLUDED (Price INR {current_price} < INR 50.00)"
+
+    # 2. Historical Listing Track Record (< 120 sessions)
+    ve = cast(dict[str, object], eligibility_result.get("verified_evidence", {}) or {})
+    history_sessions_raw = ve.get("history_session_count") or ve.get(
+        "history_sessions_count"
+    )
+    if history_sessions_raw is not None and int(history_sessions_raw) < 120:
+        return (
+            False,
+            f"NEWLY_LISTED_EXCLUDED ({history_sessions_raw} sessions < 120 listing floor)",
+        )
+
+    # 3. Institutional Scale & Turnover Floor (< INR 25.0 Crore / day)
+    median_turnover_raw = ve.get("median_turnover_inr") or ve.get(
+        "median_daily_cash_turnover_inr"
+    )
+    if median_turnover_raw is not None:
+        turnover = Decimal(str(median_turnover_raw))
+    else:
+        sorted_s = sorted(bars.keys())
+        prior_20 = sorted_s[-20:] if len(sorted_s) >= 20 else sorted_s
+        turnovers = [
+            Decimal(str(bars[s]["close"])) * Decimal(str(bars[s]["volume"]))
+            for s in prior_20
+        ]
+        turnover = sorted(turnovers)[len(turnovers) // 2] if turnovers else Decimal("0")
+
+    if turnover < Decimal("250000000"):  # 25 Crore INR
+        turnover_cr = turnover / Decimal("10000000")
+        return (
+            False,
+            f"ILLIQUID_SMALLCAP_EXCLUDED (Turnover INR {turnover_cr:.1f} Cr < INR 25.0 Cr)",
+        )
+
+    return True, None
+
+
+def _scan_stock(  # noqa: C901 - multi-family screening and anti-manipulation gate
     symbol: str,
     storage_root: Path,
     refresh: bool,
@@ -592,7 +647,28 @@ def _scan_stock(
             (e for e in ledger if e.get("outcome") in {"FAIL", "UNKNOWN"}), None
         )
         failed_rule = str(failed_entry.get("rule_id", "")) if failed_entry else None
-
+    else:
+        # Anti-Manipulation & Asset Quality Gate
+        cur_price_dec = Decimal(price_inr) if price_inr else None
+        safe_asset, safety_reason = _evaluate_anti_manipulation_safety(
+            symbol=symbol,
+            current_price=cur_price_dec,
+            bars=bars,
+            eligibility_result=elig_result,
+        )
+        if not safe_asset:
+            decision = "NO_TRADE"
+            candidate_summary = None
+            safety_status = "INELIGIBLE"
+            failed_rule = safety_reason
+            # Rebuild brief with updated decision
+            brief = build_trade_brief(
+                symbol=symbol,
+                isin=isin,
+                decision=decision,
+                candidate_summary=candidate_summary,
+                eligibility_result=elig_result,
+            )
     is_candidate = decision == "RESEARCH_CANDIDATE"
     return brief, is_candidate, safety_status, price_inr, failed_rule, trend
 

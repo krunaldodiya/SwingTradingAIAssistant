@@ -65,6 +65,11 @@ FILTERED BY SAFETY POLICY (2 stocks):
 
 Use `--output json` to emit prompt-ready `swing-trade-brief@v1` cards for external AI assistants (ChatGPT, Claude, local agents) to generate plain-English trade briefs with strict guardrails against hallucinated target prices or unverified financial advice.
 
+### Portfolio Basket & Anti-Manipulation Protection
+* **5 to 10 Stock Basket:** The portfolio targets 5 to 10 validated swing setups.
+* **Nifty 100 Priority #1:** Large caps receive absolute priority. Only if Nifty 100 yields $< 5$ candidates does the scanner expand into Nifty 500 (strictly excluding already-scanned Nifty 100 stocks).
+* **Anti-Manipulation Filter:** Rejects newly listed IPOs ($< 120$ sessions), penny stocks ($< \text{INR } 50$), illiquid small-caps ($< \text{INR } 25\text{ Cr / day}$ turnover), and circuit-locked stocks ($< 2.0\%$ distance).
+
 ## Try single-stock research with a local assistant
 
 Use the [single-stock research workflow](docs/workflows/single-stock-research.md)

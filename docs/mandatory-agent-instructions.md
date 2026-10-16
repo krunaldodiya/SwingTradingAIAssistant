@@ -284,17 +284,28 @@ autonomous trading bot.
   semantics; never average or combine batch verdicts when the calculation
   depends on the complete cohort.
 - Keep stock selection separate from stock eligibility. The default research
-  focus is Nifty 100. Nifty 500 is at most a carefully screened discovery
-  universe, never blanket admission, and the product does not target every NSE
-  listing.
-- Every selected stock, including an explicitly supplied stock or a Nifty 500
-  member, must pass objective versioned eligibility, history, canonical
-  identity, provider-mapping, data-quality, liquidity/turnover, price
-  integrity, event-risk, and other capability-specific gates before the
-  affected research claim. Newly listed, very small-cap, penny/very-low-priced,
-  thinly traded, or otherwise manipulation-susceptible stocks fail closed when
-  the applicable evidence-backed gate is not satisfied. Do not infer
-  manipulation from price or capitalization alone.
+  focus and #1 priority is always Nifty 100.
+- Target Portfolio Basket: A swing trading research basket contains 5 to 10
+  validated candidates. All validated Nifty 100 stocks receive first, absolute
+  admission priority.
+- Conditional Tier-2 Expansion (Nifty 500 Ex-Nifty 100): Only when the primary
+  Nifty 100 scan yields fewer than 5 validated candidates, the tool expands into
+  the Nifty 500, strictly excluding the 100 already-scanned Nifty 100 stocks to
+  prevent duplicate provider requests. Ex-Nifty 100 stocks are admitted solely
+  to fill the basket up to the target 5-10 stocks.
+- Strict Anti-Manipulation & Asset Quality Filter: Every candidate, whether from
+  Nifty 100 or Nifty 500 expansion, MUST pass an explicit anti-manipulation and
+  asset-quality gate before admission:
+  1. Newly Listed Stock Exclusion: Must have at least 120 trading sessions
+     (>= 6 months) of continuous public history. Untested recent IPOs fail
+     closed (`NEWLY_LISTED_EXCLUDED`).
+  2. Penny / Low-Priced Exclusion: Stock price must be >= INR 50.00. Sub-50
+     penny stocks prone to operator syndicates fail closed (`PENNY_STOCK_EXCLUDED`).
+  3. Small-Cap / Operator Manipulation Exclusion: 20-day median daily cash
+     turnover must be >= INR 25.0 Crore. Illiquid operator smallcaps fail closed
+     (`ILLIQUID_SMALLCAP_EXCLUDED`).
+  4. Circuit Proximity Buffer: Stock price must be >= 2.0% away from both upper
+     and lower daily price bands (`CIRCUIT_PROXIMITY`).
 - A supported stock outside Nifty 100 may use the same capabilities when it
   passes those gates. It must not be rejected solely for index non-membership;
   conversely, Nifty 100 or Nifty 500 membership never bypasses a gate.

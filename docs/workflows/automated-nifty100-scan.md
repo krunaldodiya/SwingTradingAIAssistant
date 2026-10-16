@@ -148,3 +148,29 @@ Briefing Card JSON:
 > * **Risk per Share:** ₹481.80 (distance between current price and stop level).
 > * **Invalidation Condition:** A daily close strictly below ₹3,905.60 invalidates the setup.
 > * **Safety Clearance:** Cleared all 8 safety screening gates: 287 completed history sessions, 20-day median turnover exceeding ₹1,000 Crore, quote within circuit limits, and zero corporate action blackout events in the next 7 days.
+
+---
+
+## 6. Portfolio Discovery Protocol: Two-Tier 5–10 Stock Basket Hierarchy
+
+The AI assistant and CLI operator must adhere to the following canonical portfolio rules:
+
+1. **Target Portfolio Size:** The swing trading basket contains between **5 to 10 stocks**.
+2. **Priority #1 — Nifty 100 Large Caps:** The primary universe is always the Nifty 100. All validated candidates from Nifty 100 are admitted first.
+3. **Tier 2 Discovery Expansion (Nifty 500 Ex-Nifty 100):**
+   - Triggered **ONLY** when Nifty 100 yields fewer than 5 candidates.
+   - Strictly excludes the 100 already-scanned Nifty 100 stocks to prevent duplicate scanning.
+   - Admitted midcaps fill the basket up to the target 5–10 stocks.
+
+---
+
+## 7. Anti-Manipulation & Asset Quality Filter Stage
+
+To prevent capital risk from operator pump-and-dump schemes, newly listed volatility, and illiquid small-caps, every candidate must clear this dedicated filter before admission:
+
+| Anti-Manipulation Gate | Policy Threshold | Reason for Rejection |
+|---|---|---|
+| **Newly Listed Stocks (IPOs)** | History $\ge 120$ trading sessions ($\ge 6$ months) | Rejects untested IPOs with anchor lock-in risk (`NEWLY_LISTED_EXCLUDED`). |
+| **Penny / Low-Priced Stocks** | Price $\ge \text{INR } 50.00$ | Rejects sub-50 operator-dominated penny stocks (`PENNY_STOCK_EXCLUDED`). |
+| **Illiquid Small-Caps** | 20-day Median Turnover $\ge \text{INR } 25.0\text{ Crore / day}$ | Rejects thinly traded small-caps prone to syndicates (`ILLIQUID_SMALLCAP_EXCLUDED`). |
+| **Circuit Band Buffer** | Distance to Upper/Lower Circuit $\ge 2.0\%$ | Rejects circuit-locked stocks where exits are trapped (`CIRCUIT_PROXIMITY`). |
