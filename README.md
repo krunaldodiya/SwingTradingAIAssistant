@@ -67,8 +67,16 @@ Use `--output json` to emit prompt-ready `swing-trade-brief@v1` cards for extern
 
 ### Portfolio Basket & Anti-Manipulation Protection
 * **5 to 10 Stock Basket:** The portfolio targets 5 to 10 validated swing setups.
-* **Nifty 100 Priority #1:** Large caps receive absolute priority. Only if Nifty 100 yields $< 5$ candidates does the scanner expand into Nifty 500 (strictly excluding already-scanned Nifty 100 stocks).
-* **Anti-Manipulation Filter:** Rejects newly listed IPOs ($< 120$ sessions), penny stocks ($< \text{INR } 50$), illiquid small-caps ($< \text{INR } 25\text{ Cr / day}$ turnover), and circuit-locked stocks ($< 2.0\%$ distance).
+* **Nifty 100 Priority #1:** Every validated Nifty 100 stock fills the basket first,
+  up to all 10 slots.
+* **Single Nifty 500 Scan:** The tool evaluates each current Nifty 500 member once
+  and tags the Nifty 100 subset. Only if fewer than 5 Nifty 100 stocks validate do
+  Nifty 500-only stocks fill the remaining basket slots; they never displace Nifty
+  100 candidates.
+* **Anti-Manipulation Filter:** Rejects newly listed IPOs ($< 120$ sessions), penny
+  stocks ($< \text{INR } 50$), illiquid small-caps
+  ($< \text{INR } 25\text{ Cr / day}$ turnover), and circuit-locked stocks
+  ($< 2.0\%$ distance).
 
 ## Try single-stock research with a local assistant
 

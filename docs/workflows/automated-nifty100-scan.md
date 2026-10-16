@@ -156,11 +156,15 @@ Briefing Card JSON:
 The AI assistant and CLI operator must adhere to the following canonical portfolio rules:
 
 1. **Target Portfolio Size:** The swing trading basket contains between **5 to 10 stocks**.
-2. **Priority #1 — Nifty 100 Large Caps:** The primary universe is always the Nifty 100. All validated candidates from Nifty 100 are admitted first.
-3. **Tier 2 Discovery Expansion (Nifty 500 Ex-Nifty 100):**
-   - Triggered **ONLY** when Nifty 100 yields fewer than 5 candidates.
-   - Strictly excludes the 100 already-scanned Nifty 100 stocks to prevent duplicate scanning.
-   - Admitted midcaps fill the basket up to the target 5–10 stocks.
+2. **Priority #1 — Nifty 100 Large Caps:** The basket first admits every validated
+   Nifty 100 candidate, up to all 10 basket slots.
+3. **One-Pass Current Nifty 500 Scan:** The scanner evaluates each current official
+   Nifty 500 member once, tags the Nifty 100 subset, and never repeats provider or
+   data work for that subset.
+4. **Tier 2 Basket Fill (Nifty 500 Ex-Nifty 100):** Only when fewer than five
+   validated Nifty 100 candidates exist, validated Nifty 500-only candidates fill
+   the remaining slots toward the 5–10 target. They never displace a validated
+   Nifty 100 candidate.
 
 ---
 

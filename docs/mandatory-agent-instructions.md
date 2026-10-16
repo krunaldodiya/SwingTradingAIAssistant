@@ -286,13 +286,16 @@ autonomous trading bot.
 - Keep stock selection separate from stock eligibility. The default research
   focus and #1 priority is always Nifty 100.
 - Target Portfolio Basket: A swing trading research basket contains 5 to 10
-  validated candidates. All validated Nifty 100 stocks receive first, absolute
-  admission priority.
-- Conditional Tier-2 Expansion (Nifty 500 Ex-Nifty 100): Only when the primary
-  Nifty 100 scan yields fewer than 5 validated candidates, the tool expands into
-  the Nifty 500, strictly excluding the 100 already-scanned Nifty 100 stocks to
-  prevent duplicate provider requests. Ex-Nifty 100 stocks are admitted solely
-  to fill the basket up to the target 5-10 stocks.
+  validated candidates. Every validated Nifty 100 stock has absolute priority
+  and may fill all 10 basket slots.
+- One-Pass Nifty 500 Evaluation: Resolve current official Nifty 500 membership,
+  evaluate each member only once, and tag the current Nifty 100 subset. The
+  current member need not have existed throughout the retained price window; an
+  absent or insufficient historic record fails that stock only.
+- Conditional Tier-2 Basket Fill (Nifty 500 Ex-Nifty 100): Only when fewer than
+  5 Nifty 100 candidates validate may Nifty 500-only candidates fill remaining
+  basket slots. They never displace a validated Nifty 100 candidate, and no
+  Nifty 100 provider or data work is repeated.
 - Strict Anti-Manipulation & Asset Quality Filter: Every candidate, whether from
   Nifty 100 or Nifty 500 expansion, MUST pass an explicit anti-manipulation and
   asset-quality gate before admission:
