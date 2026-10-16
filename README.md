@@ -34,6 +34,37 @@ auto-load repository instructions, explicitly read those links before work.
 No particular harness, model, terminal manager, or unrestricted permission mode
 is required.
 
+## Scan Nifty 100 for swing candidates
+
+Use the 1-click [automated Nifty 100 scan workflow](docs/workflows/automated-nifty100-scan.md) to screen the index, verify 24/7 safety eligibility, detect causal Break-of-Structure setups, and generate AI-ready briefing cards:
+
+```bash
+doppler run -- signal-decisions scan \
+  --storage-root ~/SwingTradingAIAssistantData \
+  --nifty100 \
+  --output table
+```
+
+```text
+================================================================================
+SWING TRADING CANDIDATE SCAN — EXPLICIT
+================================================================================
+Scanned: 5 | Candidates: 2 | Eligible: 3 | Ineligible: 2 | Unknown: 0
+--------------------------------------------------------------------------------
+CONFIRMED RESEARCH CANDIDATES:
+SYMBOL     PRICE      SETUP    DATE         BROKEN HIGH  STOP REF   RISK/SH
+--------------------------------------------------------------------------------
+LTM        INR 4387.4 UP CHOCH 2026-10-13   INR 4183.6   INR 3905.6 INR 481.8
+PFC        INR 335.0  UP CHOCH 2026-10-12   INR 332.25   INR 313.35 INR 21.65
+--------------------------------------------------------------------------------
+FILTERED BY SAFETY POLICY (2 stocks):
+-  - TECHM: LOW_PRICE_AND_CIRCUIT_DISTANCE (Price: INR 1779.6)
+-  - TCS: SUPPORTED_CORPORATE_ACTION_BLACKOUT (Price: INR 2462.1)
+--------------------------------------------------------------------------------
+```
+
+Use `--output json` to emit prompt-ready `swing-trade-brief@v1` cards for external AI assistants (ChatGPT, Claude, local agents) to generate plain-English trade briefs with strict guardrails against hallucinated target prices or unverified financial advice.
+
 ## Try single-stock research with a local assistant
 
 Use the [single-stock research workflow](docs/workflows/single-stock-research.md)

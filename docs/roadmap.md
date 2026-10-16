@@ -82,15 +82,28 @@ collection, source-authentication, eligibility or actionability claim; a valid
 staging report remains `UNKNOWN`.
 
 Sprint 54 established the G03 source-and-criteria admission boundary under
-[Plan 68](plans/68-g03-source-and-criteria-admission.md). **Sprint 55 is governed
-by [Issue #299](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/299),
-Milestone 47, and [Plan 70](plans/70-automated-supported-signal-decisions.md).**
-It implements the first automatic provider-backed G03/G04 safety and causal
-research-candidate decision for one retained NSE equity. Its V3 ledger explains
-each eligible, ineligible, `NO_TRADE`, or `UNKNOWN` result with the source-bound
-rule, evidence references, measurements, and limitation. Live Issue/Project
-state owns this Sprint's delivery status and qualification claims.
+[Plan 68](plans/68-g03-source-and-criteria-admission.md). **Sprint 55 is delivered**
+through [Issue #299](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/299),
+Milestone 47, and [Plan 70](plans/70-automated-supported-signal-decisions.md)
+(PR #300, PR #306, PR #308). It delivered the automated provider-backed G03 24/7
+safety eligibility policy, the G04 causal research-candidate decision policy,
+G07 analytical family disposition, and G08 live provider qualification across
+the Nifty 100 with zero credential or raw payload disclosure.
 
+**Sprint 56 is delivered** through [Issue #309](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/309),
+Milestone 48, and [Plan 71](plans/71-automated-scan-and-ai-assistant-briefing.md)
+(PR #310). It implemented the installed `signal-decisions scan` CLI with `--nifty100`,
+automated causal Break-of-Structure baseline discovery, and the versioned
+`swing-trade-brief@v1` contract with bounded AI assistant guidance (closing G06
+and the G10 scanner slice).
+
+**Sprint 57 is active** under [Issue #311](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/311),
+Milestone 49. It packages and documents the First Usable Release, providing
+end-to-end user onboarding guides, AI assistant prompt templates, and release
+documentation (closing G10).
+
+With G01, G02, G03, G04, G05, G06, G07, G08, and G10 delivered, the finite gap ledger
+decreases to **3 remaining outcomes (G09, G11, G12)**.
 October7 accepted owner course correction: related tasks belong in usable
 delivery groups, with independent work in the same group allowed in parallel.
 This reorganizes execution without changing the original gap count or evidence.

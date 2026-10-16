@@ -48,37 +48,28 @@ source data and can only return `UNKNOWN` eligibility, preserving the outstandin
 G03/G04 source-capability work.
 
 Sprint 54 froze the G03 source-capability and criterion-evidence handoff under
-[Plan 68](plans/68-g03-source-and-criteria-admission.md). **Sprint 55 is governed
-by [Issue #299](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/299),
-Milestone 47, and [Plan 70](plans/70-automated-supported-signal-decisions.md).**
-It introduces the first automatic provider-backed V3 eligibility and causal
-research-candidate decision for one retained NSE equity. Its bounded explanation
-ledger records why each rule passed, failed, or remained unknown. Live
-Issue/Project state owns delivery and source-qualification status.
+[Plan 68](plans/68-g03-source-and-criteria-admission.md). **Sprint 55 is delivered**
+under [Issue #299](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/299),
+Milestone 47, and [Plan 70](plans/70-automated-supported-signal-decisions.md)
+(PR #300, PR #306, PR #308). It delivered the automated provider-backed V3 24/7
+safety eligibility policy, G04 causal research-candidate decision policy, G07
+analytical family disposition, and G08 live provider qualification across the Nifty 100.
 
-**Sprint50 design is delivered** through Issue288/PR289/main
-`0bba1769619cad7c6159c986e8c42c690f04d3b7`, with both complete independent
-reviews, proportionate security and live tracker/milestone closeout. Plan63
-clarifies evidence requirements; it closes no working gap or runtime claim.
-The live final Issue supersedes its dated preparation-state pending wording.
+**Sprint 56 is delivered** under [Issue #309](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/309),
+Milestone 48, and [Plan 71](plans/71-automated-scan-and-ai-assistant-briefing.md)
+(PR #310). It implemented the installed `signal-decisions scan` CLI with `--nifty100`,
+automated causal Break-of-Structure baseline discovery, and the versioned
+`swing-trade-brief@v1` contract with bounded AI assistant guidance (closing G06
+and the G10 scanner slice).
 
-**[Sprint49 G02 is delivered](sprints/sprint-49.md)** under
-[Plan62](plans/62-exact-selection-whole-list-research.md), Issue285 and PR286,
-code main `c7f4b77c8e43e7c7e2e05514fbf5f0ee2bcbfe9b`. Exact retained
-CURRENT_AT_RETRIEVAL default Nifty100 and explicit 1–100-stock orchestration pass
-all twelve rows, both complete exact reviews, 8,513 tests / 87.88% coverage,
-installed/native/prior-wheel/security, main/private publication/fresh pulls and
-Issue/Project/milestone closeout. The Sprint49 record preserves full receipts
-and earlier failures; this Markdown reconciliation does not relabel that image.
+**Sprint 57 is active** under [Issue #311](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/311),
+Milestone 49, for first-use onboarding, workflow docs, AI assistant prompt templates,
+and release packaging (closing G10).
 
-The finite ledger now has **10 open outcome gaps (G03–G12)**, down from the
-original 12: four primarily before use, four requiring contract disposition,
-two after research use. These are outcomes, not 10 promised sprints. G01/G02
-are closed. Remaining eligibility/safety, policy and actual source/AI workflow
-dependencies need their own contracts and evidence; no new implementation sprint
-is frozen here. Real source/workflow, AI interpretation and effectiveness
-qualification remain open, as do all eight signal-phase obligations.
-
+The finite ledger now has **3 open outcome gaps (G09, G11, G12)**, down from the
+original 12. G01–G08 and G10 are delivered. Real source/workflow, AI interpretation,
+and 24/7 scanning are qualified. G09 decision-support qualification and G11/G12 paper
+observation remain for Phase 4.
 | Order | Sprint outcome to select | Boundary |
 | --- | --- | --- |
 | 1 | First-use gap reconciliation and bounded working-path contract | Reuse proven delivery and name exact remaining gaps; no invented sprint countdown. |
