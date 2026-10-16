@@ -97,13 +97,16 @@ automated causal Break-of-Structure baseline discovery, and the versioned
 `swing-trade-brief@v1` contract with bounded AI assistant guidance (closing G06
 and the G10 scanner slice).
 
-**Sprint 57 is active** under [Issue #311](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/311),
-Milestone 49. It packages and documents the First Usable Release, providing
-end-to-end user onboarding guides, AI assistant prompt templates, and release
-documentation (closing G10).
+**Sprint 57 is delivered** through [Issue #311](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/311),
+Milestone 49, and [PR #312](https://github.com/krunaldodiya/SwingTradingAIAssistant/pull/312).
+It packaged the First Usable Release: end-to-end onboarding, workflow guidance,
+AI assistant prompt templates, and release documentation (closing G10).
 
 With G01, G02, G03, G04, G05, G06, G07, G08, and G10 delivered, the finite gap ledger
-decreases to **3 remaining outcomes (G09, G11, G12)**.
+has **3 remaining outcomes (G09, G11, G12)**.
+The still-open [Issue #250](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/250)
+is a separate hosted-CI recovery obligation; it neither reopens a product outcome
+nor permits local-CI fallback.
 October7 accepted owner course correction: related tasks belong in usable
 delivery groups, with independent work in the same group allowed in parallel.
 This reorganizes execution without changing the original gap count or evidence.
