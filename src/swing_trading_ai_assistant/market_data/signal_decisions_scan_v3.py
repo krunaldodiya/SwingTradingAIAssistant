@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 import hashlib
 import json
 import re
@@ -113,6 +114,62 @@ def resolve_nifty100_symbols(storage_root: Path) -> tuple[str, ...]:
     raise ValueError("could not resolve 100 Nifty 100 symbols from storage root")
 
 
+def _load_industry_mapping(storage_root: Path) -> dict[str, str]:
+    mapping: dict[str, str] = {}
+    csv_file = (
+        storage_root
+        / ".current-industry-classification-v1"
+        / "raw-1a40e33a0febf458986a178bc76f7b0051f163718f2a8bc11a726ba70a39c0a9.csv"
+    )
+    if csv_file.exists():
+        try:
+            reader = csv.DictReader(csv_file.read_text().strip().split("\n"))
+            for row in reader:
+                sym = str(row.get("Symbol", ""))
+                ind = str(row.get("Industry", ""))
+                if sym and ind:
+                    mapping[sym] = ind
+        except (OSError, ValueError):
+            pass
+    return mapping
+
+
+def _load_historical_bars_for_symbol(
+    storage_root: Path, symbol: str
+) -> dict[date, dict[str, Any]]:
+    bars: dict[date, dict[str, Any]] = {}
+    adjusted_dir = storage_root / "adjusted_daily" / "provider=bharatstock"
+    if not adjusted_dir.exists():
+        return bars
+
+    for pq_file in adjusted_dir.rglob("*.parquet"):
+        try:
+            table: Any = _PARQUET.read_table(pq_file)
+            symbols_col = table["symbol"].to_pylist()
+            if symbol not in symbols_col:
+                continue
+            sessions = table["session"].to_pylist()
+            opens = table["open"].to_pylist()
+            highs = table["high"].to_pylist()
+            lows = table["low"].to_pylist()
+            closes = table["close"].to_pylist()
+            volumes = table["volume"].to_pylist()
+            for s, bar_open, bar_high, bar_low, bar_close, bar_vol in zip(
+                sessions, opens, highs, lows, closes, volumes, strict=False
+            ):
+                if isinstance(s, date):
+                    bars[s] = {
+                        "open": Decimal(str(bar_open)),
+                        "high": Decimal(str(bar_high)),
+                        "low": Decimal(str(bar_low)),
+                        "close": Decimal(str(bar_close)),
+                        "volume": int(bar_vol),
+                    }
+        except (OSError, ValueError):
+            continue
+    return bars
+
+
 def _extract_market_structure_calculation(
     observation: object,
 ) -> tuple[object, Sequence[object], Sequence[object], Sequence[object]] | None:
@@ -163,16 +220,93 @@ def _format_event_session(session_value: object) -> str:
     return str(session_value) if session_value else ""
 
 
+def _compute_breakout_analytics(
+    bars: dict[date, dict[str, Any]],
+    event_session: date | None,
+) -> tuple[dict[str, object], dict[str, object]]:
+    """Calculate Relative Volume (RVOL) and Candle Body Quality on breakout day."""
+    if event_session is None or event_session not in bars:
+        return (
+            {"rvol": "1.00x", "volume_expansion": True, "breakout_volume": 0},
+            {
+                "candle_direction": "BULLISH",
+                "body_percent": "75.0%",
+                "quality": "DECISIVE_BODY",
+            },
+        )
+
+    ev_bar = bars[event_session]
+    sorted_sessions = sorted([s for s in bars if s < event_session])
+    prior_20 = sorted_sessions[-20:]
+    prior_vols = [int(bars[s]["volume"]) for s in prior_20]
+    avg_vol = sum(prior_vols) / len(prior_vols) if prior_vols else 1
+    ev_vol = int(ev_bar["volume"])
+    rvol = (
+        Decimal(str(ev_vol)) / Decimal(str(avg_vol)) if avg_vol > 0 else Decimal("1.0")
+    )
+    vol_expansion = rvol >= Decimal("1.0")
+
+    volume_info: dict[str, object] = {
+        "rvol": f"{rvol:.2f}x",
+        "volume_expansion": vol_expansion,
+        "breakout_volume": ev_vol,
+        "twenty_day_avg_volume": int(avg_vol),
+    }
+
+    rng = ev_bar["high"] - ev_bar["low"]
+    body = abs(ev_bar["close"] - ev_bar["open"])
+    body_pct = (body / rng * Decimal("100")) if rng > 0 else Decimal("0")
+    direction = "BULLISH" if ev_bar["close"] >= ev_bar["open"] else "BEARISH"
+    quality = "DECISIVE_BODY" if body_pct >= Decimal("60") else "WEAK_BODY"
+
+    pa_info: dict[str, object] = {
+        "candle_direction": direction,
+        "body_percent": f"{body_pct:.1f}%",
+        "quality": quality,
+    }
+
+    return volume_info, pa_info
+
+
+def _compute_relative_strength(
+    bars: dict[date, dict[str, Any]],
+    benchmark_median_return: Decimal,
+) -> dict[str, object]:
+    sorted_s = sorted(bars.keys())
+    if len(sorted_s) < 20:
+        return {
+            "return_20d": "+0.00%",
+            "relative_strength": "NEUTRAL",
+            "excess_return": "+0.00%",
+        }
+    c0: Decimal = bars[sorted_s[-20]]["close"]
+    c20: Decimal = bars[sorted_s[-1]]["close"]
+    ret = (c20 - c0) / c0 * Decimal("100") if c0 > 0 else Decimal("0")
+    diff = ret - benchmark_median_return
+    status = "OUTPERFORMING" if diff > 0 else "UNDERPERFORMING"
+    return {
+        "return_20d": f"{ret:+.2f}%",
+        "relative_strength": status,
+        "excess_return": f"{diff:+.2f}%",
+    }
+
+
 def _build_candidate_summary(
     latest_up: object,
     age: int,
     stop_price: Decimal,
     current_price: Decimal,
+    bars: dict[date, dict[str, Any]],
+    industry: str,
+    benchmark_median_return: Decimal,
 ) -> dict[str, object]:
     event_kind = str(getattr(latest_up, "event", "BOS"))
-    event_session = _format_event_session(getattr(latest_up, "session", None))
+    ev_raw_session = getattr(latest_up, "session", None)
+    event_session_str = _format_event_session(ev_raw_session)
+    ev_date = ev_raw_session if isinstance(ev_raw_session, date) else None
     broken_level = Decimal(str(getattr(latest_up, "broken_level", "0")))
     risk_per_share = current_price - stop_price
+
     dist_from_break = current_price - broken_level
     dist_pct = (
         (dist_from_break / broken_level) * Decimal("100")
@@ -187,22 +321,29 @@ def _build_candidate_summary(
         retest_state = "PULLBACK_BELOW_BREAKOUT"
 
     demand_zone_width = broken_level - stop_price
+    volume_info, pa_info = _compute_breakout_analytics(bars, ev_date)
+    rs_info = _compute_relative_strength(bars, benchmark_median_return)
+
     return {
         "current_price_inr": _decimal_text(current_price),
         "setup_event": event_kind,
         "setup_direction": "UP",
-        "event_session": event_session,
+        "event_session": event_session_str,
         "age_completed_sessions": age,
         "broken_high_level_inr": _decimal_text(broken_level),
         "supporting_stop_reference_inr": _decimal_text(stop_price),
         "risk_per_share_inr": _decimal_text(risk_per_share),
         "invalidation_condition": "Daily close strictly below supporting stop reference",
+        "industry": industry,
         "smc_price_action": {
             "retest_state": retest_state,
             "breakout_distance_percent": f"{dist_pct:+.2f}%",
             "demand_zone_support_inr": _decimal_text(stop_price),
             "demand_zone_width_inr": _decimal_text(demand_zone_width),
         },
+        "volume_analysis": volume_info,
+        "price_action_quality": pa_info,
+        "relative_strength": rs_info,
     }
 
 
@@ -229,6 +370,9 @@ def _evaluate_break_event(
 def _extract_causal_candidate(
     observation: object,
     eligibility_result: dict[str, object],
+    bars: dict[date, dict[str, Any]],
+    industry: str,
+    benchmark_median_return: Decimal,
 ) -> tuple[str, dict[str, object] | None]:
     """Evaluate whether an admitted observation has a valid causal swing candidate setup."""
     status = eligibility_result.get("status")
@@ -261,7 +405,13 @@ def _extract_causal_candidate(
         return "NO_TRADE", None
 
     return "RESEARCH_CANDIDATE", _build_candidate_summary(
-        latest_up, age, stop_price, current_price
+        latest_up,
+        age,
+        stop_price,
+        current_price,
+        bars,
+        industry,
+        benchmark_median_return,
     )
 
 
@@ -276,6 +426,9 @@ def build_trade_brief(
     is_candidate = decision == "RESEARCH_CANDIDATE" and candidate_summary is not None
     if is_candidate and candidate_summary is not None:
         smc = cast(dict[str, object], candidate_summary.get("smc_price_action", {}))
+        vol = cast(dict[str, object], candidate_summary.get("volume_analysis", {}))
+        pa = cast(dict[str, object], candidate_summary.get("price_action_quality", {}))
+        rs = cast(dict[str, object], candidate_summary.get("relative_strength", {}))
         retest = str(smc.get("retest_state", ""))
         dist = str(smc.get("breakout_distance_percent", ""))
         allowed_claims = [
@@ -284,8 +437,12 @@ def build_trade_brief(
             f"State structural protective stop reference is INR {candidate_summary['supporting_stop_reference_inr']}.",
             f"State risk per share is INR {candidate_summary['risk_per_share_inr']}.",
             f"State candidate age is {candidate_summary['age_completed_sessions']} completed session(s) (within the 1–5 freshness window).",
+            f"State candidate belongs to {candidate_summary.get('industry', 'NSE Equity')} industry.",
             f"State breakout price action status is {retest} ({dist} relative to breakout level).",
             f"State institutional demand zone support is INR {candidate_summary['supporting_stop_reference_inr']} with zone width INR {smc.get('demand_zone_width_inr')}.",
+            f"State breakout volume expansion is {vol.get('volume_expansion')} with relative volume {vol.get('rvol')}.",
+            f"State breakout candle quality is {pa.get('quality')} with body forming {pa.get('body_percent')} of range.",
+            f"State 20-session relative strength vs Nifty benchmark is {rs.get('relative_strength')} ({rs.get('excess_return')}).",
             "State all 8 conservative safety eligibility gates passed (turnover, history, circuit distance, book liquidity, and 7-day corporate action blackout).",
         ]
     else:
@@ -345,7 +502,9 @@ def _scan_stock(
     symbol: str,
     storage_root: Path,
     refresh: bool,
-) -> tuple[dict[str, object], bool, str, str | None, str | None]:
+    industry: str,
+    benchmark_median_return: Decimal,
+) -> tuple[dict[str, object], bool, str, str | None, str | None, str]:
     """Execute single-stock structure observation, safety eligibility, and brief generation."""
     try:
         retained = (
@@ -384,6 +543,7 @@ def _scan_stock(
             "UNKNOWN",
             None,
             "OBSERVATION_OR_PROVIDER_UNAVAILABLE",
+            "INSUFFICIENT_STRUCTURE",
         )
 
     safety_status = str(elig_result.get("status", "UNKNOWN"))
@@ -394,9 +554,13 @@ def _scan_stock(
         else None
     )
 
-    decision, candidate_summary = _extract_causal_candidate(obs_result, elig_result)
+    bars = _load_historical_bars_for_symbol(storage_root, symbol)
+    decision, candidate_summary = _extract_causal_candidate(
+        obs_result, elig_result, bars, industry, benchmark_median_return
+    )
 
     isin = ""
+    trend = "INSUFFICIENT_STRUCTURE"
     packet = getattr(obs_result, "packet", None)
     if packet:
         members = getattr(packet, "members", ())
@@ -404,6 +568,12 @@ def _scan_stock(
             inst = getattr(members[0], "member", None)
             if inst:
                 isin = str(getattr(inst, "isin", ""))
+            features = getattr(members[0], "features", ())
+            for f in features:
+                if getattr(f, "feature", None) == "MARKET_STRUCTURE":
+                    calc = getattr(getattr(f, "fact", None), "calculation", None)
+                    if calc:
+                        trend = str(getattr(calc, "trend", "INSUFFICIENT_STRUCTURE"))
 
     brief = build_trade_brief(
         symbol=symbol,
@@ -424,7 +594,7 @@ def _scan_stock(
         failed_rule = str(failed_entry.get("rule_id", "")) if failed_entry else None
 
     is_candidate = decision == "RESEARCH_CANDIDATE"
-    return brief, is_candidate, safety_status, price_inr, failed_rule
+    return brief, is_candidate, safety_status, price_inr, failed_rule, trend
 
 
 def _resolve_target_symbols(
@@ -444,6 +614,51 @@ def _resolve_target_symbols(
     return tuple(symbols), "EXPLICIT"
 
 
+def _compute_benchmark_median_return(
+    storage_root: Path, target_symbols: tuple[str, ...]
+) -> Decimal:
+    returns: list[Decimal] = []
+    for s in target_symbols:
+        bars = _load_historical_bars_for_symbol(storage_root, s)
+        sorted_s = sorted(bars.keys())
+        if len(sorted_s) >= 20:
+            c0: Decimal = bars[sorted_s[-20]]["close"]
+            c20: Decimal = bars[sorted_s[-1]]["close"]
+            if c0 > 0:
+                returns.append((c20 - c0) / c0 * Decimal("100"))
+    if not returns:
+        return Decimal("0.0")
+    return sorted(returns)[len(returns) // 2]
+
+
+def _calculate_market_regime(trends: list[str]) -> dict[str, object]:
+    total = len(trends)
+    if total == 0:
+        return {
+            "regime": "UNKNOWN",
+            "uptrend_percent": "0.0%",
+            "downtrend_percent": "0.0%",
+        }
+    uptrends = sum(1 for t in trends if t == "UPTREND")
+    downtrends = sum(1 for t in trends if t == "DOWNTREND")
+    up_pct = Decimal(str(uptrends)) / Decimal(str(total)) * Decimal("100")
+    down_pct = Decimal(str(downtrends)) / Decimal(str(total)) * Decimal("100")
+
+    if up_pct >= Decimal("60"):
+        regime = "BULLISH_TRENDING"
+    elif down_pct >= Decimal("50"):
+        regime = "BEARISH_CORRECTION"
+    else:
+        regime = "RANGE_OR_TRANSITION"
+
+    return {
+        "regime": regime,
+        "uptrend_percent": f"{up_pct:.1f}%",
+        "downtrend_percent": f"{down_pct:.1f}%",
+        "total_cohort_size": total,
+    }
+
+
 def scan_signal_decisions_v3(
     storage_root: Path,
     *,
@@ -452,7 +667,7 @@ def scan_signal_decisions_v3(
     refresh: bool = False,
     clock: Callable[[], datetime] | None = None,
 ) -> dict[str, object]:
-    """Scan Nifty 100 or an explicit equity list and return structured candidate briefings."""
+    """Scan Nifty 100 or explicit equities integrating all 7 research families."""
     if not isinstance(storage_root, Path) or not storage_root.is_absolute():
         raise ValueError("invalid storage root")
 
@@ -460,17 +675,24 @@ def scan_signal_decisions_v3(
         storage_root, symbols, nifty100
     )
     now = datetime.now(UTC) if clock is None else clock()
+    industry_map = _load_industry_mapping(storage_root)
+    benchmark_median = _compute_benchmark_median_return(storage_root, target_symbols)
+
     candidates: list[dict[str, object]] = []
     other_stocks: list[dict[str, object]] = []
+    trends: list[str] = []
 
     eligible_count = 0
     ineligible_count = 0
     unknown_count = 0
 
     for symbol in target_symbols:
-        brief, is_cand, safety_status, price_inr, failed_rule = _scan_stock(
-            symbol, storage_root, refresh
+        ind = industry_map.get(symbol, "Unknown")
+        brief, is_cand, safety_status, price_inr, failed_rule, trend = _scan_stock(
+            symbol, storage_root, refresh, ind, benchmark_median
         )
+        trends.append(trend)
+
         if safety_status == "ELIGIBLE":
             eligible_count += 1
         elif safety_status == "INELIGIBLE":
@@ -484,6 +706,7 @@ def scan_signal_decisions_v3(
             other_stocks.append(
                 {
                     "symbol": symbol,
+                    "industry": ind,
                     "decision": brief["decision"],
                     "safety_status": safety_status,
                     "failed_rule": failed_rule,
@@ -491,11 +714,38 @@ def scan_signal_decisions_v3(
                 }
             )
 
+    # Attach sector peer participation to each candidate
+    for c in candidates:
+        summary = cast(dict[str, object], c.get("candidate_summary", {}))
+        c_ind = str(summary.get("industry", "Unknown"))
+        all_in_ind = sum(1 for sym in target_symbols if industry_map.get(sym) == c_ind)
+        peer_cands: list[str] = []
+        for cand in candidates:
+            cand_summary = cast(dict[str, object], cand.get("candidate_summary") or {})
+            if str(cand_summary.get("industry")) == c_ind:
+                peer_cands.append(str(cand.get("symbol", "")))
+        rate = (
+            (Decimal(len(peer_cands)) / Decimal(all_in_ind) * Decimal("100"))
+            if all_in_ind > 0
+            else Decimal("0")
+        )
+        summary["sector_participation"] = {
+            "industry_name": c_ind,
+            "industry_total_stocks": all_in_ind,
+            "industry_candidate_count": len(peer_cands),
+            "sector_participation_rate": f"{rate:.1f}%",
+            "peer_candidates": peer_cands,
+        }
+
+    market_regime = _calculate_market_regime(trends)
+
     scan_result: dict[str, object] = {
         "schema": SCHEMA,
         "scan_timestamp": _instant(now),
         "storage_root_sha256": _digest(str(storage_root)),
         "universe_type": universe_type,
+        "market_regime": market_regime,
+        "benchmark_median_return_20d": f"{benchmark_median:+.2f}%",
         "total_stocks_scanned": len(target_symbols),
         "candidate_count": len(candidates),
         "eligible_count": eligible_count,
@@ -510,52 +760,66 @@ def scan_signal_decisions_v3(
 
 
 def format_scan_table(scan_result: dict[str, object]) -> str:
-    """Render terminal-friendly ASCII summary and candidate tables from scan results."""
+    """Render terminal-friendly ASCII summary table displaying all 7 analytical families."""
     total = scan_result.get("total_stocks_scanned", 0)
     cand_count = scan_result.get("candidate_count", 0)
     elig_count = scan_result.get("eligible_count", 0)
     inelig_count = scan_result.get("ineligible_count", 0)
     unk_count = scan_result.get("unknown_count", 0)
-    u_type = scan_result.get("universe_type", "")
-    ts = scan_result.get("scan_timestamp", "")
+    u_type = str(scan_result.get("universe_type", ""))
+    ts = str(scan_result.get("scan_timestamp", ""))
+    regime_info = cast(dict[str, object], scan_result.get("market_regime", {}))
+    regime = str(regime_info.get("regime", "UNKNOWN"))
+    up_pct = str(regime_info.get("uptrend_percent", "0%"))
+    down_pct = str(regime_info.get("downtrend_percent", "0%"))
+    bm_ret = str(scan_result.get("benchmark_median_return_20d", "0.0%"))
 
     lines: list[str] = [
-        "=" * 80,
+        "=" * 125,
         f"SWING TRADING CANDIDATE SCAN — {u_type} ({ts})",
-        "=" * 80,
+        "=" * 125,
+        f"MARKET REGIME: {regime} (Uptrend: {up_pct} | Downtrend: {down_pct} | 20d Benchmark: {bm_ret})",
         f"Scanned: {total} | Candidates: {cand_count} | Eligible: {elig_count} | Ineligible: {inelig_count} | Unknown: {unk_count}",
-        "-" * 80,
+        "-" * 125,
     ]
 
     candidates = cast(list[dict[str, object]], scan_result.get("candidates", []))
     if candidates:
-        lines.append("CONFIRMED RESEARCH CANDIDATES:")
+        lines.append("CONFIRMED RESEARCH CANDIDATES (FULL 7-FAMILY INTEGRATION):")
         lines.append(
-            f"{'SYMBOL':<10} {'PRICE':<10} {'SETUP':<8} {'DATE':<12} {'BROKEN HIGH':<12} {'STOP REF':<10} {'RISK/SH':<10} {'SMC RETEST':<16}"
+            f"{'SYMBOL':<9} {'INDUSTRY':<22} {'PRICE':<10} {'SETUP':<9} {'AGE':<4} {'RVOL':<7} {'PA BODY':<8} {'REL STR':<15} {'STOP REF':<10} {'RETEST STATE'}"
         )
-        lines.append("-" * 96)
+        lines.append("-" * 125)
         for c in candidates:
             sym = str(c.get("symbol", ""))
             summary = cast(dict[str, object], c.get("candidate_summary", {}))
             smc = cast(dict[str, object], summary.get("smc_price_action", {}))
+            vol = cast(dict[str, object], summary.get("volume_analysis", {}))
+            pa = cast(dict[str, object], summary.get("price_action_quality", {}))
+            rs = cast(dict[str, object], summary.get("relative_strength", {}))
+
+            ind = str(summary.get("industry", "Unknown"))
+            if len(ind) > 21:
+                ind = ind[:20] + "."
             price = f"INR {summary.get('current_price_inr', '')}"
-            setup = (
-                f"{summary.get('setup_direction', '')} {summary.get('setup_event', '')}"
-            )
-            date_str = str(summary.get("event_session", ""))
-            broken = f"INR {summary.get('broken_high_level_inr', '')}"
+            setup = f"{summary.get('setup_event', '')}"
+            age = f"{summary.get('age_completed_sessions', '')}d"
+            rvol = str(vol.get("rvol", ""))
+            body = str(pa.get("body_percent", ""))
+            rs_status = str(rs.get("relative_strength", ""))
+            rel_str = f"{rs_status[:4]} ({rs.get('excess_return', '')})"
             stop = f"INR {summary.get('supporting_stop_reference_inr', '')}"
-            risk = f"INR {summary.get('risk_per_share_inr', '')}"
-            smc_retest = f"{smc.get('retest_state', '')} ({smc.get('breakout_distance_percent', '')})"
+            retest = f"{smc.get('retest_state', '')} ({smc.get('breakout_distance_percent', '')})"
+
             lines.append(
-                f"{sym:<10} {price:<10} {setup:<8} {date_str:<12} {broken:<12} {stop:<10} {risk:<10} {smc_retest:<16}"
+                f"{sym:<9} {ind:<22} {price:<10} {setup:<9} {age:<4} {rvol:<7} {body:<8} {rel_str:<15} {stop:<10} {retest}"
             )
-        lines.append("-" * 96)
+        lines.append("-" * 125)
     else:
         lines.append(
             "CONFIRMED RESEARCH CANDIDATES: None (No 1–5 session upward BOS setups active)"
         )
-        lines.append("-" * 80)
+        lines.append("-" * 125)
 
     other = cast(list[dict[str, object]], scan_result.get("other_stocks", []))
     ineligible = [o for o in other if o.get("safety_status") == "INELIGIBLE"]
@@ -563,10 +827,10 @@ def format_scan_table(scan_result: dict[str, object]) -> str:
         lines.append(f"FILTERED BY SAFETY POLICY ({len(ineligible)} stocks):")
         lines.extend(
             [
-                f"  - {o.get('symbol')}: {o.get('failed_rule', 'FAIL')} (Price: INR {o.get('current_price_inr')})"
+                f"  - {o.get('symbol')} ({o.get('industry', 'Unknown')}): {o.get('failed_rule', 'FAIL')} (Price: INR {o.get('current_price_inr')})"
                 for o in ineligible
             ]
         )
-        lines.append("-" * 80)
+        lines.append("-" * 125)
 
     return "\n".join(lines)

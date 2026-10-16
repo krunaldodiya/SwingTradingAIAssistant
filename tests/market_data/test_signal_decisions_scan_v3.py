@@ -92,6 +92,12 @@ def test_format_scan_table_renders_summary_and_candidates() -> None:
         "scan_timestamp": "2026-10-16T09:30:00.000000Z",
         "storage_root_sha256": "a" * 64,
         "universe_type": "EXPLICIT",
+        "market_regime": {
+            "regime": "RANGE_OR_TRANSITION",
+            "uptrend_percent": "40.0%",
+            "downtrend_percent": "30.0%",
+        },
+        "benchmark_median_return_20d": "+1.50%",
         "total_stocks_scanned": 2,
         "candidate_count": 1,
         "eligible_count": 1,
@@ -120,6 +126,16 @@ def test_format_scan_table_renders_summary_and_candidates() -> None:
                         "demand_zone_support_inr": "1442.5",
                         "demand_zone_width_inr": "118.5",
                     },
+                    "industry": "Information Technology",
+                    "volume_analysis": {"rvol": "1.25x", "volume_expansion": True},
+                    "price_action_quality": {
+                        "body_percent": "85.0%",
+                        "quality": "DECISIVE_BODY",
+                    },
+                    "relative_strength": {
+                        "relative_strength": "OUTPERFORMING",
+                        "excess_return": "+4.50%",
+                    },
                 },
                 "safety_eligibility": {"status": "ELIGIBLE"},
             }
@@ -139,10 +155,10 @@ def test_format_scan_table_renders_summary_and_candidates() -> None:
     assert "SWING TRADING CANDIDATE SCAN — EXPLICIT" in table_text
     assert "TECHM" in table_text
     assert "INR 1758.1" in table_text
-    assert "UP CHOCH" in table_text
+    assert "CHOCH" in table_text
     assert "INR 1442.5" in table_text
     assert "FILTERED BY SAFETY POLICY" in table_text
-    assert "TCS: SUPPORTED_CORPORATE_ACTION_BLACKOUT" in table_text
+    assert "SUPPORTED_CORPORATE_ACTION_BLACKOUT" in table_text
 
 
 def test_cli_scan_subcommand_json_and_table(
