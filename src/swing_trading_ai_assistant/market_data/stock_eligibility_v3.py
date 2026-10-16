@@ -520,6 +520,44 @@ def _resolve_retained_schedule(
     return schedule if matches else None
 
 
+def _is_market_session_open(
+    schedule: ExpectedSessionSchedule, instant: datetime
+) -> tuple[bool, ScheduleSession | None]:
+    for session in schedule.sessions:
+        if session.open_at <= instant < session.close_at:
+            return True, session
+    return False, None
+
+
+def _quote_session_alignment(
+    quote: UpstoxFullQuoteV3,
+    latest_session: date,
+    retained_session: ScheduleSession,
+    is_open: bool,
+    open_session: ScheduleSession | None,
+    details: dict[str, object],
+) -> tuple[bool, str]:
+    quote_session = quote.quote_timestamp.astimezone(_IST).date()
+    if is_open and open_session is not None:
+        details["market_state"] = "OPEN"
+        if quote_session != open_session.trade_date:
+            return False, "QUOTE_SESSION_DOES_NOT_MATCH_CURRENT_OPEN_SESSION"
+        details["quote_session_alignment"] = "NEXT_SCHEDULED_OPEN_SESSION"
+        return True, ""
+    details["market_state"] = "CLOSED"
+    if quote_session == latest_session:
+        if (
+            quote_session == latest_session
+            and quote.retrieved_at < retained_session.close_at
+            and not is_open
+        ):
+            return False, "QUOTE_RETRIEVED_BEFORE_RETAINED_SESSION_CLOSED"
+        details["quote_session_alignment"] = "RETAINED_COMPLETED_SESSION"
+    else:
+        details["quote_session_alignment"] = "CLOSED_MARKET_SNAPSHOT"
+    return True, ""
+
+
 def _quote_integrity(
     quote: UpstoxFullQuoteV3,
     latest_session: date,
@@ -527,12 +565,14 @@ def _quote_integrity(
 ) -> tuple[bool, str, dict[str, object]]:
     age = quote.retrieved_at - quote.quote_timestamp
     quote_session = quote.quote_timestamp.astimezone(_IST).date()
+    is_open, open_session = _is_market_session_open(schedule, quote.retrieved_at)
     details: dict[str, object] = {
         "quote_timestamp": _instant(quote.quote_timestamp),
         "quote_retrieved_at": _instant(quote.retrieved_at),
         "quote_session": quote_session.isoformat(),
         "required_completed_session": latest_session.isoformat(),
         "quote_age_seconds": int(age.total_seconds()),
+        "market_state": "OPEN" if is_open else "CLOSED",
     }
     if age < timedelta() or age > _QUOTE_MAX_AGE:
         return False, "QUOTE_TIMESTAMP_OUTSIDE_FRESHNESS_WINDOW", details
@@ -543,32 +583,11 @@ def _quote_integrity(
         return False, "QUOTE_SESSION_PRECEDES_RETAINED_SESSION", details
     if not schedule_covers_full_calendar_range(schedule, latest_session, quote_session):
         return False, "RETAINED_SCHEDULE_DOES_NOT_COVER_QUOTE_SESSION", details
-    if quote_session == latest_session:
-        if quote.retrieved_at < retained_session.close_at:
-            return False, "QUOTE_RETRIEVED_BEFORE_RETAINED_SESSION_CLOSED", details
-        details["quote_session_alignment"] = "RETAINED_COMPLETED_SESSION"
-    else:
-        successor = next(
-            (
-                session
-                for session in schedule.sessions
-                if session.trade_date > latest_session
-            ),
-            None,
-        )
-        if successor is None or quote_session != successor.trade_date:
-            return (
-                False,
-                "QUOTE_SESSION_DOES_NOT_MATCH_IMMEDIATE_SCHEDULED_SUCCESSOR",
-                details,
-            )
-        details["immediate_next_scheduled_session"] = successor.trade_date.isoformat()
-        if not (
-            successor.open_at <= quote.quote_timestamp <= quote.retrieved_at
-            and quote.retrieved_at < successor.close_at
-        ):
-            return False, "QUOTE_TIMESTAMP_OUTSIDE_NEXT_OPEN_SESSION", details
-        details["quote_session_alignment"] = "NEXT_SCHEDULED_OPEN_SESSION"
+    aligned, alignment_code = _quote_session_alignment(
+        quote, latest_session, retained_session, is_open, open_session, details
+    )
+    if not aligned:
+        return False, alignment_code, details
     if not quote.lower_circuit_limit < quote.last_price < quote.upper_circuit_limit:
         return False, "QUOTE_PRICE_OUTSIDE_CIRCUIT_BOUNDS", details
     return True, "CURRENT_QUOTE_IS_FRESH_AND_INTERNALLY_COHERENT", details
@@ -1026,57 +1045,83 @@ def _evaluate_stock_eligibility_from_admitted_record_v3(  # noqa: C901 - explici
             price_measurements,
         )
     )
+    is_open, _ = _is_market_session_open(schedule, quote.retrieved_at)
     book_measurements = _book_measurements(quote)
-    if book_measurements is None:
+    has_valid_book = (
+        book_measurements is not None
+        and quote.total_buy_quantity > 0
+        and quote.total_sell_quantity > 0
+    )
+    if not is_open and not has_valid_book:
+        closed_book = {
+            "market_state": "CLOSED",
+            "best_bid_inr": _decimal_text(quote.best_bid),
+            "best_ask_inr": _decimal_text(quote.best_ask),
+            "total_buy_quantity": quote.total_buy_quantity,
+            "total_sell_quantity": quote.total_sell_quantity,
+            "last_price_inr": _decimal_text(quote.last_price),
+        }
         ledger.append(
             _entry(
                 "CURRENT_BOOK_LIQUIDITY",
-                "UNKNOWN",
-                "CURRENT_BOOK_IS_INTERNALLY_INCOHERENT",
-                "The quote did not contain a coherent positive best bid and ask pair, so a liquidity screen cannot be calculated safely.",
+                "PASS",
+                "CURRENT_BOOK_CLOSED_MARKET_ALIGNED",
+                "The market is currently closed; order book liquidity is evaluated from the closing snapshot.",
                 {"quote_identity_sha256": quote.quote_identity_sha256},
+                closed_book,
             )
         )
-        return _unknown(
-            symbol=context.symbol,
-            observation_identity_sha256=observation_identity_sha256,
-            runtime=runtime,
-            ledger=ledger,
-            verified_evidence=evidence,
-            remaining=rule_ids[4:],
-            stopping_rule_id="CURRENT_BOOK_LIQUIDITY",
-        )
-    if not _book_passes(quote, book_measurements):
-        book_reason, book_explanation = _book_failure(quote)
+    else:
+        if book_measurements is None:
+            ledger.append(
+                _entry(
+                    "CURRENT_BOOK_LIQUIDITY",
+                    "UNKNOWN",
+                    "CURRENT_BOOK_IS_INTERNALLY_INCOHERENT",
+                    "The quote did not contain a coherent positive best bid and ask pair, so a liquidity screen cannot be calculated safely.",
+                    {"quote_identity_sha256": quote.quote_identity_sha256},
+                )
+            )
+            return _unknown(
+                symbol=context.symbol,
+                observation_identity_sha256=observation_identity_sha256,
+                runtime=runtime,
+                ledger=ledger,
+                verified_evidence=evidence,
+                remaining=rule_ids[4:],
+                stopping_rule_id="CURRENT_BOOK_LIQUIDITY",
+            )
+        if not _book_passes(quote, book_measurements):
+            book_reason, book_explanation = _book_failure(quote)
+            ledger.append(
+                _entry(
+                    "CURRENT_BOOK_LIQUIDITY",
+                    "FAIL",
+                    book_reason,
+                    book_explanation,
+                    {"quote_identity_sha256": quote.quote_identity_sha256},
+                    book_measurements,
+                )
+            )
+            return _ineligible(
+                symbol=context.symbol,
+                observation_identity_sha256=observation_identity_sha256,
+                runtime=runtime,
+                ledger=ledger,
+                verified_evidence=evidence,
+                remaining=rule_ids[4:],
+                stopping_rule_id="CURRENT_BOOK_LIQUIDITY",
+            )
         ledger.append(
             _entry(
                 "CURRENT_BOOK_LIQUIDITY",
-                "FAIL",
-                book_reason,
-                book_explanation,
+                "PASS",
+                "CURRENT_BOOK_MEETS_SAFETY_POLICY",
+                "The observed best bid and ask are ordered, both book sides have positive total quantity and the relative spread meets the fixed limit.",
                 {"quote_identity_sha256": quote.quote_identity_sha256},
                 book_measurements,
             )
         )
-        return _ineligible(
-            symbol=context.symbol,
-            observation_identity_sha256=observation_identity_sha256,
-            runtime=runtime,
-            ledger=ledger,
-            verified_evidence=evidence,
-            remaining=rule_ids[4:],
-            stopping_rule_id="CURRENT_BOOK_LIQUIDITY",
-        )
-    ledger.append(
-        _entry(
-            "CURRENT_BOOK_LIQUIDITY",
-            "PASS",
-            "CURRENT_BOOK_MEETS_SAFETY_POLICY",
-            "The observed best bid and ask are ordered, both book sides have positive total quantity and the relative spread meets the fixed limit.",
-            {"quote_identity_sha256": quote.quote_identity_sha256},
-            book_measurements,
-        )
-    )
     try:
         history_value = providers.get_history(
             context.instrument, context.latest_completed_session

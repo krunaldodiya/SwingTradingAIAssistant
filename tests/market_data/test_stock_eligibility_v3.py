@@ -374,7 +374,7 @@ def test_v3_eligibility_accepts_fresh_quote_in_immediate_open_successor_session(
 
 
 @pytest.mark.parametrize("boundary", ("before_open", "at_close"))
-def test_v3_eligibility_rejects_quote_outside_immediate_open_successor_session(
+def test_v3_eligibility_accepts_quote_outside_immediate_open_successor_session(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, boundary: str
 ) -> None:
     observation = _structure_observation(tmp_path)
@@ -400,12 +400,62 @@ def test_v3_eligibility_rejects_quote_outside_immediate_open_successor_session(
         tmp_path, handle
     )
 
-    assert result["status"] == "UNKNOWN"
+    assert result["status"] == "ELIGIBLE"
     ledger = {entry["rule_id"]: entry for entry in result["explanation_ledger"]}
     integrity = ledger["CURRENT_QUOTE_FRESHNESS_AND_INTEGRITY"]
-    assert integrity["outcome"] == "UNKNOWN"
-    assert integrity["reason_code"] == "QUOTE_TIMESTAMP_OUTSIDE_NEXT_OPEN_SESSION"
-    assert providers.calls == ["quote:INE002A01018:RELIANCE"]
+    assert integrity["outcome"] == "PASS"
+    assert providers.calls == [
+        "quote:INE002A01018:RELIANCE",
+        "history",
+        "actions:INE002A01018",
+    ]
+
+
+def test_v3_eligibility_accepts_closed_market_quote_with_cleared_order_book(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    observation = _structure_observation(tmp_path)
+    handle = record_stock_observation_v1(tmp_path, observation)
+    successor = _immediate_successor_session(tmp_path, observation)
+    timestamp = successor.close_at + timedelta(minutes=10)
+    cleared_depth = {
+        "buy": [{"price": 0.0, "quantity": 0, "orders": 0}],
+        "sell": [{"price": 0.0, "quantity": 0, "orders": 0}],
+    }
+    payload = _payload(
+        timestamp=timestamp.astimezone().isoformat(),
+        last_price=102.0,
+        lower_circuit_limit=81.6,
+        upper_circuit_limit=122.4,
+        depth=cleared_depth,
+        total_buy_quantity=0,
+        total_sell_quantity=0,
+    )
+    quote = UpstoxFullQuoteV3Client(
+        _Transport(payload),
+        clock=lambda: timestamp + timedelta(minutes=1),
+    ).fetch(_ISIN, "RELIANCE", AccessToken(_TOKEN))
+
+    providers = _Providers(
+        quote,
+        _history(observation),
+        _actions(observation),
+    )
+    monkeypatch.setattr(
+        stock_eligibility_v3_module,
+        "_LiveProviders",
+        lambda *, clock: providers,
+    )
+
+    result = stock_eligibility_v3_module.evaluate_stock_eligibility_from_record_v3(
+        tmp_path, handle
+    )
+
+    assert result["status"] == "ELIGIBLE"
+    ledger = {entry["rule_id"]: entry for entry in result["explanation_ledger"]}
+    book = ledger["CURRENT_BOOK_LIQUIDITY"]
+    assert book["outcome"] == "PASS"
+    assert book["reason_code"] == "CURRENT_BOOK_CLOSED_MARKET_ALIGNED"
 
 
 def test_v3_eligibility_stops_before_provider_when_retained_schedule_is_missing(

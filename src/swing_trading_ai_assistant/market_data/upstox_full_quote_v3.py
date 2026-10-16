@@ -363,7 +363,7 @@ def _parse_quote(  # noqa: C901 - strict closed provider schema validation
         raise UpstoxFullQuoteCorruptError("full quote response corrupt")
     if cas_fields:
         _nonnegative_decimal_value(raw["indicative_equilibrium_price"])
-        _positive_decimal_value(raw["reference_price"])
+        _nonnegative_decimal_value(raw["reference_price"])
         _nonnegative_int(raw["indicative_equilibrium_quantity"])
         _nonnegative_int(raw["indicative_imbalance_quantity_total"])
         _nonnegative_int(raw["indicative_imbalance_quantity_market"])
