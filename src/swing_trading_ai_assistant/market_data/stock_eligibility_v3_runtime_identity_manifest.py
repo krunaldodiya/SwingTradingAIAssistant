@@ -3,7 +3,7 @@
 from typing import Final
 
 STOCK_ELIGIBILITY_RUNTIME_SOURCE_SHA256_V3: Final[dict[str, str]] = {
-    "src/swing_trading_ai_assistant/market_data/stock_eligibility_v3.py": "57deb313a9f36b7a92be3d524998db0ac495be0b895b0a0b04f2040156867065",
+    "src/swing_trading_ai_assistant/market_data/stock_eligibility_v3.py": "496bda08233e465b4773153bfb04014707dd742791a08a27491b61acbbf5849c",
     "src/swing_trading_ai_assistant/market_data/bharatstock.py": "15b98327b6eff6a8e5b2c95cca1ab726872e11a7461f145487e81535b41728e3",
     "src/swing_trading_ai_assistant/market_data/bharatstock_capture.py": "674f3dae944d1dfe6854ac63397ac61e26cecc7991231647cb7d5ec23d8a8eb1",
     "src/swing_trading_ai_assistant/market_data/corporate_actions.py": "65507d4b4dc08f33a871716c77b5b04fbfdc01fbc08ef1d224a620991c4973fb",
@@ -13,5 +13,5 @@ STOCK_ELIGIBILITY_RUNTIME_SOURCE_SHA256_V3: Final[dict[str, str]] = {
     "src/swing_trading_ai_assistant/market_data/schedule_evidence.py": "2894a34356c7d12c71cf2a9cb133d0a5d7aaa83a83d7ac43549a13e7b9081801",
     "src/swing_trading_ai_assistant/market_data/stock_observations.py": "01e59ddaa39d3d0020c5e7ee51dfa5a88a0ffee6d5f950f88f2a3ceabe0d585e",
     "src/swing_trading_ai_assistant/market_data/storage_root_lease.py": "f93eac4f668dbdb0e236a3a54452a8d022c5700e91452536acafb1300b22f6ff",
-    "src/swing_trading_ai_assistant/market_data/upstox_full_quote_v3.py": "4c89f5f831394604644632c59d2a1f85d94e95034d8b3702228335a8365fc36b",
+    "src/swing_trading_ai_assistant/market_data/upstox_full_quote_v3.py": "f73d87442788b7ab3f174f3e764b53ecc4e57c3e8c10816647860a5a0e948db8",
 }
