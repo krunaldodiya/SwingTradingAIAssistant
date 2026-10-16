@@ -173,6 +173,20 @@ def _build_candidate_summary(
     event_session = _format_event_session(getattr(latest_up, "session", None))
     broken_level = Decimal(str(getattr(latest_up, "broken_level", "0")))
     risk_per_share = current_price - stop_price
+    dist_from_break = current_price - broken_level
+    dist_pct = (
+        (dist_from_break / broken_level) * Decimal("100")
+        if broken_level > 0
+        else Decimal("0")
+    )
+    if broken_level <= current_price <= (broken_level * Decimal("1.015")):
+        retest_state = "TESTING_BROKEN_HIGH"
+    elif current_price > (broken_level * Decimal("1.015")):
+        retest_state = "EXPANDING_ABOVE"
+    else:
+        retest_state = "PULLBACK_BELOW_BREAKOUT"
+
+    demand_zone_width = broken_level - stop_price
     return {
         "current_price_inr": _decimal_text(current_price),
         "setup_event": event_kind,
@@ -183,6 +197,12 @@ def _build_candidate_summary(
         "supporting_stop_reference_inr": _decimal_text(stop_price),
         "risk_per_share_inr": _decimal_text(risk_per_share),
         "invalidation_condition": "Daily close strictly below supporting stop reference",
+        "smc_price_action": {
+            "retest_state": retest_state,
+            "breakout_distance_percent": f"{dist_pct:+.2f}%",
+            "demand_zone_support_inr": _decimal_text(stop_price),
+            "demand_zone_width_inr": _decimal_text(demand_zone_width),
+        },
     }
 
 
@@ -255,12 +275,17 @@ def build_trade_brief(
     """Construct a versioned swing-trade-brief@v1 card for human or AI assistant consumption."""
     is_candidate = decision == "RESEARCH_CANDIDATE" and candidate_summary is not None
     if is_candidate and candidate_summary is not None:
+        smc = cast(dict[str, object], candidate_summary.get("smc_price_action", {}))
+        retest = str(smc.get("retest_state", ""))
+        dist = str(smc.get("breakout_distance_percent", ""))
         allowed_claims = [
             f"State confirmed {candidate_summary['setup_event']} setup at broken level INR {candidate_summary['broken_high_level_inr']} confirmed on {candidate_summary['event_session']}.",
             f"State current quote price is INR {candidate_summary['current_price_inr']}.",
             f"State structural protective stop reference is INR {candidate_summary['supporting_stop_reference_inr']}.",
             f"State risk per share is INR {candidate_summary['risk_per_share_inr']}.",
             f"State candidate age is {candidate_summary['age_completed_sessions']} completed session(s) (within the 1–5 freshness window).",
+            f"State breakout price action status is {retest} ({dist} relative to breakout level).",
+            f"State institutional demand zone support is INR {candidate_summary['supporting_stop_reference_inr']} with zone width INR {smc.get('demand_zone_width_inr')}.",
             "State all 8 conservative safety eligibility gates passed (turnover, history, circuit distance, book liquidity, and 7-day corporate action blackout).",
         ]
     else:
@@ -506,12 +531,13 @@ def format_scan_table(scan_result: dict[str, object]) -> str:
     if candidates:
         lines.append("CONFIRMED RESEARCH CANDIDATES:")
         lines.append(
-            f"{'SYMBOL':<10} {'PRICE':<10} {'SETUP':<8} {'DATE':<12} {'BROKEN HIGH':<12} {'STOP REF':<10} {'RISK/SH':<10}"
+            f"{'SYMBOL':<10} {'PRICE':<10} {'SETUP':<8} {'DATE':<12} {'BROKEN HIGH':<12} {'STOP REF':<10} {'RISK/SH':<10} {'SMC RETEST':<16}"
         )
-        lines.append("-" * 80)
+        lines.append("-" * 96)
         for c in candidates:
             sym = str(c.get("symbol", ""))
             summary = cast(dict[str, object], c.get("candidate_summary", {}))
+            smc = cast(dict[str, object], summary.get("smc_price_action", {}))
             price = f"INR {summary.get('current_price_inr', '')}"
             setup = (
                 f"{summary.get('setup_direction', '')} {summary.get('setup_event', '')}"
@@ -520,10 +546,11 @@ def format_scan_table(scan_result: dict[str, object]) -> str:
             broken = f"INR {summary.get('broken_high_level_inr', '')}"
             stop = f"INR {summary.get('supporting_stop_reference_inr', '')}"
             risk = f"INR {summary.get('risk_per_share_inr', '')}"
+            smc_retest = f"{smc.get('retest_state', '')} ({smc.get('breakout_distance_percent', '')})"
             lines.append(
-                f"{sym:<10} {price:<10} {setup:<8} {date_str:<12} {broken:<12} {stop:<10} {risk:<10}"
+                f"{sym:<10} {price:<10} {setup:<8} {date_str:<12} {broken:<12} {stop:<10} {risk:<10} {smc_retest:<16}"
             )
-        lines.append("-" * 80)
+        lines.append("-" * 96)
     else:
         lines.append(
             "CONFIRMED RESEARCH CANDIDATES: None (No 1–5 session upward BOS setups active)"
