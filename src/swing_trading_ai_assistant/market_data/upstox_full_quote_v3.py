@@ -365,8 +365,8 @@ def _parse_quote(  # noqa: C901 - strict closed provider schema validation
         _nonnegative_decimal_value(raw["indicative_equilibrium_price"])
         _nonnegative_decimal_value(raw["reference_price"])
         _nonnegative_int(raw["indicative_equilibrium_quantity"])
-        _nonnegative_int(raw["indicative_imbalance_quantity_total"])
-        _nonnegative_int(raw["indicative_imbalance_quantity_market"])
+        _bounded_int(raw["indicative_imbalance_quantity_total"])
+        _bounded_int(raw["indicative_imbalance_quantity_market"])
         if type(raw["cas_eligible"]) is not bool:
             raise UpstoxFullQuoteCorruptError("full quote response corrupt")
     values: dict[str, object] = {
@@ -420,8 +420,6 @@ def _depth_levels(value: object, *, side: str) -> tuple[tuple[Decimal, int, int]
         price = _nonnegative_decimal_value(row["price"])
         quantity = _nonnegative_int(row["quantity"])
         orders = _nonnegative_int(row["orders"])
-        if price == 0 and (quantity != 0 or orders != 0):
-            raise UpstoxFullQuoteCorruptError("full quote response corrupt")
         levels.append((price, quantity, orders))
     prices = tuple(item[0] for item in levels if item[0] > 0)
     if any(item[0] == 0 for item in levels[: len(prices)]) or any(
@@ -489,6 +487,15 @@ def _finite_decimal_value(value: object) -> Decimal:
 
 def _nonnegative_int(value: object) -> int:
     if type(value) is not int or not 0 <= value <= _MAX_PROVIDER_INTEGER:
+        raise UpstoxFullQuoteCorruptError("full quote response corrupt")
+    return value
+
+
+def _bounded_int(value: object) -> int:
+    if (
+        type(value) is not int
+        or not -_MAX_PROVIDER_INTEGER <= value <= _MAX_PROVIDER_INTEGER
+    ):
         raise UpstoxFullQuoteCorruptError("full quote response corrupt")
     return value
 

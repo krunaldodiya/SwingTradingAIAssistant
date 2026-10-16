@@ -13,5 +13,5 @@ STOCK_ELIGIBILITY_RUNTIME_SOURCE_SHA256_V3: Final[dict[str, str]] = {
     "src/swing_trading_ai_assistant/market_data/schedule_evidence.py": "2894a34356c7d12c71cf2a9cb133d0a5d7aaa83a83d7ac43549a13e7b9081801",
     "src/swing_trading_ai_assistant/market_data/stock_observations.py": "01e59ddaa39d3d0020c5e7ee51dfa5a88a0ffee6d5f950f88f2a3ceabe0d585e",
     "src/swing_trading_ai_assistant/market_data/storage_root_lease.py": "f93eac4f668dbdb0e236a3a54452a8d022c5700e91452536acafb1300b22f6ff",
-    "src/swing_trading_ai_assistant/market_data/upstox_full_quote_v3.py": "f73d87442788b7ab3f174f3e764b53ecc4e57c3e8c10816647860a5a0e948db8",
+    "src/swing_trading_ai_assistant/market_data/upstox_full_quote_v3.py": "bb0c4311777d2d23ab184f33f6cebf187b1dbb50f309b8ea1b501c3d12656578",
 }
