@@ -8,10 +8,17 @@ import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Final, Literal, NoReturn
+from typing import Final, Literal, NoReturn, cast
 
 from .signal_decisions import SCHEMA as V2_SCHEMA
 from .signal_decisions import evaluate_signal_decision_from_records_v2
+from .signal_decisions_scan_v3 import (
+    SCHEMA as SCAN_SCHEMA,
+)
+from .signal_decisions_scan_v3 import (
+    format_scan_table,
+    scan_signal_decisions_v3,
+)
 from .signal_decisions_v3 import SCHEMA as V3_SCHEMA
 from .signal_decisions_v3 import evaluate_signal_decision_from_records_v3
 from .stock_eligibility import evaluate_stock_eligibility_from_record_v2
@@ -40,6 +47,15 @@ class _EvaluationRequest:
     current_observation: str
 
 
+@dataclass(frozen=True)
+class _ScanRequest:
+    storage_root: Path
+    symbols: tuple[str, ...] | None
+    nifty100: bool
+    output: Literal["json", "table"]
+    refresh: bool
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = _Parser(prog="signal-decisions", description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -52,6 +68,13 @@ def _parser() -> argparse.ArgumentParser:
     for command in (evaluate_v2, evaluate_v3):
         command.add_argument("--previous-observation", required=True)
         command.add_argument("--current-observation", required=True)
+    scan = commands.add_parser("scan")
+    scan.add_argument("--storage-root", type=Path, required=True)
+    scan_group = scan.add_mutually_exclusive_group(required=True)
+    scan_group.add_argument("--nifty100", action="store_true")
+    scan_group.add_argument("--symbol", action="append", dest="symbols")
+    scan.add_argument("--output", choices=("json", "table"), default="json")
+    scan.add_argument("--refresh", action="store_true")
     for command in (eligibility_v2, eligibility_v3, evaluate_v2, evaluate_v3):
         command.add_argument("--storage-root", type=Path, required=True)
         command.add_argument("--output", choices=("json",), required=True)
@@ -60,7 +83,7 @@ def _parser() -> argparse.ArgumentParser:
 
 def _valid_request(
     args: argparse.Namespace,
-) -> _EligibilityRequest | _EvaluationRequest:
+) -> _EligibilityRequest | _EvaluationRequest | _ScanRequest:
     storage_root: object = getattr(args, "storage_root", None)
     command: object = getattr(args, "command", None)
     if not isinstance(storage_root, Path) or not storage_root.is_absolute():
@@ -73,6 +96,21 @@ def _valid_request(
             "v3" if command == "check-eligibility-v3" else "v2",
             storage_root,
             observation,
+        )
+    if command == "scan":
+        nifty100 = bool(getattr(args, "nifty100", False))
+        symbols_raw: list[str] | None = getattr(args, "symbols", None)
+        output_format = str(getattr(args, "output", "json"))
+        refresh = bool(getattr(args, "refresh", False))
+        symbols = tuple(symbols_raw) if symbols_raw else None
+        if output_format not in {"json", "table"}:
+            raise ValueError("invalid output format")
+        return _ScanRequest(
+            storage_root,
+            symbols,
+            nifty100,
+            cast(Literal["json", "table"], output_format),
+            refresh,
         )
     if command not in {"evaluate", "evaluate-v3"}:
         raise ValueError("invalid command")
@@ -94,16 +132,20 @@ def _valid_request(
 
 
 def _write(value: dict[str, object]) -> None:
-    sys.stdout.buffer.write(
+    payload = (
         json.dumps(
             value,
             ensure_ascii=True,
             sort_keys=True,
             separators=(",", ":"),
             allow_nan=False,
-        ).encode("utf-8")
-        + b"\n"
+        )
+        + "\n"
     )
+    if hasattr(sys.stdout, "buffer"):
+        sys.stdout.buffer.write(payload.encode("utf-8"))
+    else:
+        sys.stdout.write(payload)
 
 
 def _v2_result(request: _EligibilityRequest | _EvaluationRequest) -> dict[str, object]:
@@ -152,6 +194,22 @@ def main(argv: list[str] | None = None) -> int:
     except (TypeError, ValueError):
         sys.stderr.write("request_invalid\n")
         return 2
+    if isinstance(request, _ScanRequest):
+        try:
+            scan_result = scan_signal_decisions_v3(
+                request.storage_root,
+                symbols=request.symbols,
+                nifty100=request.nifty100,
+                refresh=request.refresh,
+            )
+            if request.output == "table":
+                sys.stdout.write(format_scan_table(scan_result) + "\n")
+            else:
+                _write(scan_result)
+            return 0
+        except Exception:  # noqa: BLE001 - closed CLI error boundary
+            _write(_unavailable(SCAN_SCHEMA))
+            return 1
     if request.version == "v2":
         try:
             _write(_v2_result(request))
