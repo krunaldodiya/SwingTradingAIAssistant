@@ -7,12 +7,15 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 
 from swing_trading_ai_assistant.market_data.paper_tracking import (
     RECORD_SCHEMA,
     REPORT_SCHEMA,
     _evaluate_forward_trade,
+    _load_historical_bars_for_symbol,
     format_tracking_table,
     generate_tracking_report,
     log_candidates_from_scan,
@@ -22,6 +25,60 @@ from swing_trading_ai_assistant.market_data.signal_decisions_v3_cli import (
 )
 
 _NOW = datetime(2026, 10, 16, 10, 0, tzinfo=UTC)
+
+
+def _write_adjusted_forward_bars(
+    storage_root: Path, rows: list[dict[str, object]]
+) -> None:
+    directory = storage_root / "adjusted_daily" / "provider=bharatstock" / "request-a"
+    directory.mkdir(parents=True, exist_ok=True)
+    table = pa.table(
+        {
+            "symbol": [row["symbol"] for row in rows],
+            "session": [row["session"] for row in rows],
+            "high": [row["high"] for row in rows],
+            "low": [row["low"] for row in rows],
+            "close": [row["close"] for row in rows],
+        }
+    )
+    pq.write_table(table, directory / "data.parquet")
+
+
+def test_load_historical_bars_filters_to_requested_symbol(tmp_path: Path) -> None:
+    first = date(2026, 10, 12)
+    second = date(2026, 10, 13)
+    _write_adjusted_forward_bars(
+        tmp_path,
+        [
+            {"symbol": "ALPHA", "session": first, "high": 110, "low": 90, "close": 105},
+            {
+                "symbol": "ALPHA",
+                "session": second,
+                "high": 115,
+                "low": 95,
+                "close": 112,
+            },
+            {"symbol": "ZULU", "session": first, "high": 510, "low": 490, "close": 505},
+            {
+                "symbol": "ZULU",
+                "session": second,
+                "high": 515,
+                "low": 495,
+                "close": 512,
+            },
+        ],
+    )
+
+    bars = _load_historical_bars_for_symbol(tmp_path, "ALPHA")
+
+    assert bars == {
+        first: {"high": Decimal("110"), "low": Decimal("90"), "close": Decimal("105")},
+        second: {
+            "high": Decimal("115"),
+            "low": Decimal("95"),
+            "close": Decimal("112"),
+        },
+    }
 
 
 def _sample_scan_result() -> dict[str, object]:
