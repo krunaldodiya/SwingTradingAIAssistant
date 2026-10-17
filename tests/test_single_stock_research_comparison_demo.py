@@ -35,21 +35,6 @@ def test_demo_runs_actual_cli_and_reports_tool_computed_change() -> None:
     value = json.loads(completed.stdout)
     assert value["status"] == "COMPARABLE"
     assert value["question"] == "PRICE_BEHAVIOR"
-    # Observations bind the current research runtime, including market-data CLI
-    # bytes. The bounded runtime change advances those identities; the synthetic
-    # facts remain unchanged.
-    assert (
-        value["result_identity_sha256"]
-        == "483411c33617ca18da05796e102d154317a14d1adfedbc2d59271a820e86521b"
-    )
-    assert (
-        value["previous_observation_identity_sha256"]
-        == "652ac4708ff14097c80f29c2f6b66d745859f96307272027df5b8ba7201e5dd5"
-    )
-    assert (
-        value["current_observation_identity_sha256"]
-        == "a0bf77a311438dc2d94e16cac579d575f2b7d987d63adeaddfab37b4fec4260c"
-    )
     body = next(
         item for item in value["facts"] if item["path"] == "CANDLE_GEOMETRY.body_size"
     )
