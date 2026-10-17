@@ -15,6 +15,7 @@ from typing import Any, Final, cast
 import pyarrow.parquet as _pyarrow_parquet  # pyright: ignore[reportMissingImports]
 
 from .current_stock_research_v2 import research_current_stock_v2
+from .historical_nifty_universe import read_historic_nifty_universe
 from .runtime_source_verifier import runtime_source_sha256
 from .signal_decisions_scan_v3_runtime_identity_manifest import (
     SIGNAL_DECISIONS_SCAN_RUNTIME_SOURCE_SHA256_V3,
@@ -31,6 +32,7 @@ BRIEF_SCHEMA: Final = "swing-trade-brief@v1"
 _SYMBOL: Final = re.compile(r"[A-Z0-9][A-Z0-9.&_-]{0,31}\Z")
 _SOURCES: Final = (
     "src/swing_trading_ai_assistant/market_data/signal_decisions_scan_v3.py",
+    "src/swing_trading_ai_assistant/market_data/historical_nifty_universe.py",
     "src/swing_trading_ai_assistant/market_data/stock_eligibility_v3.py",
     "src/swing_trading_ai_assistant/market_data/signal_decisions_v3.py",
     "src/swing_trading_ai_assistant/market_data/stock_observations.py",
@@ -100,8 +102,10 @@ def resolve_nifty100_symbols(storage_root: Path) -> tuple[str, ...]:
             raw_keys = meta.get(b"instrument_keys")
             if raw_keys:
                 raw_obj: object = json.loads(raw_keys.decode("utf-8"))
-                if isinstance(raw_obj, list) and len(raw_obj) == 100:
+                if isinstance(raw_obj, list):
                     raw_list = cast(list[object], raw_obj)
+                    if len(raw_list) != 100:
+                        continue
                     symbols: list[str] = [
                         str(item).split(":")[-1]
                         for item in raw_list
@@ -473,29 +477,28 @@ def build_trade_brief(
     }
 
 
-def _find_retained_observation(
-    storage_root: Path, symbol: str, question: str
-) -> tuple[str, object] | None:
+def _current_structure_observation_handles(storage_root: Path) -> dict[str, str]:
+    """Index retained current-structure observations once per universe scan."""
+    handles: dict[str, str] = {}
     obs_dir = storage_root / "stock-observations-v1"
     if not obs_dir.exists():
-        return None
-    for p in obs_dir.glob("*.json"):
-        if len(p.stem) == 64:
-            try:
-                data: dict[str, object] = cast(
-                    dict[str, object], json.loads(p.read_text())
-                )
-                res = cast(dict[str, object], data.get("result", {}))
-                if (
-                    res.get("symbol") == symbol
-                    and res.get("question") == question
-                    and res.get("status") == "READY"
-                ):
-                    obs = read_stock_observation_v1(storage_root, p.stem)
-                    return p.stem, obs
-            except (OSError, ValueError):
-                continue
-    return None
+        return handles
+    for path in obs_dir.glob("*.json"):
+        if len(path.stem) != 64:
+            continue
+        try:
+            data = cast(dict[str, object], json.loads(path.read_text()))
+            result = cast(dict[str, object], data.get("result", {}))
+            symbol = result.get("symbol")
+            if (
+                type(symbol) is str
+                and result.get("question") == "CURRENT_STRUCTURE"
+                and result.get("status") == "READY"
+            ):
+                handles.setdefault(symbol, path.stem)
+        except (OSError, ValueError):
+            continue
+    return handles
 
 
 def _evaluate_anti_manipulation_safety(
@@ -522,7 +525,7 @@ def _evaluate_anti_manipulation_safety(
     history_sessions_raw = ve.get("history_session_count") or ve.get(
         "history_sessions_count"
     )
-    if history_sessions_raw is not None and int(history_sessions_raw) < 120:
+    if history_sessions_raw is not None and int(str(history_sessions_raw)) < 120:
         return (
             False,
             f"NEWLY_LISTED_EXCLUDED ({history_sessions_raw} sessions < 120 listing floor)",
@@ -559,16 +562,13 @@ def _scan_stock(  # noqa: C901 - multi-family screening and anti-manipulation ga
     refresh: bool,
     industry: str,
     benchmark_median_return: Decimal,
+    retained_handle: str | None = None,
 ) -> tuple[dict[str, object], bool, str, str | None, str | None, str]:
     """Execute single-stock structure observation, safety eligibility, and brief generation."""
     try:
-        retained = (
-            None
-            if refresh
-            else _find_retained_observation(storage_root, symbol, "CURRENT_STRUCTURE")
-        )
-        if retained is not None:
-            handle, obs_result = retained
+        if retained_handle is not None and not refresh:
+            handle = retained_handle
+            obs_result = read_stock_observation_v1(storage_root, handle)
         else:
             obs_result = research_current_stock_v2(
                 symbol,
@@ -677,17 +677,31 @@ def _resolve_target_symbols(
     storage_root: Path,
     symbols: Sequence[str] | None,
     nifty100: bool,
-) -> tuple[tuple[str, ...], str]:
+) -> tuple[tuple[str, ...], str, frozenset[str], dict[str, object] | None]:
     if nifty100:
         if symbols is not None:
             raise ValueError("cannot supply both explicit symbols and nifty100 flag")
-        return resolve_nifty100_symbols(storage_root), "NIFTY_100"
+        universe = read_historic_nifty_universe(storage_root)
+        return (
+            universe.nifty500,
+            "NIFTY_100_PRIORITY_NIFTY_500",
+            frozenset(universe.nifty100),
+            {
+                "nifty100_source_sha256": universe.nifty100_source_sha256,
+                "nifty500_source_sha256": universe.nifty500_source_sha256,
+                "nifty100_source_url": universe.nifty100_source_url,
+                "nifty500_source_url": universe.nifty500_source_url,
+                "retrieved_at": universe.retrieved_at.isoformat(),
+                "window_start": universe.window_start.isoformat(),
+                "window_end": universe.window_end.isoformat(),
+            },
+        )
     if not symbols or not 1 <= len(symbols) <= 100:
         raise ValueError("must supply 1 to 100 valid symbols")
     for sym in symbols:
         if _SYMBOL.fullmatch(sym) is None:
             raise ValueError(f"invalid symbol: {sym}")
-    return tuple(symbols), "EXPLICIT"
+    return tuple(symbols), "EXPLICIT", frozenset(), None
 
 
 def _compute_benchmark_median_return(
@@ -735,7 +749,7 @@ def _calculate_market_regime(trends: list[str]) -> dict[str, object]:
     }
 
 
-def scan_signal_decisions_v3(
+def scan_signal_decisions_v3(  # noqa: C901 - lifecycle orchestration
     storage_root: Path,
     *,
     symbols: Sequence[str] | None = None,
@@ -744,15 +758,20 @@ def scan_signal_decisions_v3(
     clock: Callable[[], datetime] | None = None,
 ) -> dict[str, object]:
     """Scan Nifty 100 or explicit equities integrating all 7 research families."""
-    if not isinstance(storage_root, Path) or not storage_root.is_absolute():
+    if not storage_root.is_absolute():
         raise ValueError("invalid storage root")
 
-    target_symbols, universe_type = _resolve_target_symbols(
-        storage_root, symbols, nifty100
+    target_symbols, universe_type, nifty100_symbols, universe_evidence = (
+        _resolve_target_symbols(storage_root, symbols, nifty100)
     )
     now = datetime.now(UTC) if clock is None else clock()
     industry_map = _load_industry_mapping(storage_root)
-    benchmark_median = _compute_benchmark_median_return(storage_root, target_symbols)
+    benchmark_symbols = (
+        tuple(symbol for symbol in target_symbols if symbol in nifty100_symbols)
+        if nifty100_symbols
+        else target_symbols
+    )
+    benchmark_median = _compute_benchmark_median_return(storage_root, benchmark_symbols)
 
     candidates: list[dict[str, object]] = []
     other_stocks: list[dict[str, object]] = []
@@ -761,11 +780,19 @@ def scan_signal_decisions_v3(
     eligible_count = 0
     ineligible_count = 0
     unknown_count = 0
+    retained_handles = (
+        {} if refresh else _current_structure_observation_handles(storage_root)
+    )
 
     for symbol in target_symbols:
         ind = industry_map.get(symbol, "Unknown")
         brief, is_cand, safety_status, price_inr, failed_rule, trend = _scan_stock(
-            symbol, storage_root, refresh, ind, benchmark_median
+            symbol,
+            storage_root,
+            refresh,
+            ind,
+            benchmark_median,
+            retained_handles.get(symbol),
         )
         trends.append(trend)
 
@@ -777,6 +804,9 @@ def scan_signal_decisions_v3(
             unknown_count += 1
 
         if is_cand:
+            brief["universe_tier"] = (
+                "NIFTY_100" if symbol in nifty100_symbols else "NIFTY_500_EX_NIFTY_100"
+            )
             candidates.append(brief)
         else:
             other_stocks.append(
@@ -789,6 +819,28 @@ def scan_signal_decisions_v3(
                     "current_price_inr": price_inr,
                 }
             )
+
+    nifty100_candidate_count: int | None = None
+    fallback_triggered = False
+    if nifty100_symbols:
+        nifty100_candidates = [
+            candidate
+            for candidate in candidates
+            if str(candidate["symbol"]) in nifty100_symbols
+        ]
+        nifty100_candidate_count = len(nifty100_candidates)
+        fallback_triggered = nifty100_candidate_count < 5
+        if fallback_triggered:
+            candidates = (
+                nifty100_candidates
+                + [
+                    candidate
+                    for candidate in candidates
+                    if str(candidate["symbol"]) not in nifty100_symbols
+                ]
+            )[:10]
+        else:
+            candidates = nifty100_candidates[:10]
 
     # Attach sector peer participation to each candidate
     for c in candidates:
@@ -820,6 +872,9 @@ def scan_signal_decisions_v3(
         "scan_timestamp": _instant(now),
         "storage_root_sha256": _digest(str(storage_root)),
         "universe_type": universe_type,
+        "universe_evidence": universe_evidence,
+        "nifty100_validated_candidate_count": nifty100_candidate_count,
+        "nifty500_fallback_triggered": fallback_triggered,
         "market_regime": market_regime,
         "benchmark_median_return_20d": f"{benchmark_median:+.2f}%",
         "total_stocks_scanned": len(target_symbols),
