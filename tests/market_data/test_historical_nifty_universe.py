@@ -56,7 +56,7 @@ def _run(
 
     def fake_stock(
         symbol: str, *_: object
-    ) -> tuple[dict[str, object], bool, str, str, None, str]:
+    ) -> tuple[dict[str, object], bool, str, str, None, str, None]:
         calls.append(symbol)
         candidate = symbol in candidates
         return (
@@ -70,6 +70,7 @@ def _run(
             "100",
             None,
             "UPTREND",
+            None,
         )
 
     monkeypatch.setattr(scan, "_scan_stock", fake_stock)
