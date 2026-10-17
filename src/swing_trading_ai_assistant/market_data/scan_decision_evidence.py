@@ -117,7 +117,42 @@ def _validate_scan(scan: object) -> dict[str, object]:
     unsigned.pop("result_identity_sha256")
     if _digest(unsigned) != identity or value["schema"] != "swing-trade-scan@v1":
         raise ValueError("unadmitted scan")
+    _validate_scan_shape(value)
     return value
+
+
+def _validate_scan_shape(scan: dict[str, object]) -> None:
+    raw_symbols = scan["evaluated_symbols"]
+    raw_candidates = scan["candidates"]
+    raw_other = scan["other_stocks"]
+    total = scan["total_stocks_scanned"]
+    if (
+        type(total) is not int
+        or type(raw_symbols) is not list
+        or type(raw_candidates) is not list
+        or type(raw_other) is not list
+    ):
+        raise ValueError("invalid scan shape")
+    symbols = cast(list[object], raw_symbols)
+    candidates = cast(list[object], raw_candidates)
+    other = cast(list[object], raw_other)
+    if (
+        any(type(symbol) is not str for symbol in symbols)
+        or len(symbols) != total
+        or len(set(cast(list[str], symbols))) != total
+        or scan["candidate_count"] != len(candidates)
+        or any(type(item) is not dict for item in candidates + other)
+    ):
+        raise ValueError("invalid scan shape")
+    universe_type = scan["universe_type"]
+    if universe_type == "EXPLICIT":
+        if not 1 <= total <= 100 or scan["universe_evidence"] is not None:
+            raise ValueError("invalid explicit selection")
+    elif universe_type == "NIFTY_100_PRIORITY_NIFTY_500":
+        if total not in {500, 501} or type(scan["universe_evidence"]) is not dict:
+            raise ValueError("invalid Nifty selection")
+    else:
+        raise ValueError("invalid universe type")
 
 
 def _rows(  # noqa: C901 - complete fail-closed evidence binding
@@ -267,29 +302,29 @@ def read_scan_decision_evidence_v1(root: Path, handle: str) -> dict[str, object]
             raw = private_store.read_exact_capture_file(
                 operation, directory, f"{handle}.json", _MAX_BYTES
             )
-            saved = _closed(raw)
-            if (
-                hashlib.sha256(raw).hexdigest() != handle
-                or set(saved)
-                != {
-                    "contract_version",
-                    "scan",
-                    "scan_result_identity_sha256",
-                    "symbol_evidence",
-                }
-                or saved["contract_version"] != CONTRACT_VERSION
-            ):
-                raise ValueError("unsupported evidence record")
-            scan = _validate_scan(saved["scan"])
-            if saved["scan_result_identity_sha256"] != scan["result_identity_sha256"]:
-                raise ValueError("scan binding mismatch")
-            _rows(root, scan, saved["symbol_evidence"])
             directory.ensure_live()
-            return {
-                "schema": ENVELOPE_SCHEMA,
-                "decision_evidence_handle": handle,
-                "scan": scan,
+        saved = _closed(raw)
+        if (
+            hashlib.sha256(raw).hexdigest() != handle
+            or set(saved)
+            != {
+                "contract_version",
+                "scan",
+                "scan_result_identity_sha256",
+                "symbol_evidence",
             }
+            or saved["contract_version"] != CONTRACT_VERSION
+        ):
+            raise ValueError("unsupported evidence record")
+        scan = _validate_scan(saved["scan"])
+        if saved["scan_result_identity_sha256"] != scan["result_identity_sha256"]:
+            raise ValueError("scan binding mismatch")
+        _rows(root, scan, saved["symbol_evidence"])
+        return {
+            "schema": ENVELOPE_SCHEMA,
+            "decision_evidence_handle": handle,
+            "scan": scan,
+        }
     except Exception as error:  # noqa: BLE001 - redacted public read boundary
         raise ScanDecisionEvidenceUnavailable(
             "DECISION_EVIDENCE_UNAVAILABLE"

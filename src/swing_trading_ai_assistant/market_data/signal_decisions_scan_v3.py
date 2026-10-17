@@ -842,9 +842,10 @@ def scan_signal_decisions_v3(  # noqa: C901 - lifecycle orchestration
     nifty100_candidate_count: int | None = None
     fallback_triggered = False
     if nifty100_symbols:
+        all_candidates = list(candidates)
         nifty100_candidates = [
             candidate
-            for candidate in candidates
+            for candidate in all_candidates
             if str(candidate["symbol"]) in nifty100_symbols
         ]
         nifty100_candidate_count = len(nifty100_candidates)
@@ -854,13 +855,28 @@ def scan_signal_decisions_v3(  # noqa: C901 - lifecycle orchestration
                 nifty100_candidates
                 + [
                     candidate
-                    for candidate in candidates
+                    for candidate in all_candidates
                     if str(candidate["symbol"]) not in nifty100_symbols
                 ]
             )[:10]
         else:
             candidates = nifty100_candidates[:10]
-
+        selected_symbols = {str(candidate["symbol"]) for candidate in candidates}
+        for candidate in all_candidates:
+            if str(candidate["symbol"]) in selected_symbols:
+                continue
+            summary = cast(dict[str, object], candidate.get("candidate_summary") or {})
+            safety = cast(dict[str, object], candidate.get("safety_eligibility") or {})
+            other_stocks.append(
+                {
+                    "symbol": candidate["symbol"],
+                    "industry": summary.get("industry", "Unknown"),
+                    "decision": candidate["decision"],
+                    "safety_status": safety.get("status"),
+                    "failed_rule": "BASKET_CAPACITY_OR_NIFTY100_PRIORITY",
+                    "current_price_inr": summary.get("current_price_inr"),
+                }
+            )
     # Attach sector peer participation to each candidate
     for c in candidates:
         summary = cast(dict[str, object], c.get("candidate_summary", {}))
