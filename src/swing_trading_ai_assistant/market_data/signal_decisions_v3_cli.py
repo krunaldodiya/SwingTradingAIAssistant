@@ -18,6 +18,13 @@ from .paper_tracking import (
     generate_tracking_report,
     log_candidates_from_scan,
 )
+from .scan_decision_evidence import (
+    ENVELOPE_SCHEMA as DECISION_EVIDENCE_ENVELOPE_SCHEMA,
+)
+from .scan_decision_evidence import (
+    read_scan_decision_evidence_v1,
+    record_scan_decision_evidence_v1,
+)
 from .signal_decisions import SCHEMA as V2_SCHEMA
 from .signal_decisions import evaluate_signal_decision_from_records_v2
 from .signal_decisions_scan_v3 import (
@@ -62,6 +69,13 @@ class _ScanRequest:
     nifty100: bool
     output: Literal["json", "table"]
     refresh: bool
+    retain_decision_evidence: bool
+
+
+@dataclass(frozen=True)
+class _ReadDecisionEvidenceRequest:
+    storage_root: Path
+    decision_evidence: str
 
 
 @dataclass(frozen=True)
@@ -90,6 +104,11 @@ def _parser() -> argparse.ArgumentParser:
     scan_group.add_argument("--symbol", action="append", dest="symbols")
     scan.add_argument("--output", choices=("json", "table"), default="json")
     scan.add_argument("--refresh", action="store_true")
+    scan.add_argument("--retain-decision-evidence", action="store_true")
+    read_evidence = commands.add_parser("read-decision-evidence")
+    read_evidence.add_argument("--storage-root", type=Path, required=True)
+    read_evidence.add_argument("--decision-evidence", required=True)
+    read_evidence.add_argument("--output", choices=("json",), required=True)
     track = commands.add_parser("track")
     track.add_argument("--storage-root", type=Path, required=True)
     track.add_argument("--log-scan", type=Path, default=None)
@@ -100,9 +119,15 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _valid_request(
+def _valid_request(  # noqa: C901 - command-specific closed request validation
     args: argparse.Namespace,
-) -> _EligibilityRequest | _EvaluationRequest | _ScanRequest | _TrackRequest:
+) -> (
+    _EligibilityRequest
+    | _EvaluationRequest
+    | _ScanRequest
+    | _TrackRequest
+    | _ReadDecisionEvidenceRequest
+):
     storage_root: object = getattr(args, "storage_root", None)
     command: object = getattr(args, "command", None)
     if not isinstance(storage_root, Path) or not storage_root.is_absolute():
@@ -121,6 +146,9 @@ def _valid_request(
         symbols_raw: list[str] | None = getattr(args, "symbols", None)
         output_format = str(getattr(args, "output", "json"))
         refresh = bool(getattr(args, "refresh", False))
+        retain_decision_evidence = bool(
+            getattr(args, "retain_decision_evidence", False)
+        )
         symbols = tuple(symbols_raw) if symbols_raw else None
         if output_format not in {"json", "table"}:
             raise ValueError("invalid output format")
@@ -130,6 +158,7 @@ def _valid_request(
             nifty100,
             cast(Literal["json", "table"], output_format),
             refresh,
+            retain_decision_evidence,
         )
     if command == "track":
         log_scan_raw: object = getattr(args, "log_scan", None)
@@ -142,6 +171,11 @@ def _valid_request(
             log_scan,
             cast(Literal["json", "table"], output_format),
         )
+    if command == "read-decision-evidence":
+        handle: object = getattr(args, "decision_evidence", None)
+        if type(handle) is not str or _DIGEST.fullmatch(handle) is None:
+            raise ValueError("invalid handle")
+        return _ReadDecisionEvidenceRequest(storage_root, handle)
     if command not in {"evaluate", "evaluate-v3"}:
         raise ValueError("invalid command")
     previous: object = getattr(args, "previous_observation", None)
@@ -218,6 +252,14 @@ def _unavailable(schema: str) -> dict[str, object]:
     }
 
 
+def _decision_evidence_unavailable() -> dict[str, object]:
+    return {
+        "schema": DECISION_EVIDENCE_ENVELOPE_SCHEMA,
+        "status": "UNAVAILABLE",
+        "code": "DECISION_EVIDENCE_UNAVAILABLE",
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     try:
         request = _valid_request(_parser().parse_args(argv))
@@ -226,6 +268,8 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     if isinstance(request, _TrackRequest):
         return _run_track(request)
+    if isinstance(request, _ReadDecisionEvidenceRequest):
+        return _run_read_decision_evidence(request)
     if isinstance(request, _ScanRequest):
         return _run_scan(request)
     if request.version == "v2":
@@ -270,12 +314,35 @@ def _run_track(request: _TrackRequest) -> int:
 
 def _run_scan(request: _ScanRequest) -> int:
     try:
+        rows: list[dict[str, object]] | None = (
+            [] if request.retain_decision_evidence else None
+        )
         scan_result = scan_signal_decisions_v3(
             request.storage_root,
             symbols=request.symbols,
             nifty100=request.nifty100,
             refresh=request.refresh,
+            evidence_rows=rows,
         )
+        if request.retain_decision_evidence:
+            if rows is None:
+                raise ValueError("missing scanner evidence rows")
+            handle = record_scan_decision_evidence_v1(
+                request.storage_root, scan_result, rows
+            )
+            envelope: dict[str, object] = {
+                "schema": DECISION_EVIDENCE_ENVELOPE_SCHEMA,
+                "decision_evidence_handle": handle,
+                "scan": scan_result,
+            }
+            if request.output == "table":
+                sys.stdout.write(
+                    format_scan_table(scan_result)
+                    + f"\nDECISION EVIDENCE HANDLE: {handle}\n"
+                )
+            else:
+                _write(envelope)
+            return 0
         if request.output == "table":
             sys.stdout.write(format_scan_table(scan_result) + "\n")
         else:
@@ -283,6 +350,19 @@ def _run_scan(request: _ScanRequest) -> int:
         return 0
     except Exception:  # noqa: BLE001 - closed CLI error boundary
         _write(_unavailable(SCAN_SCHEMA))
+        return 1
+
+
+def _run_read_decision_evidence(request: _ReadDecisionEvidenceRequest) -> int:
+    try:
+        _write(
+            read_scan_decision_evidence_v1(
+                request.storage_root, request.decision_evidence
+            )
+        )
+        return 0
+    except Exception:  # noqa: BLE001 - closed CLI error boundary
+        _write(_decision_evidence_unavailable())
         return 1
 
 

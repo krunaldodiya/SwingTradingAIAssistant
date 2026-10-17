@@ -102,8 +102,13 @@ Milestone 49, and [PR #312](https://github.com/krunaldodiya/SwingTradingAIAssist
 It packaged the First Usable Release: end-to-end onboarding, workflow guidance,
 AI assistant prompt templates, and release documentation (closing G10).
 
-With G01, G02, G03, G04, G05, G06, G07, G08, and G10 delivered, the finite gap ledger
-has **3 remaining outcomes (G09, G11, G12)**.
+**Sprint 59 is delivered** through [Issue #316](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/316)
+and [Plan 73](plans/73-paper-observation-tracking-registry.md). It implemented the
+paper-observation registry and forward candidate monitoring, closing G11 without
+real-money execution or a performance claim.
+
+With G01, G02, G03, G04, G05, G06, G07, G08, G10, and G11 delivered, the finite gap ledger
+has **2 remaining outcomes (G09, G12)**.
 The still-open [Issue #250](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/250)
 is a separate hosted-CI recovery obligation; it neither reopens a product outcome
 nor permits local-CI fallback.
@@ -114,9 +119,8 @@ This reorganizes execution without changing the original gap count or evidence.
 | Delivery group | Combined remaining outcomes | Usable result / dependency |
 | --- | --- | --- |
 | Practical research workflow | G05, G08, descriptive portion of G10 | Record/revisit/compare observations with actual-source qualification and instructions; no actionable claim. Sprint51 is the first working slice. |
-| Supported signal decisions | G03, G04, G07 | Accepted safety evidence, causal policy and necessary analytical coverage; implement only after their real source/criteria prerequisites. |
-| Complete suggestions release | G06, G09, final G10 | Checked AI interpretation, required historical/AI evidence and integrated default/explicit-list release after affected safety/policy dependencies. |
-| Observation and phase audit | G11, G12 | Authorized paper observations, measured improvement and complete phase evidence after qualified first use. |
+| Historical/AI qualification | G09 | Source-bound historical and AI evidence before a decision-support claim. |
+| Observation and phase audit | G12 | Complete phase evidence after qualified paper observation. |
 
 These are four delivery groups, not four promised sprints. G10 has intermediate
 and final acceptance in two groups and is counted only once. Working-path

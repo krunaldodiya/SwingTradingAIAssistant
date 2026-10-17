@@ -563,7 +563,7 @@ def _scan_stock(  # noqa: C901 - multi-family screening and anti-manipulation ga
     industry: str,
     benchmark_median_return: Decimal,
     retained_handle: str | None = None,
-) -> tuple[dict[str, object], bool, str, str | None, str | None, str]:
+) -> tuple[dict[str, object], bool, str, str | None, str | None, str, str | None]:
     """Execute single-stock structure observation, safety eligibility, and brief generation."""
     try:
         if retained_handle is not None and not refresh:
@@ -599,6 +599,7 @@ def _scan_stock(  # noqa: C901 - multi-family screening and anti-manipulation ga
             None,
             "OBSERVATION_OR_PROVIDER_UNAVAILABLE",
             "INSUFFICIENT_STRUCTURE",
+            None,
         )
 
     safety_status = str(elig_result.get("status", "UNKNOWN"))
@@ -670,7 +671,7 @@ def _scan_stock(  # noqa: C901 - multi-family screening and anti-manipulation ga
                 eligibility_result=elig_result,
             )
     is_candidate = decision == "RESEARCH_CANDIDATE"
-    return brief, is_candidate, safety_status, price_inr, failed_rule, trend
+    return brief, is_candidate, safety_status, price_inr, failed_rule, trend, handle
 
 
 def _resolve_target_symbols(
@@ -756,6 +757,7 @@ def scan_signal_decisions_v3(  # noqa: C901 - lifecycle orchestration
     nifty100: bool = False,
     refresh: bool = False,
     clock: Callable[[], datetime] | None = None,
+    evidence_rows: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     """Scan Nifty 100 or explicit equities integrating all 7 research families."""
     if not storage_root.is_absolute():
@@ -786,7 +788,15 @@ def scan_signal_decisions_v3(  # noqa: C901 - lifecycle orchestration
 
     for symbol in target_symbols:
         ind = industry_map.get(symbol, "Unknown")
-        brief, is_cand, safety_status, price_inr, failed_rule, trend = _scan_stock(
+        (
+            brief,
+            is_cand,
+            safety_status,
+            price_inr,
+            failed_rule,
+            trend,
+            observation_handle,
+        ) = _scan_stock(
             symbol,
             storage_root,
             refresh,
@@ -795,6 +805,15 @@ def scan_signal_decisions_v3(  # noqa: C901 - lifecycle orchestration
             retained_handles.get(symbol),
         )
         trends.append(trend)
+        if evidence_rows is not None:
+            evidence_rows.append(
+                {
+                    "symbol": symbol,
+                    "decision": brief["decision"],
+                    "safety_status": safety_status,
+                    "observation_handle": observation_handle,
+                }
+            )
 
         if safety_status == "ELIGIBLE":
             eligible_count += 1
