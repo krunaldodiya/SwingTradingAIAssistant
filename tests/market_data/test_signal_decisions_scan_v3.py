@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from datetime import date
 from decimal import Decimal
 from pathlib import Path
 from typing import cast
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 from test_current_stock_research import _NOW
 from test_stock_eligibility_v3 import (
@@ -24,6 +27,7 @@ from swing_trading_ai_assistant.market_data.signal_decisions_scan_v3 import (
     BRIEF_SCHEMA,
     SCAN_SCHEMA,
     _evaluate_anti_manipulation_safety,
+    _load_historical_bars_for_symbol,
     format_scan_table,
     scan_signal_decisions_v3,
 )
@@ -35,6 +39,88 @@ from swing_trading_ai_assistant.market_data.stock_observations import (
 )
 
 _SYMBOL = "RELIANCE"
+
+
+def _write_adjusted_day_bars(storage_root: Path, rows: list[dict[str, object]]) -> None:
+    directory = storage_root / "adjusted_daily" / "provider=bharatstock" / "request-a"
+    directory.mkdir(parents=True, exist_ok=True)
+    table = pa.table(
+        {
+            "symbol": [row["symbol"] for row in rows],
+            "session": [row["session"] for row in rows],
+            "open": [row["open"] for row in rows],
+            "high": [row["high"] for row in rows],
+            "low": [row["low"] for row in rows],
+            "close": [row["close"] for row in rows],
+            "volume": [row["volume"] for row in rows],
+        }
+    )
+    pq.write_table(table, directory / "data.parquet")
+
+
+def test_load_historical_bars_filters_to_requested_symbol(tmp_path: Path) -> None:
+    first = date(2026, 10, 12)
+    second = date(2026, 10, 13)
+    _write_adjusted_day_bars(
+        tmp_path,
+        [
+            {
+                "symbol": "ALPHA",
+                "session": first,
+                "open": 100,
+                "high": 110,
+                "low": 90,
+                "close": 105,
+                "volume": 1_000,
+            },
+            {
+                "symbol": "ALPHA",
+                "session": second,
+                "open": 105,
+                "high": 115,
+                "low": 95,
+                "close": 112,
+                "volume": 2_000,
+            },
+            {
+                "symbol": "ZULU",
+                "session": first,
+                "open": 500,
+                "high": 510,
+                "low": 490,
+                "close": 505,
+                "volume": 5_000,
+            },
+            {
+                "symbol": "ZULU",
+                "session": second,
+                "open": 505,
+                "high": 515,
+                "low": 495,
+                "close": 512,
+                "volume": 6_000,
+            },
+        ],
+    )
+
+    bars = _load_historical_bars_for_symbol(tmp_path, "ALPHA")
+
+    assert bars == {
+        first: {
+            "open": Decimal("100"),
+            "high": Decimal("110"),
+            "low": Decimal("90"),
+            "close": Decimal("105"),
+            "volume": 1_000,
+        },
+        second: {
+            "open": Decimal("105"),
+            "high": Decimal("115"),
+            "low": Decimal("95"),
+            "close": Decimal("112"),
+            "volume": 2_000,
+        },
+    }
 
 
 def test_scan_signal_decisions_v3_returns_valid_schema(
@@ -212,6 +298,21 @@ def test_cli_scan_subcommand_json_and_table(
     captured_table = capsys.readouterr()
     assert code_table == 0
     assert "SWING TRADING CANDIDATE SCAN" in captured_table.out
+
+
+def test_cli_rejects_explicit_bound_plus_one_before_scan(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    argv = ["scan", "--storage-root", str(tmp_path)]
+    for index in range(101):
+        argv.extend(["--symbol", f"DEMO{index}"])
+
+    code = cli_main(argv)
+    captured = capsys.readouterr()
+
+    assert code == 2
+    assert captured.err == "request_invalid\n"
+    assert captured.out == ""
 
 
 def test_anti_manipulation_safety_filters() -> None:

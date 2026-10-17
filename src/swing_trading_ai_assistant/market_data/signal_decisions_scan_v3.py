@@ -158,17 +158,25 @@ def _load_historical_bars_for_symbol(
             lows = table["low"].to_pylist()
             closes = table["close"].to_pylist()
             volumes = table["volume"].to_pylist()
-            for s, bar_open, bar_high, bar_low, bar_close, bar_vol in zip(
-                sessions, opens, highs, lows, closes, volumes, strict=False
+            for s, row_symbol, bar_open, bar_high, bar_low, bar_close, bar_vol in zip(
+                sessions,
+                symbols_col,
+                opens,
+                highs,
+                lows,
+                closes,
+                volumes,
+                strict=False,
             ):
-                if isinstance(s, date):
-                    bars[s] = {
-                        "open": Decimal(str(bar_open)),
-                        "high": Decimal(str(bar_high)),
-                        "low": Decimal(str(bar_low)),
-                        "close": Decimal(str(bar_close)),
-                        "volume": int(bar_vol),
-                    }
+                if row_symbol != symbol or not isinstance(s, date):
+                    continue
+                bars[s] = {
+                    "open": Decimal(str(bar_open)),
+                    "high": Decimal(str(bar_high)),
+                    "low": Decimal(str(bar_low)),
+                    "close": Decimal(str(bar_close)),
+                    "volume": int(bar_vol),
+                }
         except (OSError, ValueError):
             continue
     return bars
@@ -563,7 +571,7 @@ def _scan_stock(  # noqa: C901 - multi-family screening and anti-manipulation ga
     industry: str,
     benchmark_median_return: Decimal,
     retained_handle: str | None = None,
-) -> tuple[dict[str, object], bool, str, str | None, str | None, str]:
+) -> tuple[dict[str, object], bool, str, str | None, str | None, str, str | None]:
     """Execute single-stock structure observation, safety eligibility, and brief generation."""
     try:
         if retained_handle is not None and not refresh:
@@ -599,6 +607,7 @@ def _scan_stock(  # noqa: C901 - multi-family screening and anti-manipulation ga
             None,
             "OBSERVATION_OR_PROVIDER_UNAVAILABLE",
             "INSUFFICIENT_STRUCTURE",
+            None,
         )
 
     safety_status = str(elig_result.get("status", "UNKNOWN"))
@@ -670,7 +679,7 @@ def _scan_stock(  # noqa: C901 - multi-family screening and anti-manipulation ga
                 eligibility_result=elig_result,
             )
     is_candidate = decision == "RESEARCH_CANDIDATE"
-    return brief, is_candidate, safety_status, price_inr, failed_rule, trend
+    return brief, is_candidate, safety_status, price_inr, failed_rule, trend, handle
 
 
 def _resolve_target_symbols(
@@ -756,6 +765,7 @@ def scan_signal_decisions_v3(  # noqa: C901 - lifecycle orchestration
     nifty100: bool = False,
     refresh: bool = False,
     clock: Callable[[], datetime] | None = None,
+    evidence_rows: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     """Scan Nifty 100 or explicit equities integrating all 7 research families."""
     if not storage_root.is_absolute():
@@ -786,7 +796,15 @@ def scan_signal_decisions_v3(  # noqa: C901 - lifecycle orchestration
 
     for symbol in target_symbols:
         ind = industry_map.get(symbol, "Unknown")
-        brief, is_cand, safety_status, price_inr, failed_rule, trend = _scan_stock(
+        (
+            brief,
+            is_cand,
+            safety_status,
+            price_inr,
+            failed_rule,
+            trend,
+            observation_handle,
+        ) = _scan_stock(
             symbol,
             storage_root,
             refresh,
@@ -795,6 +813,15 @@ def scan_signal_decisions_v3(  # noqa: C901 - lifecycle orchestration
             retained_handles.get(symbol),
         )
         trends.append(trend)
+        if evidence_rows is not None:
+            evidence_rows.append(
+                {
+                    "symbol": symbol,
+                    "decision": brief["decision"],
+                    "safety_status": safety_status,
+                    "observation_handle": observation_handle,
+                }
+            )
 
         if safety_status == "ELIGIBLE":
             eligible_count += 1
@@ -823,9 +850,10 @@ def scan_signal_decisions_v3(  # noqa: C901 - lifecycle orchestration
     nifty100_candidate_count: int | None = None
     fallback_triggered = False
     if nifty100_symbols:
+        all_candidates = list(candidates)
         nifty100_candidates = [
             candidate
-            for candidate in candidates
+            for candidate in all_candidates
             if str(candidate["symbol"]) in nifty100_symbols
         ]
         nifty100_candidate_count = len(nifty100_candidates)
@@ -835,13 +863,28 @@ def scan_signal_decisions_v3(  # noqa: C901 - lifecycle orchestration
                 nifty100_candidates
                 + [
                     candidate
-                    for candidate in candidates
+                    for candidate in all_candidates
                     if str(candidate["symbol"]) not in nifty100_symbols
                 ]
             )[:10]
         else:
             candidates = nifty100_candidates[:10]
-
+        selected_symbols = {str(candidate["symbol"]) for candidate in candidates}
+        for candidate in all_candidates:
+            if str(candidate["symbol"]) in selected_symbols:
+                continue
+            summary = cast(dict[str, object], candidate.get("candidate_summary") or {})
+            safety = cast(dict[str, object], candidate.get("safety_eligibility") or {})
+            other_stocks.append(
+                {
+                    "symbol": candidate["symbol"],
+                    "industry": summary.get("industry", "Unknown"),
+                    "decision": candidate["decision"],
+                    "safety_status": safety.get("status"),
+                    "failed_rule": "BASKET_CAPACITY_OR_NIFTY100_PRIORITY",
+                    "current_price_inr": summary.get("current_price_inr"),
+                }
+            )
     # Attach sector peer participation to each candidate
     for c in candidates:
         summary = cast(dict[str, object], c.get("candidate_summary", {}))
@@ -878,6 +921,7 @@ def scan_signal_decisions_v3(  # noqa: C901 - lifecycle orchestration
         "market_regime": market_regime,
         "benchmark_median_return_20d": f"{benchmark_median:+.2f}%",
         "total_stocks_scanned": len(target_symbols),
+        "evaluated_symbols": list(target_symbols),
         "candidate_count": len(candidates),
         "eligible_count": eligible_count,
         "ineligible_count": ineligible_count,

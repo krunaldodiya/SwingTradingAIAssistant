@@ -51,6 +51,34 @@ doppler run -- signal-decisions scan \
 * `--output json`: Compact canonical JSON adhering to `swing-trade-scan@v1` for automated ingestion.
 * `--refresh`: Optional flag to force re-acquisition of the latest daily bars from BharatStock.
 
+
+### D. Retain exact decision evidence for later qualification
+
+Use `--retain-decision-evidence` when a scan must be retained as an immutable
+private input to later historical or AI qualification:
+
+```bash
+doppler run -- signal-decisions scan \
+  --storage-root /absolute/path/to/SwingTradingAIAssistantData \
+  --symbol INFY \
+  --retain-decision-evidence \
+  --output json
+```
+
+The response is a `scan-decision-evidence-envelope@v1` containing the unchanged
+`swing-trade-scan@v1` result and a `decision_evidence_handle`. Read that exact
+record later without a provider call:
+
+```bash
+signal-decisions read-decision-evidence \
+  --storage-root /absolute/path/to/SwingTradingAIAssistantData \
+  --decision-evidence HANDLE \
+  --output json
+```
+
+The readback rejects altered, missing, substituted, or incompatible retained
+observations. It is evidence retention only—not historical replay, an AI-model
+evaluation, a performance/profit claim, execution-cost evidence, or trading advice.
 ---
 
 ## 3. Terminal Table Output Example
