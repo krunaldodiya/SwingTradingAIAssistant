@@ -19,6 +19,12 @@ _FILENAME: Final = "nifty100-nifty500.json"
 _HEADERS: Final = ("Company Name", "Industry", "Symbol", "Series", "ISIN Code")
 _SHA256: Final = re.compile(r"[0-9a-f]{64}\Z")
 _OFFICIAL_HOST: Final = "nsearchives.nseindia.com"
+_NIFTY100_URL: Final = (
+    "https://nsearchives.nseindia.com/content/indices/ind_nifty100list.csv"
+)
+_NIFTY500_URL: Final = (
+    "https://nsearchives.nseindia.com/content/indices/ind_nifty500list.csv"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,9 +48,14 @@ def _digest(raw: bytes) -> str:
     return hashlib.sha256(raw).hexdigest()
 
 
-def _official_url(value: str) -> str:
+def _official_url(value: str, expected: str) -> str:
     parsed = urlparse(value)
-    if parsed.scheme != "https" or parsed.hostname != _OFFICIAL_HOST or not parsed.path:
+    if (
+        value != expected
+        or parsed.scheme != "https"
+        or parsed.hostname != _OFFICIAL_HOST
+        or not parsed.path
+    ):
         raise ValueError("official constituent source URL is invalid")
     return value
 
@@ -95,8 +106,8 @@ def build_historic_nifty_universe(
         nifty500=nifty500,
         window_start=window_start,
         window_end=window_end,
-        nifty100_source_url=_official_url(nifty100_source_url),
-        nifty500_source_url=_official_url(nifty500_source_url),
+        nifty100_source_url=_official_url(nifty100_source_url, _NIFTY100_URL),
+        nifty500_source_url=_official_url(nifty500_source_url, _NIFTY500_URL),
         retrieved_at=retrieved_at,
         nifty100_source_sha256=_digest(nifty100_csv),
         nifty500_source_sha256=_digest(nifty500_csv),
