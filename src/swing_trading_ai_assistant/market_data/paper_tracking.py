@@ -161,15 +161,21 @@ def _load_historical_bars_for_symbol(
             highs = table["high"].to_pylist()
             lows = table["low"].to_pylist()
             closes = table["close"].to_pylist()
-            for s, bar_high, bar_low, bar_close in zip(
-                sessions, highs, lows, closes, strict=False
+            for s, row_symbol, bar_high, bar_low, bar_close in zip(
+                sessions,
+                symbols_col,
+                highs,
+                lows,
+                closes,
+                strict=False,
             ):
-                if isinstance(s, date):
-                    bars[s] = {
-                        "high": Decimal(str(bar_high)),
-                        "low": Decimal(str(bar_low)),
-                        "close": Decimal(str(bar_close)),
-                    }
+                if row_symbol != symbol or not isinstance(s, date):
+                    continue
+                bars[s] = {
+                    "high": Decimal(str(bar_high)),
+                    "low": Decimal(str(bar_low)),
+                    "close": Decimal(str(bar_close)),
+                }
         except (OSError, ValueError):
             continue
     return bars
