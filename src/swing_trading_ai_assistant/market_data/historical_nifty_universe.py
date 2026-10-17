@@ -1,35 +1,52 @@
-"""Validated retained Nifty 100/Nifty 500 membership for one decision window."""
+"""Verified retained Nifty 100/Nifty 500 membership for one decision window."""
 
 from __future__ import annotations
 
+import base64
 import csv
 import hashlib
 import json
+import re
 from dataclasses import dataclass
-from datetime import date
+from datetime import UTC, date, datetime
 from io import StringIO
 from pathlib import Path
 from typing import Final, cast
+from urllib.parse import urlparse
 
-_SCHEMA: Final = "historical-nifty-universe@v1"
-_FILENAME: Final = "historical-nifty100-nifty500.json"
+_SCHEMA: Final = "retained-nifty-universe@v2"
+_FILENAME: Final = "nifty100-nifty500.json"
 _HEADERS: Final = ("Company Name", "Industry", "Symbol", "Series", "ISIN Code")
+_SHA256: Final = re.compile(r"[0-9a-f]{64}\Z")
+_OFFICIAL_HOST: Final = "nsearchives.nseindia.com"
 
 
 @dataclass(frozen=True, slots=True)
 class HistoricNiftyUniverse:
-    """Official Nifty memberships and their shared data window."""
+    """Verified official memberships and their shared retained OHLCV window."""
 
     nifty100: tuple[str, ...]
     nifty500: tuple[str, ...]
     window_start: date
     window_end: date
+    nifty100_source_url: str
+    nifty500_source_url: str
+    retrieved_at: datetime
     nifty100_source_sha256: str
     nifty500_source_sha256: str
+    nifty100_source_csv: bytes
+    nifty500_source_csv: bytes
 
 
 def _digest(raw: bytes) -> str:
     return hashlib.sha256(raw).hexdigest()
+
+
+def _official_url(value: str) -> str:
+    parsed = urlparse(value)
+    if parsed.scheme != "https" or parsed.hostname != _OFFICIAL_HOST or not parsed.path:
+        raise ValueError("official constituent source URL is invalid")
+    return value
 
 
 def _symbols(raw: bytes, *, expected_counts: frozenset[int]) -> tuple[str, ...]:
@@ -55,14 +72,20 @@ def build_historic_nifty_universe(
     *,
     window_start: date,
     window_end: date,
+    nifty100_source_url: str,
+    nifty500_source_url: str,
+    retrieved_at: datetime,
 ) -> HistoricNiftyUniverse:
-    """Validate two retained official snapshots for one exact OHLCV window."""
+    """Validate retained official snapshots before they can drive a scan."""
     if (
         type(window_start) is not date
         or type(window_end) is not date
         or window_start > window_end
+        or type(retrieved_at) is not datetime
+        or retrieved_at.tzinfo is None
+        or retrieved_at.utcoffset() != UTC.utcoffset(retrieved_at)
     ):
-        raise ValueError("data window is invalid")
+        raise ValueError("universe evidence time is invalid")
     nifty100 = _symbols(nifty100_csv, expected_counts=frozenset((100,)))
     nifty500 = _symbols(nifty500_csv, expected_counts=frozenset((500, 501)))
     if not set(nifty100).issubset(nifty500):
@@ -72,16 +95,39 @@ def build_historic_nifty_universe(
         nifty500=nifty500,
         window_start=window_start,
         window_end=window_end,
+        nifty100_source_url=_official_url(nifty100_source_url),
+        nifty500_source_url=_official_url(nifty500_source_url),
+        retrieved_at=retrieved_at,
         nifty100_source_sha256=_digest(nifty100_csv),
         nifty500_source_sha256=_digest(nifty500_csv),
+        nifty100_source_csv=nifty100_csv,
+        nifty500_source_csv=nifty500_csv,
     )
 
 
 def _payload(universe: HistoricNiftyUniverse) -> dict[str, object]:
+    verified = build_historic_nifty_universe(
+        universe.nifty100_source_csv,
+        universe.nifty500_source_csv,
+        window_start=universe.window_start,
+        window_end=universe.window_end,
+        nifty100_source_url=universe.nifty100_source_url,
+        nifty500_source_url=universe.nifty500_source_url,
+        retrieved_at=universe.retrieved_at,
+    )
+    if verified != universe:
+        raise ValueError("universe evidence does not match its official source bytes")
     return {
         "schema": _SCHEMA,
-        "nifty100": list(universe.nifty100),
-        "nifty500": list(universe.nifty500),
+        "nifty100_source_csv_base64": base64.b64encode(
+            universe.nifty100_source_csv
+        ).decode(),
+        "nifty500_source_csv_base64": base64.b64encode(
+            universe.nifty500_source_csv
+        ).decode(),
+        "nifty100_source_url": universe.nifty100_source_url,
+        "nifty500_source_url": universe.nifty500_source_url,
+        "retrieved_at": universe.retrieved_at.isoformat().replace("+00:00", "Z"),
         "window_start": universe.window_start.isoformat(),
         "window_end": universe.window_end.isoformat(),
         "nifty100_source_sha256": universe.nifty100_source_sha256,
@@ -90,28 +136,26 @@ def _payload(universe: HistoricNiftyUniverse) -> dict[str, object]:
 
 
 def retain_historic_nifty_universe(root: Path, universe: HistoricNiftyUniverse) -> Path:
-    """Persist a reviewed, immutable membership manifest beside private data."""
+    """Persist immutable source bytes and derived memberships beside private data."""
     if not root.is_absolute():
         raise ValueError("storage root is invalid")
     directory = root / "universe_snapshots"
     directory.mkdir(parents=True, exist_ok=True)
     destination = directory / _FILENAME
     raw = (
-        json.dumps(_payload(universe), sort_keys=True, separators=(",", ":")).encode(
-            "utf-8"
-        )
+        json.dumps(_payload(universe), sort_keys=True, separators=(",", ":")).encode()
         + b"\n"
     )
     if destination.exists():
         if destination.read_bytes() != raw:
-            raise ValueError("historic universe manifest already differs")
+            raise ValueError("retained universe manifest already differs")
         return destination
     destination.write_bytes(raw)
     return destination
 
 
 def read_historic_nifty_universe(root: Path) -> HistoricNiftyUniverse:
-    """Read the exact retained membership manifest; never infer membership from data batches."""
+    """Recompute memberships from retained official source bytes before scanning."""
     if not root.is_absolute():
         raise ValueError("storage root is invalid")
     try:
@@ -119,56 +163,64 @@ def read_historic_nifty_universe(root: Path) -> HistoricNiftyUniverse:
         if not isinstance(raw_value, dict):
             raise ValueError
         value = cast(dict[str, object], raw_value)
-        if (
-            set(value)
-            != {
-                "schema",
-                "nifty100",
-                "nifty500",
-                "window_start",
-                "window_end",
-                "nifty100_source_sha256",
-                "nifty500_source_sha256",
-            }
-            or value["schema"] != _SCHEMA
-        ):
+        required = {
+            "schema",
+            "nifty100_source_csv_base64",
+            "nifty500_source_csv_base64",
+            "nifty100_source_url",
+            "nifty500_source_url",
+            "retrieved_at",
+            "window_start",
+            "window_end",
+            "nifty100_source_sha256",
+            "nifty500_source_sha256",
+        }
+        if set(value) != required or value["schema"] != _SCHEMA:
             raise ValueError
-        raw_n100 = value["nifty100"]
-        raw_n500 = value["nifty500"]
-        start = value["window_start"]
-        end = value["window_end"]
-        n100_hash = value["nifty100_source_sha256"]
-        n500_hash = value["nifty500_source_sha256"]
-        if not isinstance(raw_n100, list) or not isinstance(raw_n500, list):
-            raise ValueError
-        n100_items = cast(list[object], raw_n100)
-        n500_items = cast(list[object], raw_n500)
-        if (
-            not all(type(item) is str for item in n100_items)
-            or not all(type(item) is str for item in n500_items)
-            or type(start) is not str
-            or type(end) is not str
-            or type(n100_hash) is not str
-            or type(n500_hash) is not str
-        ):
-            raise ValueError
-        universe = HistoricNiftyUniverse(
-            nifty100=tuple(cast(list[str], raw_n100)),
-            nifty500=tuple(cast(list[str], raw_n500)),
-            window_start=date.fromisoformat(start),
-            window_end=date.fromisoformat(end),
-            nifty100_source_sha256=n100_hash,
-            nifty500_source_sha256=n500_hash,
+        source_keys = (
+            "nifty100_source_csv_base64",
+            "nifty500_source_csv_base64",
+            "nifty100_source_url",
+            "nifty500_source_url",
+            "retrieved_at",
+            "window_start",
+            "window_end",
+            "nifty100_source_sha256",
+            "nifty500_source_sha256",
         )
+        if any(type(value[key]) is not str for key in source_keys):
+            raise ValueError
+        n100_csv = base64.b64decode(
+            cast(str, value["nifty100_source_csv_base64"]), validate=True
+        )
+        n500_csv = base64.b64decode(
+            cast(str, value["nifty500_source_csv_base64"]), validate=True
+        )
+        source_hashes = (
+            cast(str, value["nifty100_source_sha256"]),
+            cast(str, value["nifty500_source_sha256"]),
+        )
+        if any(_SHA256.fullmatch(item) is None for item in source_hashes):
+            raise ValueError
+        retrieved_at = datetime.fromisoformat(
+            cast(str, value["retrieved_at"]).replace("Z", "+00:00")
+        )
+        universe = build_historic_nifty_universe(
+            n100_csv,
+            n500_csv,
+            window_start=date.fromisoformat(cast(str, value["window_start"])),
+            window_end=date.fromisoformat(cast(str, value["window_end"])),
+            nifty100_source_url=cast(str, value["nifty100_source_url"]),
+            nifty500_source_url=cast(str, value["nifty500_source_url"]),
+            retrieved_at=retrieved_at,
+        )
+        if source_hashes != (
+            universe.nifty100_source_sha256,
+            universe.nifty500_source_sha256,
+        ):
+            raise ValueError
     except (OSError, TypeError, ValueError, json.JSONDecodeError):
-        raise ValueError("historic Nifty universe evidence is unavailable") from None
-    if (
-        len(universe.nifty100) != 100
-        or len(universe.nifty500) not in {500, 501}
-        or len(set(universe.nifty100)) != 100
-        or len(set(universe.nifty500)) != len(universe.nifty500)
-        or len(universe.nifty100_source_sha256) != 64
-        or len(universe.nifty500_source_sha256) != 64
-    ):
-        raise ValueError("historic Nifty universe evidence is invalid")
+        raise ValueError(
+            "retained official Nifty universe evidence is unavailable"
+        ) from None
     return universe

@@ -681,15 +681,7 @@ def _resolve_target_symbols(
     if nifty100:
         if symbols is not None:
             raise ValueError("cannot supply both explicit symbols and nifty100 flag")
-        try:
-            universe = read_historic_nifty_universe(storage_root)
-        except ValueError:
-            return (
-                resolve_nifty100_symbols(storage_root),
-                "NIFTY_100",
-                frozenset(),
-                None,
-            )
+        universe = read_historic_nifty_universe(storage_root)
         return (
             universe.nifty500,
             "NIFTY_100_PRIORITY_NIFTY_500",
@@ -697,6 +689,9 @@ def _resolve_target_symbols(
             {
                 "nifty100_source_sha256": universe.nifty100_source_sha256,
                 "nifty500_source_sha256": universe.nifty500_source_sha256,
+                "nifty100_source_url": universe.nifty100_source_url,
+                "nifty500_source_url": universe.nifty500_source_url,
+                "retrieved_at": universe.retrieved_at.isoformat(),
                 "window_start": universe.window_start.isoformat(),
                 "window_end": universe.window_end.isoformat(),
             },
