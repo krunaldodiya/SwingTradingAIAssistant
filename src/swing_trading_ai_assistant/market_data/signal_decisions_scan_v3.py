@@ -897,6 +897,7 @@ def scan_signal_decisions_v3(  # noqa: C901 - lifecycle orchestration
         "market_regime": market_regime,
         "benchmark_median_return_20d": f"{benchmark_median:+.2f}%",
         "total_stocks_scanned": len(target_symbols),
+        "evaluated_symbols": list(target_symbols),
         "candidate_count": len(candidates),
         "eligible_count": eligible_count,
         "ineligible_count": ineligible_count,

@@ -11,6 +11,9 @@ from typing import Final, cast
 
 from . import capture_forward_adjusted_ohlcv as private_store
 from . import current_stock_research as legacy
+from .signal_decisions_scan_v3 import (
+    _runtime_identity as _scanner_runtime_identity,  # pyright: ignore[reportPrivateUsage]
+)
 from .stock_observations import read_stock_observation_v1
 from .storage_root_lease import StorageRootLease
 
@@ -19,6 +22,30 @@ ENVELOPE_SCHEMA: Final = "scan-decision-evidence-envelope@v1"
 _NAMESPACE: Final = "scan-decision-evidence-v1"
 _DIGEST: Final = re.compile(r"[0-9a-f]{64}\Z")
 _MAX_BYTES: Final = 4 * 1024 * 1024
+_MAX_DEPTH: Final = 64
+_SCAN_KEYS: Final = frozenset(
+    {
+        "schema",
+        "scan_timestamp",
+        "storage_root_sha256",
+        "universe_type",
+        "universe_evidence",
+        "nifty100_validated_candidate_count",
+        "nifty500_fallback_triggered",
+        "market_regime",
+        "benchmark_median_return_20d",
+        "total_stocks_scanned",
+        "evaluated_symbols",
+        "candidate_count",
+        "eligible_count",
+        "ineligible_count",
+        "unknown_count",
+        "candidates",
+        "other_stocks",
+        "runtime_code_identity_sha256",
+        "result_identity_sha256",
+    }
+)
 
 
 class ScanDecisionEvidenceUnavailable(ValueError):
@@ -51,7 +78,19 @@ def _closed(raw: bytes) -> dict[str, object]:
     value = cast(dict[str, object], parsed)
     if _canonical(value) != raw:
         raise ValueError("noncanonical record")
+    _depth(value)
     return value
+
+
+def _depth(value: object, level: int = 0) -> None:
+    if level > _MAX_DEPTH:
+        raise ValueError("record too deep")
+    if type(value) is dict:
+        for child in cast(dict[str, object], value).values():
+            _depth(child, level + 1)
+    elif type(value) is list:
+        for child in cast(list[object], value):
+            _depth(child, level + 1)
 
 
 def _lease(root: object) -> StorageRootLease:
@@ -67,52 +106,119 @@ def _validate_scan(scan: object) -> dict[str, object]:
     if type(scan) is not dict:
         raise ValueError("invalid scan")
     value = cast(dict[str, object], scan)
+    if set(value) != set(_SCAN_KEYS):
+        raise ValueError("invalid scan schema")
+    if value.get("runtime_code_identity_sha256") != _scanner_runtime_identity():
+        raise ValueError("scanner runtime mismatch")
     identity = value.get("result_identity_sha256")
     if type(identity) is not str or _DIGEST.fullmatch(identity) is None:
         raise ValueError("invalid scan identity")
     unsigned = dict(value)
-    unsigned.pop("result_identity_sha256", None)
-    if _digest(unsigned) != identity or value.get("schema") != "swing-trade-scan@v1":
+    unsigned.pop("result_identity_sha256")
+    if _digest(unsigned) != identity or value["schema"] != "swing-trade-scan@v1":
         raise ValueError("unadmitted scan")
     return value
 
 
-def _rows(root: Path, scan: dict[str, object], rows: object) -> list[dict[str, object]]:
-    if type(rows) is not list or not rows:
+def _rows(  # noqa: C901 - complete fail-closed evidence binding
+    root: Path, scan: dict[str, object], rows: object
+) -> list[dict[str, object]]:
+    raw_symbols = scan.get("evaluated_symbols")
+    raw_candidates = scan.get("candidates")
+    raw_other = scan.get("other_stocks")
+    if (
+        type(rows) is not list
+        or type(raw_symbols) is not list
+        or type(raw_candidates) is not list
+        or type(raw_other) is not list
+    ):
         raise ValueError("invalid evidence rows")
-    expected: dict[str, tuple[str, str]] = {}
-    for item in cast(list[object], rows):
+    symbols = cast(list[object], raw_symbols)
+    candidates = cast(list[object], raw_candidates)
+    other = cast(list[object], raw_other)
+    evidence_rows = cast(list[object], rows)
+    if len(symbols) != scan.get("total_stocks_scanned"):
+        raise ValueError("invalid evidence rows")
+    outcomes: dict[str, tuple[str, str]] = {}
+    for item in candidates:
+        if type(item) is not dict:
+            raise ValueError("invalid candidate")
+        candidate = cast(dict[str, object], item)
+        symbol = candidate.get("symbol")
+        decision = candidate.get("decision")
+        safety = candidate.get("safety_eligibility")
+        if (
+            type(symbol) is not str
+            or type(decision) is not str
+            or type(safety) is not dict
+        ):
+            raise ValueError("invalid candidate")
+        safety_value = cast(dict[str, object], safety)
+        status = safety_value.get("status")
+        if type(status) is not str:
+            raise ValueError("invalid candidate")
+        outcomes[symbol] = (decision, status)
+    for item in other:
+        if type(item) is not dict:
+            raise ValueError("invalid stock")
+        stock = cast(dict[str, object], item)
+        symbol = stock.get("symbol")
+        decision = stock.get("decision")
+        safety = stock.get("safety_status")
+        if (
+            type(symbol) is not str
+            or type(decision) is not str
+            or type(safety) is not str
+        ):
+            raise ValueError("invalid stock")
+        outcomes[symbol] = (decision, safety)
+    if (
+        any(type(symbol) is not str for symbol in symbols)
+        or len(set(cast(list[str], symbols))) != len(symbols)
+        or set(cast(list[str], symbols)) != set(outcomes)
+    ):
+        raise ValueError("selection binding mismatch")
+    admitted: list[dict[str, object]] = []
+    for position, item in enumerate(evidence_rows):
         if type(item) is not dict:
             raise ValueError("invalid evidence row")
         row = cast(dict[str, object], item)
+        if set(row) != {"symbol", "decision", "safety_status", "observation_handle"}:
+            raise ValueError("invalid evidence row")
         symbol, decision, safety, handle = (
             row.get("symbol"),
             row.get("decision"),
             row.get("safety_status"),
             row.get("observation_handle"),
         )
-        if not all(type(value) is str for value in (symbol, decision, safety)):
-            raise ValueError("invalid evidence row")
-        if handle is not None and (
-            type(handle) is not str or _DIGEST.fullmatch(handle) is None
+        if (
+            type(symbol) is not str
+            or type(decision) is not str
+            or type(safety) is not str
+            or position >= len(symbols)
+            or symbol != symbols[position]
+            or outcomes.get(symbol) != (decision, safety)
         ):
-            raise ValueError("invalid evidence handle")
-        if cast(str, symbol) in expected:
-            raise ValueError("duplicate evidence symbol")
-        if handle is not None:
+            raise ValueError("evidence binding mismatch")
+        if handle is None:
+            if decision != "UNKNOWN" or safety != "UNKNOWN":
+                raise ValueError("terminal state mismatch")
+        else:
+            if type(handle) is not str or _DIGEST.fullmatch(handle) is None:
+                raise ValueError("invalid evidence handle")
             observation = read_stock_observation_v1(root, handle)
             if (
                 observation.question != "CURRENT_STRUCTURE"
                 or observation.symbol != symbol
             ):
                 raise ValueError("observation binding mismatch")
-        expected[cast(str, symbol)] = (cast(str, decision), cast(str, safety))
-    if len(expected) != scan.get("total_stocks_scanned"):
+        admitted.append(row)
+    if len(admitted) != len(symbols):
         raise ValueError("evidence count mismatch")
-    return [cast(dict[str, object], item) for item in cast(list[object], rows)]
+    return admitted
 
 
-def record_scan_decision_evidence_v1(
+def _record_scan_decision_evidence_v1(  # pyright: ignore[reportUnusedFunction]
     root: Path, scan: dict[str, object], rows: list[dict[str, object]]
 ) -> str:
     """Persist scanner-owned state only after every admitted observation revalidates."""
@@ -127,6 +233,7 @@ def record_scan_decision_evidence_v1(
                 "symbol_evidence": admitted_rows,
             }
         )
+        _closed(raw)
         handle = hashlib.sha256(raw).hexdigest()
         with (
             _lease(root) as lease,
@@ -176,13 +283,12 @@ def read_scan_decision_evidence_v1(root: Path, handle: str) -> dict[str, object]
             scan = _validate_scan(saved["scan"])
             if saved["scan_result_identity_sha256"] != scan["result_identity_sha256"]:
                 raise ValueError("scan binding mismatch")
-            rows = _rows(root, scan, saved["symbol_evidence"])
+            _rows(root, scan, saved["symbol_evidence"])
             directory.ensure_live()
             return {
                 "schema": ENVELOPE_SCHEMA,
                 "decision_evidence_handle": handle,
                 "scan": scan,
-                "symbol_evidence": rows,
             }
     except Exception as error:  # noqa: BLE001 - redacted public read boundary
         raise ScanDecisionEvidenceUnavailable(

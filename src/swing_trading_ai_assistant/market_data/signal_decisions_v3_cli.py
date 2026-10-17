@@ -21,9 +21,9 @@ from .paper_tracking import (
 from .scan_decision_evidence import (
     ENVELOPE_SCHEMA as DECISION_EVIDENCE_ENVELOPE_SCHEMA,
 )
-from .scan_decision_evidence import (
+from .scan_decision_evidence import (  # pyright: ignore[reportPrivateUsage]
+    _record_scan_decision_evidence_v1,  # pyright: ignore[reportPrivateUsage]
     read_scan_decision_evidence_v1,
-    record_scan_decision_evidence_v1,
 )
 from .signal_decisions import SCHEMA as V2_SCHEMA
 from .signal_decisions import evaluate_signal_decision_from_records_v2
@@ -327,7 +327,7 @@ def _run_scan(request: _ScanRequest) -> int:
         if request.retain_decision_evidence:
             if rows is None:
                 raise ValueError("missing scanner evidence rows")
-            handle = record_scan_decision_evidence_v1(
+            handle = _record_scan_decision_evidence_v1(
                 request.storage_root, scan_result, rows
             )
             envelope: dict[str, object] = {
