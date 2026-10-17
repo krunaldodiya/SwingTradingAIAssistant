@@ -150,8 +150,21 @@ def _valid_request(  # noqa: C901 - command-specific closed request validation
             getattr(args, "retain_decision_evidence", False)
         )
         symbols = tuple(symbols_raw) if symbols_raw else None
-        if output_format not in {"json", "table"}:
-            raise ValueError("invalid output format")
+        if (
+            output_format not in {"json", "table"}
+            or (nifty100 == (symbols is not None))
+            or (
+                symbols is not None
+                and (
+                    not 1 <= len(symbols) <= 100
+                    or any(
+                        re.fullmatch(r"[A-Z0-9][A-Z0-9.&_-]{0,31}", symbol) is None
+                        for symbol in symbols
+                    )
+                )
+            )
+        ):
+            raise ValueError("invalid scan request")
         return _ScanRequest(
             storage_root,
             symbols,

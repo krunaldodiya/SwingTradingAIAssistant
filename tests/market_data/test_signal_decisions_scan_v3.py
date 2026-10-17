@@ -214,6 +214,21 @@ def test_cli_scan_subcommand_json_and_table(
     assert "SWING TRADING CANDIDATE SCAN" in captured_table.out
 
 
+def test_cli_rejects_explicit_bound_plus_one_before_scan(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    argv = ["scan", "--storage-root", str(tmp_path)]
+    for index in range(101):
+        argv.extend(["--symbol", f"DEMO{index}"])
+
+    code = cli_main(argv)
+    captured = capsys.readouterr()
+
+    assert code == 2
+    assert captured.err == "request_invalid\n"
+    assert captured.out == ""
+
+
 def test_anti_manipulation_safety_filters() -> None:
     # 1. Healthy large-cap/midcap passes
     pass_ok, reason = _evaluate_anti_manipulation_safety(
