@@ -632,6 +632,36 @@ def _optional_context_from_policy(
     }
 
 
+def _retained_unselected_stocks(
+    all_candidates: Sequence[dict[str, object]],
+    selected: Sequence[dict[str, object]],
+) -> list[dict[str, object]]:
+    """Retain every policy-qualified candidate that did not fit the basket.
+
+    Basket capacity and Nifty 100 priority are selection reasons, never policy
+    failures: each unselected qualified symbol keeps its policy decision and one
+    explicit reason.
+    """
+    selected_symbols = {str(candidate["symbol"]) for candidate in selected}
+    retained: list[dict[str, object]] = []
+    for candidate in all_candidates:
+        if str(candidate["symbol"]) in selected_symbols:
+            continue
+        summary = cast(dict[str, object], candidate.get("candidate_summary") or {})
+        safety = cast(dict[str, object], candidate.get("safety_eligibility") or {})
+        retained.append(
+            {
+                "symbol": candidate["symbol"],
+                "industry": summary.get("industry", "Unknown"),
+                "decision": candidate["decision"],
+                "safety_status": safety.get("status"),
+                "failed_rule": "BASKET_CAPACITY_OR_NIFTY100_PRIORITY",
+                "current_price_inr": summary.get("current_price_inr"),
+            }
+        )
+    return retained
+
+
 def _scan_stock(  # noqa: C901 - multi-family screening and anti-manipulation gate
     symbol: str,
     storage_root: Path,
@@ -1007,22 +1037,7 @@ def scan_signal_decisions_v3(  # noqa: C901 - lifecycle orchestration
             )[:10]
         else:
             candidates = nifty100_candidates[:10]
-        selected_symbols = {str(candidate["symbol"]) for candidate in candidates}
-        for candidate in all_candidates:
-            if str(candidate["symbol"]) in selected_symbols:
-                continue
-            summary = cast(dict[str, object], candidate.get("candidate_summary") or {})
-            safety = cast(dict[str, object], candidate.get("safety_eligibility") or {})
-            other_stocks.append(
-                {
-                    "symbol": candidate["symbol"],
-                    "industry": summary.get("industry", "Unknown"),
-                    "decision": candidate["decision"],
-                    "safety_status": safety.get("status"),
-                    "failed_rule": "BASKET_CAPACITY_OR_NIFTY100_PRIORITY",
-                    "current_price_inr": summary.get("current_price_inr"),
-                }
-            )
+        other_stocks.extend(_retained_unselected_stocks(all_candidates, candidates))
     # Attach sector peer participation to each candidate
     for c in candidates:
         summary_value = c.get("candidate_summary")

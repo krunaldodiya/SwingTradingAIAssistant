@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from datetime import date, timedelta
 from decimal import Decimal
@@ -544,6 +545,13 @@ def test_scan_fails_closed_when_pair_state_is_unavailable(
     state_file.write_bytes(b"{}\n")
     os.chmod(state_file, 0o400)
 
+    def forbidden(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("pair policy must not run without admitted state")
+
+    monkeypatch.setattr(
+        scan_module, "evaluate_signal_decision_from_records_v3", forbidden
+    )
+
     result = scan_signal_decisions_v3(tmp_path, symbols=(_SYMBOL,), clock=lambda: _NOW)
 
     assert result["candidate_count"] == 0
@@ -553,3 +561,200 @@ def test_scan_fails_closed_when_pair_state_is_unavailable(
     assert rows[0]["decision"] == "UNKNOWN"
     assert rows[0]["safety_status"] == "UNKNOWN"
     assert rows[0]["failed_rule"] == "OBSERVATION_PAIR_STATE_UNAVAILABLE"
+
+
+def test_retained_unselected_candidates_expose_explicit_basket_reason() -> None:
+    selected: list[dict[str, object]] = [
+        {
+            "symbol": "ALPHA",
+            "decision": "RESEARCH_CANDIDATE",
+            "candidate_summary": {"industry": "IT", "current_price_inr": "100.00"},
+            "safety_eligibility": {"status": "ELIGIBLE"},
+        }
+    ]
+    overflow: list[dict[str, object]] = [
+        {
+            "symbol": "BETA",
+            "decision": "RESEARCH_CANDIDATE",
+            "candidate_summary": {"industry": "FMCG", "current_price_inr": "200.00"},
+            "safety_eligibility": {"status": "ELIGIBLE"},
+        }
+    ]
+
+    retained = scan_module._retained_unselected_stocks(  # pyright: ignore[reportPrivateUsage]
+        [*selected, *overflow], selected
+    )
+
+    assert retained == [
+        {
+            "symbol": "BETA",
+            "industry": "FMCG",
+            "decision": "RESEARCH_CANDIDATE",
+            "safety_status": "ELIGIBLE",
+            "failed_rule": "BASKET_CAPACITY_OR_NIFTY100_PRIORITY",
+            "current_price_inr": "200.00",
+        }
+    ]
+
+
+def test_scan_stock_anti_manipulation_rejection_agrees_with_brief_and_ledger(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    observation = cast(CurrentStockResearchResultV2, _structure_observation(tmp_path))
+    source = observation.packet.source("MARKET_STRUCTURE")
+    assert source is not None
+    _install_providers(
+        monkeypatch,
+        _Providers(
+            _quote(source.admitted_sessions[-1]),
+            _history(observation),
+            _actions(observation),
+        ),
+    )
+    monkeypatch.setattr(
+        scan_module, "research_current_stock_v2", lambda *_args, **_kwargs: observation
+    )
+
+    brief, is_candidate, safety_status, _price, failed_rule, _trend, handle = (
+        scan_module._scan_stock(  # pyright: ignore[reportPrivateUsage]
+            _SYMBOL, tmp_path, False, "Testing", Decimal("0")
+        )
+    )
+
+    assert is_candidate is False
+    assert safety_status == "INELIGIBLE"
+    assert brief["decision"] == "NO_TRADE"
+    eligibility = cast(dict[str, object], brief["safety_eligibility"])
+    assert eligibility["status"] == "INELIGIBLE"
+    ledger = cast(list[dict[str, object]], eligibility["explanation_ledger"])
+    failed = [entry for entry in ledger if entry["outcome"] == "FAIL"]
+    assert len(failed) == 1
+    assert failed[0]["rule_id"] == failed_rule
+    assert str(failed_rule).startswith("ILLIQUID_SMALLCAP_EXCLUDED")
+    assert handle is not None
+    state = read_scanner_pair_state_v1(tmp_path, _SYMBOL)
+    assert state is not None
+    assert state.sequence == 1
+
+
+def test_scan_preserves_every_requested_symbol_exactly_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    observation = cast(CurrentStockResearchResultV2, _structure_observation(tmp_path))
+    source = observation.packet.source("MARKET_STRUCTURE")
+    assert source is not None
+    _install_providers(
+        monkeypatch,
+        _Providers(
+            _quote(source.admitted_sessions[-1]),
+            _history(observation, volume=3_000_000),
+            _actions(observation),
+        ),
+    )
+
+    def research(symbol: str, *_args: object, **_kwargs: object) -> object:
+        if symbol == _SYMBOL:
+            return observation
+        raise RuntimeError("provider unavailable")
+
+    monkeypatch.setattr(scan_module, "research_current_stock_v2", research)
+
+    result = scan_signal_decisions_v3(
+        tmp_path, symbols=(_SYMBOL, "ZULU"), clock=lambda: _NOW
+    )
+
+    assert result["total_stocks_scanned"] == 2
+    candidates = cast(list[dict[str, object]], result["candidates"])
+    rows = cast(list[dict[str, object]], result["other_stocks"])
+    by_symbol = {str(row["symbol"]): row for row in [*candidates, *rows]}
+    assert sorted(by_symbol) == ["RELIANCE", "ZULU"]
+    assert by_symbol[_SYMBOL]["decision"] == "UNKNOWN"
+    assert by_symbol[_SYMBOL]["safety_status"] == "ELIGIBLE"
+    assert by_symbol[_SYMBOL]["failed_rule"] == "INSUFFICIENT_OBSERVATION_PAIR"
+    assert by_symbol["ZULU"]["decision"] == "UNKNOWN"
+    assert by_symbol["ZULU"]["safety_status"] == "UNKNOWN"
+    assert by_symbol["ZULU"]["failed_rule"] == "OBSERVATION_OR_PROVIDER_UNAVAILABLE"
+    assert result["eligible_count"] == 1
+    assert result["unknown_count"] == 1
+
+
+def test_cli_scan_first_observation_then_pair_candidate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    previous = cast(CurrentStockResearchResultV2, _structure_observation(tmp_path))
+    previous_source = previous.packet.source("MARKET_STRUCTURE")
+    assert previous_source is not None
+    _install_providers(
+        monkeypatch,
+        _Providers(
+            _quote(previous_source.admitted_sessions[-1]),
+            _history(previous, volume=3_000_000),
+            _actions(previous),
+        ),
+    )
+    monkeypatch.setattr(
+        scan_module, "research_current_stock_v2", lambda *_args, **_kwargs: previous
+    )
+
+    first_code = cli_main(
+        [
+            "scan",
+            "--storage-root",
+            str(tmp_path),
+            "--symbol",
+            _SYMBOL,
+            "--output",
+            "json",
+        ]
+    )
+    first_output = capsys.readouterr()
+    assert first_code == 0
+    first_scan = cast(dict[str, object], json.loads(first_output.out))
+    assert first_scan["candidate_count"] == 0
+    first_rows = cast(list[dict[str, object]], first_scan["other_stocks"])
+    assert first_rows[0]["failed_rule"] == "INSUFFICIENT_OBSERVATION_PAIR"
+
+    current = cast(
+        CurrentStockResearchResultV2, _structure_observation(tmp_path, later=True)
+    )
+    successor = _immediate_successor_session(tmp_path, current)
+    _install_providers(
+        monkeypatch,
+        _Providers(
+            _quote(
+                successor.trade_date,
+                timestamp=successor.open_at + timedelta(minutes=45),
+            ),
+            _history(current, volume=3_000_000),
+            _actions(current),
+        ),
+    )
+    monkeypatch.setattr(
+        scan_module, "research_current_stock_v2", lambda *_args, **_kwargs: current
+    )
+
+    second_code = cli_main(
+        [
+            "scan",
+            "--storage-root",
+            str(tmp_path),
+            "--symbol",
+            _SYMBOL,
+            "--output",
+            "json",
+            "--refresh",
+        ]
+    )
+    second_output = capsys.readouterr()
+    assert second_code == 0
+    second_scan = cast(dict[str, object], json.loads(second_output.out))
+    assert second_scan["candidate_count"] == 1
+    candidates = cast(list[dict[str, object]], second_scan["candidates"])
+    policy = cast(dict[str, object], candidates[0]["policy_decision"])
+    assert policy["disposition"] == "RESEARCH_CANDIDATE"
+    assert policy["decision_code"] == "SUPPORTED_CAUSAL_POLICY_PASSED"
+    assert "optional_context" in candidates[0]
+
+    state = read_scanner_pair_state_v1(tmp_path, _SYMBOL)
+    assert state is not None
+    assert state.sequence == 2
