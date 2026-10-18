@@ -36,6 +36,7 @@ from swing_trading_ai_assistant.market_data.signal_decisions_scan_v3 import (
     SCAN_SCHEMA,
     _evaluate_anti_manipulation_safety,
     _load_historical_bars_for_symbol,
+    build_trade_brief,
     format_scan_table,
     scan_signal_decisions_v3,
 )
@@ -484,6 +485,14 @@ def test_scan_advances_distinct_observation_with_canonical_pair_policy(
         "first_inclusion_close_status": evidence["first_inclusion_close_status"],
         "first_inclusion_close_relation": evidence["first_inclusion_close_relation"],
     }
+    guidance = cast(dict[str, object], candidate["ai_guidance"])
+    claims = cast(list[str], guidance["allowed_claims"])
+    assert len(claims) == 12
+    assert claims[0].startswith("State the display projection shows a")
+    assert "policy_decision" in claims[0]
+    assert "display-implied risk per share" in claims[3]
+    assert "policy_decision.causal_evidence" in claims[4]
+    assert all(not claim.startswith("State confirmed") for claim in claims)
 
     state = read_scanner_pair_state_v1(tmp_path, _SYMBOL)
     assert state is not None
@@ -920,3 +929,104 @@ def test_scan_retains_capacity_overflow_and_every_universe_symbol(
         row["failed_rule"] == "BASKET_CAPACITY_OR_NIFTY100_PRIORITY" for row in retained
     )
     assert all(row["decision"] == "RESEARCH_CANDIDATE" for row in retained)
+
+
+def _candidate_display_summary_fixture() -> dict[str, object]:
+    """Minimal display projection covering every field the candidate claims use."""
+    return {
+        "current_price_inr": "4387.4",
+        "setup_event": "CHOCH",
+        "setup_direction": "UP",
+        "event_session": "2026-10-13",
+        "age_completed_sessions": 3,
+        "broken_high_level_inr": "4183.6",
+        "supporting_stop_reference_inr": "3905.6",
+        "risk_per_share_inr": "481.8",
+        "invalidation_condition": "Daily close strictly below supporting stop reference",
+        "smc_price_action": {
+            "retest_state": "EXPANDING_ABOVE",
+            "breakout_distance_percent": "+4.87%",
+            "demand_zone_support_inr": "3905.6",
+            "demand_zone_width_inr": "118.5",
+        },
+        "industry": "Information Technology",
+        "volume_analysis": {"rvol": "1.25x", "volume_expansion": True},
+        "price_action_quality": {"body_percent": "85.0%", "quality": "DECISIVE_BODY"},
+        "relative_strength": {
+            "relative_strength": "OUTPERFORMING",
+            "excess_return": "+4.50%",
+        },
+    }
+
+
+def test_build_trade_brief_candidate_claims_attribute_display_anchors() -> None:
+    summary = _candidate_display_summary_fixture()
+    policy: dict[str, object] = {
+        "disposition": "RESEARCH_CANDIDATE",
+        "decision_code": "SUPPORTED_CAUSAL_POLICY_PASSED",
+        "causal_evidence": {"candidate_age_sessions": 4},
+    }
+    context: dict[str, object] = {"level_range_inclusion_status": "IN_RANGE"}
+
+    brief = build_trade_brief(
+        symbol="LTM",
+        isin="INE214T01019",
+        decision="RESEARCH_CANDIDATE",
+        candidate_summary=summary,
+        eligibility_result={"status": "ELIGIBLE"},
+        policy_decision=policy,
+        optional_context=context,
+    )
+    guidance = cast(dict[str, object], brief["ai_guidance"])
+    claims = cast(list[str], guidance["allowed_claims"])
+
+    assert len(claims) == 12
+    # Display anchors are attributed, never asserted as confirmed policy facts.
+    assert all("State confirmed" not in claim for claim in claims)
+    assert claims[0] == (
+        "State the display projection shows a CHOCH setup at level INR 4183.6 "
+        "on session 2026-10-13; the canonical pair-policy result and evidence "
+        "remain authoritative in policy_decision."
+    )
+    assert claims[2] == (
+        "State the display projection's supporting stop reference is INR 3905.6 "
+        "(not a policy anchor; canonical relations are in "
+        "policy_decision.causal_evidence)."
+    )
+    assert claims[3] == (
+        "State the display-implied risk per share is INR 481.8 "
+        "(current price minus the display stop reference)."
+    )
+    assert claims[4] == (
+        "State the display projection's candidate age is 3 completed session(s) "
+        "(within the 1–5 freshness window); the canonical candidate age is in "
+        "policy_decision.causal_evidence."
+    )
+    assert claims[7] == (
+        "State the display projection's SMC demand-area support reference is INR "
+        "3905.6 with implied zone width INR 118.5."
+    )
+    # Non-anchor claims are unchanged and authority attachments stay intact.
+    assert claims[1] == "State current quote price is INR 4387.4."
+    assert claims[5] == "State candidate belongs to Information Technology industry."
+    assert brief["policy_decision"] is policy
+    assert brief["optional_context"] is context
+    assert brief["candidate_summary"] is summary
+    assert brief["decision"] == "RESEARCH_CANDIDATE"
+
+
+def test_build_trade_brief_non_candidate_claims_unchanged() -> None:
+    brief = build_trade_brief(
+        symbol="LTM",
+        isin="INE214T01019",
+        decision="NO_TRADE",
+        candidate_summary=None,
+        eligibility_result={"status": "INELIGIBLE"},
+    )
+
+    guidance = cast(dict[str, object], brief["ai_guidance"])
+    assert guidance["allowed_claims"] == [
+        "State stock decision is NO_TRADE with safety eligibility status INELIGIBLE."
+    ]
+    assert "policy_decision" not in brief
+    assert "optional_context" not in brief
