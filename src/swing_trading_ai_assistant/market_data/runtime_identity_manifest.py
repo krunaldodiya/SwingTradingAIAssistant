@@ -96,6 +96,8 @@ MARKET_DATA_RUNTIME_SOURCE_SHA256_V1: Final[dict[str, str]] = {
     "partition_publication.py": "dcfd3ae76ef8d94c0f46ade75a1c524a5f135b1562ac46254c4a7c36ba76018f",
     "partition_reconciliation.py": "eb84f3d83e4a6cbc9c9992692225eebf113509e68b1f3a7b8726cdff3e46902f",
     "partition_recovery.py": "c31327aee55daa953f7fd9b1b4b91304007a8b68540ad67cc9a7d6649d4cfa02",
+    "point_in_time_snapshot_v1.py": "aaaf0950941321978dfb1a65397e8a05e2a9c42a6922f21667e479c93cc81f4d",
+    "point_in_time_snapshot_v1_cli.py": "3324886aba10e9cb1127823ddb8b34c891c7761ebdff4ef51e416f83595159a7",
     "preview_admission.py": "a55822a6c73f56795d87daf3aa6428a071ace0637af7d85b4127628d961290a5",
     "probe.py": "ed9f2cb92dd3b72766a75f8368e73ef44e053c66c6f02c10d781973038ecbb94",
     "provisional_metadata.py": "e95075fd960cca0aa5594688db9bd9dcec656e1c976b657ac98ce180750a81c4",
