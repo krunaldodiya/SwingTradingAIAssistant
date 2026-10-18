@@ -36,9 +36,10 @@ _SOURCES: Final = (
 _EXECUTION_ASSUMPTIONS: Final = (
     "Measurement aggregates retained scan-decision-evidence@v1 records only; "
     "it makes no provider, capture, or network call.",
-    "Every symbol decision is the scanner's canonical policy result; optional "
-    "Plan 58/60 context is reported but never used to compute any decision, "
-    "safety, selection, or capacity number.",
+    "Every symbol decision comes from the scanner's canonical decision "
+    "pipeline (the retained pair policy plus the additive safety gate); "
+    "optional Plan 58/60 context is reported but never used to compute any "
+    "decision, safety, selection, or capacity number.",
     "Counts describe scan snapshots, not executed trades: no fill, cost, "
     "slippage, or return simulation is performed.",
     "Coverage is reported exactly as retained; no rule, threshold, or policy is "

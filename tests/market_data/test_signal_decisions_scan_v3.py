@@ -807,12 +807,26 @@ def test_scan_stock_safety_override_drops_stale_policy_candidacy(
         scan_module, "_evaluate_anti_manipulation_safety", rejecting_gate
     )
 
+    recorded: list[dict[str, object]] = []
+    real_policy = scan_module.evaluate_signal_decision_from_records_v3
+
+    def spying_policy(*args: object, **kwargs: object) -> dict[str, object]:
+        result = real_policy(*args, **kwargs)
+        recorded.append(result)
+        return result
+
+    monkeypatch.setattr(
+        scan_module, "evaluate_signal_decision_from_records_v3", spying_policy
+    )
+
     brief, is_candidate, safety_status, _price, failed_rule, _trend, handle = (
         scan_module._scan_stock(  # pyright: ignore[reportPrivateUsage]
             _SYMBOL, tmp_path, True, "Testing", Decimal("0")
         )
     )
 
+    assert recorded
+    assert recorded[0]["disposition"] == "RESEARCH_CANDIDATE"
     assert is_candidate is False
     assert safety_status == "INELIGIBLE"
     assert brief["decision"] == "NO_TRADE"

@@ -100,8 +100,8 @@ return/profitability evidence). It never simulates or invents those results.
 
 ### E. Retained pair state and daily progression
 
-The scanner persists at most one admitted pair transition per symbol under the
-private `scanner-pair-state-v1/` namespace:
+The scanner persists at most one new admitted pair transition per symbol per
+scan under the private `scanner-pair-state-v1/` namespace:
 
 1. The first admitted observation seeds the state and the symbol is reported as
    an explicit non-candidate (`INSUFFICIENT_OBSERVATION_PAIR`); no predecessor is

@@ -26,6 +26,9 @@ from .scan_decision_evidence import (  # pyright: ignore[reportPrivateUsage]
     read_scan_decision_evidence_v1,
 )
 from .scan_decision_measurement import (
+    _INSTANT as MEASUREMENT_INSTANT,  # pyright: ignore[reportPrivateUsage]
+)
+from .scan_decision_measurement import (
     SCHEMA as MEASUREMENT_SCHEMA,
 )
 from .scan_decision_measurement import (
@@ -46,7 +49,6 @@ from .stock_eligibility import evaluate_stock_eligibility_from_record_v2
 from .stock_eligibility_v3 import evaluate_stock_eligibility_from_record_v3
 
 _DIGEST: Final = re.compile(r"[0-9a-f]{64}\Z")
-_INSTANT: Final = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z\Z")
 
 
 class _Parser(argparse.ArgumentParser):
@@ -213,7 +215,7 @@ def _valid_request(  # noqa: C901 - command-specific closed request validation
         split_at: object = getattr(args, "split_at", None)
         convention: object = getattr(args, "execution_convention", None)
         if split_at is not None and (
-            type(split_at) is not str or _INSTANT.fullmatch(split_at) is None
+            type(split_at) is not str or MEASUREMENT_INSTANT.fullmatch(split_at) is None
         ):
             raise ValueError("invalid split instant")
         if convention is not None and (

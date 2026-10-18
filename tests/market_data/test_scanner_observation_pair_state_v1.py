@@ -361,3 +361,12 @@ def test_read_rejects_referenced_observation_with_wrong_question(
 
     with pytest.raises(ScannerPairStateUnavailableV1, match="observation mismatch"):
         read_scanner_pair_state_v1(tmp_path, "RELIANCE")
+
+
+def test_read_rejects_non_integer_sequence(tmp_path: Path) -> None:
+    handle = _record(tmp_path, later=False)
+    raw = _craft_state(sequence=True, current=handle)
+    _publish_crafted(tmp_path, f"00000001.{hashlib.sha256(raw).hexdigest()}.json", raw)
+
+    with pytest.raises(ScannerPairStateUnavailableV1, match="binding invalid"):
+        read_scanner_pair_state_v1(tmp_path, "RELIANCE")
