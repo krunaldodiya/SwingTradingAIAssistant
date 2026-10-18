@@ -85,7 +85,7 @@ capability below marks provider access where the contract documents it.
 |---|---|
 | `0` | The requested facts were established. What "established" means is per capability; `0` never means trade eligibility, approval, or a recommendation. |
 | `1` | A valid, structured result that establishes no positive fact: not ready, missing evidence, `UNKNOWN`, `NO_TRADE`, `INSUFFICIENT_EVIDENCE`, `BLOCKED`, or an unavailable disposition. Read the JSON — it names the state and the reasons. |
-| `2` | The request was rejected or the run failed before any report: invalid or malformed request, unsafe or missing private path, unsupported schema, structural rejection, or sanitized internal failure. No report on stdout. Treat it as "no evidence was produced" and fix the request. |
+| `2` | The request was rejected or the run failed before any report: invalid or malformed request, unsafe or missing private path, unsupported schema, structural rejection, or sanitized internal failure. Usually nothing is on stdout — but `market-data download`/`coverage`/`query` emit a terminal rejection/unavailability envelope on stdout for some admission paths; never read a terminal envelope as market facts. Treat exit `2` as "no evidence was produced" and fix the request. |
 
 Command families with extra codes:
 
@@ -144,7 +144,7 @@ the authoritative contract; §4 adds exits, boundaries and prerequisites.
 | Whole-list research for an exact retained selection or an explicit list | `market-data setup-research-selection --selection-request-file FILE --selection-root DIR --storage-root ROOT --output json` (or repeated `--symbol`) | [Plan 62](plans/62-exact-selection-whole-list-research.md) |
 | Latest causal Structure break (`MATCH`/`NO_MATCH`/`UNKNOWN`) for an explicit list | `market-data setup-screen-current --symbol SYM [--symbol SYM ...] --storage-root ROOT --output json` | [causal-setup-screen.md](workflows/causal-setup-screen.md) |
 | Factual close-direction screen of an explicit 2–10 stock watchlist | `market-data watchlist-screen-current --symbol SYM --symbol SYM --close-direction UP\|DOWN\|UNCHANGED --storage-root ROOT --output json` | [watchlist-factual-screen.md](workflows/watchlist-factual-screen.md) |
-| Candidate scan plus prompt-ready briefing cards (Nifty 100/500 or explicit list) | `signal-decisions scan --storage-root ROOT --nifty100 --output json [--retain-decision-evidence]` (or `--symbol A,B`) | [automated-nifty100-scan.md](workflows/automated-nifty100-scan.md) |
+| Candidate scan plus prompt-ready briefing cards (Nifty 100/500 or explicit list) | `signal-decisions scan --storage-root ROOT --nifty100 --output json [--retain-decision-evidence]` (or repeated `--symbol A --symbol B`) | [automated-nifty100-scan.md](workflows/automated-nifty100-scan.md) |
 | Record the evidence a decision will consume | `stock-observations observe --symbol SYM --question CURRENT_STRUCTURE --storage-root ROOT [--refresh] --output json` | [retained-stock-observations.md](workflows/retained-stock-observations.md) |
 | V3 safety eligibility (8 gates) for one observation | `signal-decisions check-eligibility-v3 --observation HANDLE --storage-root ROOT --output json` | [supported-signal-decisions.md](workflows/supported-signal-decisions.md) |
 | V3 causal decision from an earlier + later observation | `signal-decisions evaluate-v3 --previous-observation H1 --current-observation H2 --storage-root ROOT --output json` | [supported-signal-decisions.md](workflows/supported-signal-decisions.md) |
@@ -180,8 +180,10 @@ research packet.
   comparison are owner-private; V5 adds relative-strength/volume context
   (`--analysis-input-file`); V6 adds a caller-supplied hypothetical loss
   scenario (`--loss-scenario-input-file`).
-- Exits: `0` all requested facts present; `1` at least one fact missing (the
-  JSON names it); `2` invalid/internal.
+- Exits: `0` the dossier's required price facts are present; `1` at least one
+  is missing (the JSON names it). V3–V6 context layers report their own
+  readiness; for V5/V6, exit `0`/`1` still describes price availability only.
+  `2` invalid/internal.
 - Boundaries: V3/V4 output (and NSE-derived V5 context) is owner-private and
   **not authorized for hosted-AI disclosure**; V1/V2 output may be given to an
   agent only within the owner's approved disclosure scope. No implicit fallback
@@ -216,8 +218,9 @@ selection.
 
 **`signal-decisions scan`** — candidate scan + briefing cards.
 - Use to evaluate the retained Nifty 500 universe once with Nifty 100 priority
-  tagging (`--nifty100`), or 1–100 explicit comma-separated symbols
-  (`--symbol A,B`), and emit prompt-ready `swing-trade-brief@v1` cards for the
+  tagging (`--nifty100`), or 1–100 explicit symbols added with repeated
+  `--symbol` (`--symbol A --symbol B`), and emit prompt-ready
+  `swing-trade-brief@v1` cards for the
   external assistant. `--retain-decision-evidence` writes immutable decision
   evidence for later reads.
 - Needs: the owner's credential injection for the V3 safety reads.
@@ -450,7 +453,8 @@ code disagree, the command output wins.
 10. **Some private launchers reject `--help`** with the sanitized diagnostic by
     design: `point-in-time-snapshots`, `capture-forward-adjusted-ohlcv`,
     `efficient-current-nifty100-adjusted-capture`, `historical-validation-gate`,
-    and `market-data regime-current` exit `2`; `evidence-readiness` exits `3`.
+    `market-regime-acquisition-decision`, and `market-data regime-current` exit
+    `2`; `evidence-readiness` exits `3`.
     Take their invocations from this guide and their contracts.
 
 Follow-ups (not changes made by this guide): correct the stale scan example and
