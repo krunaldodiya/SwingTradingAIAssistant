@@ -49,6 +49,8 @@ For each cohort member and each window session, candidate bars come from candida
 
 When several admissible records exist for one cell, they are admitted only if their bar values and adjustment data agree exactly; the provenance then lists every agreeing source. Any disagreement produces `CONFLICTING_DUPLICATE_BARS` and the member/date is unavailable.
 
+Revisions in the scanned scope whose session lies outside every requested decision window are recorded as `sources` with their provenance and counted in the report (`sources_outside_window`); they can never supply a window cell, because only requested window sessions are queried. No out-of-window bar is ever admitted as window evidence.
+
 ## Source safety and canonical revalidation (implemented)
 
 Every source read fails closed: entries are refused unless they are regular files, single-link (`st_nlink == 1`), not symlinks, owned by the same owner as the storage root, size-bounded, and named as canonical lowercase SHA-256 digests (`.json`). Symlinked directories are refused; non-`session-*` directories inside a batch directory are skipped. Discovery scans `daily-capture/` to depth two and bounds visited directories, stores, revisions, schedule records, and selection bytes.
@@ -67,7 +69,7 @@ Canonical JSON (`sort_keys`, compact separators, trailing newline) with contract
 
 ## Bounds
 
-Decision sessions: 1..31, ordered, distinct, `date` values. Window size: exactly 21. Cohort size: 1..100. Source revisions scanned: at most 512. Schedule records: at most 64. Selection sources per store: at most 4. Snapshot bytes: at most 4 MiB. Depth: at most 64. Cutoff must be timezone-aware UTC text.
+Decision sessions: 1..31, ordered, distinct, `date` values. Window size: exactly 21. Cohort size: 1..100; the declared cohort size must equal the resolved cohort member count, and a mismatch is a typed refusal with no retention. Source revisions scanned: at most 512. Schedule records: at most 64. Selection sources per store: at most 4. Snapshot bytes: at most 4 MiB. Depth: at most 64. Cutoff must be timezone-aware UTC text.
 
 ## Failure precedence (closed)
 
@@ -90,7 +92,7 @@ Decision sessions: 1..31, ordered, distinct, `date` values. Window size: exactly
 8. Symlinked, oversized, non-regular, or foreign-owned source entry → typed refusal.
 9. Exact retry → identical snapshot identity and bytes; no new file; no rewrite.
 10. Same identity with different bytes (tamper) → refusal.
-11. Bar session outside the window or inconsistent across members of one revision → revision refused; typed insufficiency.
+11. Bar session inconsistent across members of one revision, or outside the revision request's declared sessions → typed refusal, no partial snapshot; a revision whose session lies outside the requested decision windows is recorded, counted (`sources_outside_window`), and never admitted as window evidence.
 12. No clock, environment, network, or provider access exists on the build path.
 
 ## Realized September run (2026-10-18)
@@ -98,6 +100,10 @@ Decision sessions: 1..31, ordered, distinct, `date` values. Window size: exactly
 Frozen request: decision sessions `2026-09-21`..`2026-09-25`, window 21, admission cutoff `2026-09-26T12:00:00Z`, cohort size 100, executed by `point-in-time-snapshots` against the owner's storage root with no provider or network access.
 
 Result: snapshot identity `f4f164d22261e14e2b45291d4af7abd569ef8fd3dea17b5445934be00ef1a7bd`, 1,038,773 canonical bytes, retained under `point-in-time-evidence-snapshots-v1/<identity>.json` with mode `0o400`; all five decision sessions certified with 100/100 members available and 2500/2500 member-session cells admissible at the cutoff (10,000 bps per date); 29 revision files discovered, 27 admitted, 2 canonically valid empty revisions ignored, 0 selection mismatches; cohort bound from the last decision session's retained selection evidence (identity `7a1d…`, source identity `9443…`). The snapshot records every admitted source's revision, request, schedule, selection, configuration, and runtime identities, `observed_at`, store, and the raw response identities per bar. An immediate retry returned the identical identity and bytes, and CLI readback reproduced the retained document.
+
+## Correction record (2026-10-18, #335 delivery)
+
+The independent R3 functional review held matrix row 11 against the realized artifact. Row 11 now states the enforced behavior explicitly: bar sessions inconsistent across members of one revision, or outside the revision request's declared sessions, are a typed refusal with no partial snapshot, while revisions whose session lies outside the requested decision windows are recorded as sources and counted as `sources_outside_window` — they can never supply a window cell. The declared cohort size is now cross-checked against the resolved cohort member count (typed refusal on mismatch). Re-running the frozen request after these corrections returned the identical retained snapshot identity and no new file or rewrite; only the report's `revision_counts` gained the `sources_outside_window` key (`2`).
 
 ## Acceptance evidence
 

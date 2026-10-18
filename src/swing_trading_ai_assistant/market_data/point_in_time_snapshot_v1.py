@@ -236,7 +236,6 @@ class _AdmittedRevision:
     session: str
     results: tuple[capture_store.CaptureMemberResultV2, ...]
     store_name: str
-    store_directory: str
     selection_namespace: Path | None
 
 
@@ -319,7 +318,9 @@ def _valid_digest(value: object) -> bool:
 
 def _read_source_bytes(path: Path, maximum: int, expected_uid: int) -> bytes:
     try:
-        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        descriptor = os.open(
+            path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK
+        )
     except OSError as error:
         raise PointInTimeSnapshotUnavailable("source entry unavailable") from error
     try:
@@ -825,7 +826,6 @@ def _load_revision(
         session=session,
         results=results,
         store_name=store.name,
-        store_directory=str(store.directory),
         selection_namespace=store.selection_namespace,
     )
 
@@ -1132,10 +1132,10 @@ def _assemble_snapshot(
     retained_sessions: set[str] = set()
     selection_mismatch = 0
     for revision in admitted:
-        retained_sessions.add(revision.session)
         if revision.selection_identity != cohort.selection_identity:
             selection_mismatch += 1
             continue
+        retained_sessions.add(revision.session)
         for result in revision.results:
             if result.history is None:
                 continue
@@ -1188,6 +1188,10 @@ def _assemble_snapshot(
             if window is not None
             for session in window
         }
+    )
+    union = set(union_sessions)
+    counts["sources_outside_window"] = sum(
+        1 for revision in admitted if revision.session not in union
     )
     member_entries = _member_bar_entries(
         union_sessions,
@@ -1550,6 +1554,8 @@ def build_point_in_time_snapshot_v1(
         if not admitted:
             raise PointInTimeSnapshotUnavailable("capture evidence unavailable")
         cohort = _resolve_cohort(admitted, request, expected_uid)
+        if len(cohort.members) != request.cohort_size:
+            raise PointInTimeSnapshotUnavailable("cohort size mismatch")
         snapshot = _assemble_snapshot(admitted, records, cohort, request, counts)
         raw = _line(snapshot)
         _closed(raw, MAX_SNAPSHOT_BYTES)
