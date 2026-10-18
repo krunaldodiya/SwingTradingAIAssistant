@@ -3,7 +3,7 @@
 The `signal-decisions scan` command provides a unified, 1-click scanning and research briefing workflow for human CLI analysts and external AI agent harnesses. It combines:
 1. Automated **24/7 safety eligibility** screening (8 conservative rules).
 2. Canonical **retained-observation pair policy** candidate evaluation: each symbol's exact previous/current `CURRENT_STRUCTURE` observation pair is evaluated by the Plan 70 policy; the scanner never invents a pair or a scanner-local causal candidate.
-3. Prompt-ready **trade briefing cards** (`swing-trade-brief@v1`) with structural protective stop levels, risk per share, and deterministic explanation ledgers.
+3. Prompt-ready **trade briefing cards** (`swing-trade-brief@v1`) with display-projected stop references, risk per share, and deterministic explanation ledgers.
 
 ---
 
@@ -167,11 +167,11 @@ When `--output json` is selected, each candidate includes a prompt-ready `swing-
   },
   "ai_guidance": {
     "allowed_claims": [
-      "State confirmed CHOCH setup at broken level INR 4183.6 confirmed on 2026-10-13.",
+      "State the display projection shows a CHOCH setup at level INR 4183.6 on session 2026-10-13; the canonical pair-policy result and evidence remain authoritative in policy_decision.",
       "State current quote price is INR 4387.4.",
-      "State structural protective stop reference is INR 3905.6.",
-      "State risk per share is INR 481.8.",
-      "State candidate age is 3 completed session(s) (within the 1–5 freshness window).",
+      "State the display projection's supporting stop reference is INR 3905.6 (not a policy anchor; canonical relations are in policy_decision.causal_evidence).",
+      "State the display-implied risk per share is INR 481.8 (current price minus the display stop reference).",
+      "State the display projection's candidate age is 3 completed session(s) (within the 1–5 freshness window); the canonical candidate age is in policy_decision.causal_evidence.",
       "State all 8 conservative safety eligibility gates passed (turnover, history, circuit distance, book liquidity, and 7-day corporate action blackout)."
     ],
     "forbidden_claims": [
@@ -182,6 +182,8 @@ When `--output json` is selected, each candidate includes a prompt-ready `swing-
   }
 }
 ```
+
+The full card also attaches `policy_decision` (the canonical pair-policy result with its `causal_evidence`) and `optional_context`; both are omitted from this display example.
 
 ---
 
@@ -206,11 +208,11 @@ Briefing Card JSON:
 > **Candidate Briefing: LTIMindtree (LTM)**
 > * **Status:** Confirmed Research Candidate (`RESEARCH_CANDIDATE`)
 > * **Current Price:** ₹4,387.40
-> * **Setup:** Upward Change of Character (`UP CHOCH`) confirmed on October 13, 2026, breaking above the previous high level of ₹4,183.60.
-> * **Setup Freshness:** 3 completed sessions elapsed (within the 1–5 session freshness window).
-> * **Protective Stop Level:** ₹3,905.60 (based on the confirmed supporting swing low).
-> * **Risk per Share:** ₹481.80 (distance between current price and stop level).
-> * **Invalidation Condition:** A daily close strictly below ₹3,905.60 invalidates the setup.
+> * **Setup (display projection):** Upward Change of Character (`UP CHOCH`) shown on October 13, 2026 at level ₹4,183.60; the canonical pair-policy result and evidence are authoritative in `policy_decision`.
+> * **Setup Freshness (display projection):** 3 completed sessions elapsed (within the 1–5 session freshness window); the canonical candidate age is in `policy_decision.causal_evidence`.
+> * **Protective Stop Reference (display projection):** ₹3,905.60 (supporting swing low; not the policy's invalidation anchor).
+> * **Display-Implied Risk per Share:** ₹481.80 (current price minus the display stop reference).
+> * **Display Invalidation Note:** A daily close strictly below the display stop reference (₹3,905.60); canonical invalidation status is in `policy_decision.causal_evidence`.
 > * **Safety Clearance:** Cleared all 8 safety screening gates: 287 completed history sessions, 20-day median turnover exceeding ₹1,000 Crore, quote within circuit limits, and zero corporate action blackout events in the next 7 days.
 
 ---

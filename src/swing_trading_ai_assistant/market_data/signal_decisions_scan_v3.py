@@ -453,6 +453,12 @@ def build_trade_brief(
     that same result. Both are attached only when the canonical policy ran and
     still owns the effective decision; a later safety override replaces the
     decision authority and therefore attaches neither.
+
+    Candidate ``allowed_claims`` attribute every display anchor (setup event
+    session, broken level, supporting stop reference, age) as a display
+    projection of the admitted current observation and point to
+    ``policy_decision``/``policy_decision.causal_evidence`` for the canonical
+    result; the display layer never asserts policy confirmation.
     """
     is_candidate = decision == "RESEARCH_CANDIDATE" and candidate_summary is not None
     if is_candidate and candidate_summary is not None:
@@ -463,14 +469,14 @@ def build_trade_brief(
         retest = str(smc.get("retest_state", ""))
         dist = str(smc.get("breakout_distance_percent", ""))
         allowed_claims = [
-            f"State confirmed {candidate_summary['setup_event']} setup at broken level INR {candidate_summary['broken_high_level_inr']} confirmed on {candidate_summary['event_session']}.",
+            f"State the display projection shows a {candidate_summary['setup_event']} setup at level INR {candidate_summary['broken_high_level_inr']} on session {candidate_summary['event_session']}; the canonical pair-policy result and evidence remain authoritative in policy_decision.",
             f"State current quote price is INR {candidate_summary['current_price_inr']}.",
-            f"State structural protective stop reference is INR {candidate_summary['supporting_stop_reference_inr']}.",
-            f"State risk per share is INR {candidate_summary['risk_per_share_inr']}.",
-            f"State candidate age is {candidate_summary['age_completed_sessions']} completed session(s) (within the 1–5 freshness window).",
+            f"State the display projection's supporting stop reference is INR {candidate_summary['supporting_stop_reference_inr']} (not a policy anchor; canonical relations are in policy_decision.causal_evidence).",
+            f"State the display-implied risk per share is INR {candidate_summary['risk_per_share_inr']} (current price minus the display stop reference).",
+            f"State the display projection's candidate age is {candidate_summary['age_completed_sessions']} completed session(s) (within the 1–5 freshness window); the canonical candidate age is in policy_decision.causal_evidence.",
             f"State candidate belongs to {candidate_summary.get('industry', 'NSE Equity')} industry.",
             f"State breakout price action status is {retest} ({dist} relative to breakout level).",
-            f"State SMC computed demand-area support reference is INR {candidate_summary['supporting_stop_reference_inr']} with implied zone width INR {smc.get('demand_zone_width_inr')}.",
+            f"State the display projection's SMC demand-area support reference is INR {candidate_summary['supporting_stop_reference_inr']} with implied zone width INR {smc.get('demand_zone_width_inr')}.",
             f"State breakout volume expansion is {vol.get('volume_expansion')} with relative volume {vol.get('rvol')}.",
             f"State breakout candle quality is {pa.get('quality')} with body forming {pa.get('body_percent')} of range.",
             f"State 20-session relative strength vs Nifty benchmark is {rs.get('relative_strength')} ({rs.get('excess_return')}).",
