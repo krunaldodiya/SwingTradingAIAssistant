@@ -25,6 +25,9 @@ from swing_trading_ai_assistant.market_data.scan_decision_measurement import (
 from swing_trading_ai_assistant.market_data.signal_decisions_scan_v3 import (
     _runtime_identity,
 )
+from swing_trading_ai_assistant.market_data.signal_decisions_v3_cli import (
+    main as cli_main,
+)
 from swing_trading_ai_assistant.market_data.stock_observations import (
     record_stock_observation_v1,
 )
@@ -144,9 +147,13 @@ def test_measurement_reports_zero_coverage_for_empty_store(tmp_path: Path) -> No
 
     assert report["schema"] == SCHEMA
     totals = cast(dict[str, object], report["totals"])
-    assert totals["scan_count"] == 0
-    assert totals["symbol_observations"] == 0
-    assert totals["distinct_symbols"] == 0
+    assert totals["coverage"] == {
+        "scan_count": 0,
+        "symbol_observations": 0,
+        "distinct_symbols": 0,
+        "mean_symbol_observations_per_scan": "0.00",
+        "universe_types": {},
+    }
     assert totals["decision_counts"] == {}
     assert totals["decision_rates"] == {}
     assert totals["candidate_retention_rate"] == "0.00%"
@@ -189,9 +196,13 @@ def test_measurement_separates_policy_outcomes_from_optional_context(
     report = measure_scan_decision_evidence_v1(tmp_path)
 
     totals = cast(dict[str, object], report["totals"])
-    assert totals["scan_count"] == 1
-    assert totals["symbol_observations"] == 2
-    assert totals["distinct_symbols"] == 2
+    assert totals["coverage"] == {
+        "scan_count": 1,
+        "symbol_observations": 2,
+        "distinct_symbols": 2,
+        "mean_symbol_observations_per_scan": "2.00",
+        "universe_types": {"EXPLICIT": 1},
+    }
     assert totals["decision_counts"] == {"RESEARCH_CANDIDATE": 1, "UNKNOWN": 1}
     assert totals["decision_rates"] == {
         "RESEARCH_CANDIDATE": "50.00%",
@@ -203,6 +214,7 @@ def test_measurement_separates_policy_outcomes_from_optional_context(
     assert totals["candidate_retention_rate"] == "100.00%"
     assert totals["basket_selection_loss"] == 0
     assert totals["exclusion_reasons"] == {"INSUFFICIENT_OBSERVATION_PAIR": 1}
+    assert totals["exclusion_reason_families"] == {"INSUFFICIENT_OBSERVATION_PAIR": 1}
     assert totals["optional_context"] == {
         "measured_separately_from_decision": True,
         "candidates_with_context": 1,
@@ -245,6 +257,9 @@ def test_measurement_reports_basket_selection_loss(tmp_path: Path) -> None:
     assert totals["candidate_retention_rate"] == "50.00%"
     assert totals["basket_selection_loss"] == 1
     assert totals["exclusion_reasons"] == {"BASKET_CAPACITY_OR_NIFTY100_PRIORITY": 1}
+    assert totals["exclusion_reason_families"] == {
+        "BASKET_CAPACITY_OR_NIFTY100_PRIORITY": 1
+    }
     context = cast(dict[str, object], totals["optional_context"])
     assert context["candidates_without_context"] == 1
 
@@ -275,16 +290,16 @@ def test_measurement_time_split_never_leaks_later_records(tmp_path: Path) -> Non
     splits = cast(dict[str, object], report["time_splits"])
     earlier = cast(dict[str, object], splits["earlier"])
     later = cast(dict[str, object], splits["later"])
-    assert earlier["scan_count"] == 1
-    assert earlier["symbol_observations"] == 1
+    assert cast(dict[str, object], earlier["coverage"])["scan_count"] == 1
+    assert cast(dict[str, object], earlier["coverage"])["symbol_observations"] == 1
     assert earlier["decision_counts"] == {"UNKNOWN": 1}
     assert earlier["raw_policy_qualified"] == 0
-    assert later["scan_count"] == 1
+    assert cast(dict[str, object], later["coverage"])["scan_count"] == 1
     assert later["decision_counts"] == {"RESEARCH_CANDIDATE": 1}
     assert later["raw_policy_qualified"] == 1
     assert "future_leakage_guard" in splits
     totals = cast(dict[str, object], report["totals"])
-    assert totals["scan_count"] == 2
+    assert cast(dict[str, object], totals["coverage"])["scan_count"] == 2
     evidence = cast(dict[str, object], report["evidence"])
     assert evidence["scan_timestamp_first"] == "2026-10-01T00:00:00.000000Z"
     assert evidence["scan_timestamp_last"] == "2026-10-10T00:00:00.000000Z"
@@ -348,3 +363,53 @@ def test_measurement_validates_parameters_and_records_execution_convention(
     assert qualification["ai_evaluation_performed"] is False
     assumptions = cast(list[str], report["execution_assumptions"])
     assert any("no fill" in line.lower() for line in assumptions)
+
+
+def test_measurement_cli_reports_retained_evidence(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _evidence(
+        tmp_path,
+        timestamp="2026-10-17T00:00:00.000000Z",
+        candidates=[],
+        other=[_other("ZULU")],
+        rows=[_row("ZULU", "UNKNOWN", "UNKNOWN", None)],
+    )
+
+    code = cli_main(
+        [
+            "measure-decision-evidence",
+            "--storage-root",
+            str(tmp_path),
+            "--output",
+            "json",
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert code == 0
+    report = cast(dict[str, object], json.loads(captured.out))
+    assert report["schema"] == SCHEMA
+    totals = cast(dict[str, object], report["totals"])
+    assert cast(dict[str, object], totals["coverage"])["scan_count"] == 1
+
+
+def test_measurement_cli_rejects_invalid_split_instant(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    code = cli_main(
+        [
+            "measure-decision-evidence",
+            "--storage-root",
+            str(tmp_path),
+            "--split-at",
+            "2026-10-05",
+            "--output",
+            "json",
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert code == 2
+    assert captured.err == "request_invalid\n"
+    assert captured.out == ""

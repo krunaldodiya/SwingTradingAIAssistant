@@ -624,6 +624,8 @@ def test_scan_stock_anti_manipulation_rejection_agrees_with_brief_and_ledger(
     assert is_candidate is False
     assert safety_status == "INELIGIBLE"
     assert brief["decision"] == "NO_TRADE"
+    assert "policy_decision" not in brief
+    assert "optional_context" not in brief
     eligibility = cast(dict[str, object], brief["safety_eligibility"])
     assert eligibility["status"] == "INELIGIBLE"
     ledger = cast(list[dict[str, object]], eligibility["explanation_ledger"])
@@ -758,3 +760,149 @@ def test_cli_scan_first_observation_then_pair_candidate(
     state = read_scanner_pair_state_v1(tmp_path, _SYMBOL)
     assert state is not None
     assert state.sequence == 2
+
+
+def test_scan_stock_safety_override_drops_stale_policy_candidacy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    previous = cast(CurrentStockResearchResultV2, _structure_observation(tmp_path))
+    previous_source = previous.packet.source("MARKET_STRUCTURE")
+    assert previous_source is not None
+    _install_providers(
+        monkeypatch,
+        _Providers(
+            _quote(previous_source.admitted_sessions[-1]),
+            _history(previous, volume=3_000_000),
+            _actions(previous),
+        ),
+    )
+    monkeypatch.setattr(
+        scan_module, "research_current_stock_v2", lambda *_args, **_kwargs: previous
+    )
+    scan_signal_decisions_v3(tmp_path, symbols=(_SYMBOL,), clock=lambda: _NOW)
+
+    current = cast(
+        CurrentStockResearchResultV2, _structure_observation(tmp_path, later=True)
+    )
+    successor = _immediate_successor_session(tmp_path, current)
+    _install_providers(
+        monkeypatch,
+        _Providers(
+            _quote(
+                successor.trade_date,
+                timestamp=successor.open_at + timedelta(minutes=45),
+            ),
+            _history(current, volume=3_000_000),
+            _actions(current),
+        ),
+    )
+    monkeypatch.setattr(
+        scan_module, "research_current_stock_v2", lambda *_args, **_kwargs: current
+    )
+
+    def rejecting_gate(**_kwargs: object) -> tuple[bool, str | None]:
+        return False, "TEST_GATE_REJECTED"
+
+    monkeypatch.setattr(
+        scan_module, "_evaluate_anti_manipulation_safety", rejecting_gate
+    )
+
+    brief, is_candidate, safety_status, _price, failed_rule, _trend, handle = (
+        scan_module._scan_stock(  # pyright: ignore[reportPrivateUsage]
+            _SYMBOL, tmp_path, True, "Testing", Decimal("0")
+        )
+    )
+
+    assert is_candidate is False
+    assert safety_status == "INELIGIBLE"
+    assert brief["decision"] == "NO_TRADE"
+    assert "policy_decision" not in brief
+    assert "optional_context" not in brief
+    assert failed_rule == "TEST_GATE_REJECTED"
+    assert handle is not None
+
+
+def test_format_scan_table_tolerates_candidate_without_display_summary() -> None:
+    scan: dict[str, object] = {
+        "schema": SCAN_SCHEMA,
+        "scan_timestamp": "2026-10-17T09:30:00.000000Z",
+        "storage_root_sha256": "a" * 64,
+        "universe_type": "EXPLICIT",
+        "market_regime": {
+            "regime": "RANGE_OR_TRANSITION",
+            "uptrend_percent": "40.0%",
+            "downtrend_percent": "30.0%",
+        },
+        "benchmark_median_return_20d": "+0.00%",
+        "total_stocks_scanned": 1,
+        "candidate_count": 1,
+        "eligible_count": 1,
+        "ineligible_count": 0,
+        "unknown_count": 0,
+        "candidates": [
+            {
+                "schema": BRIEF_SCHEMA,
+                "symbol": _SYMBOL,
+                "decision": "RESEARCH_CANDIDATE",
+                "candidate_summary": None,
+            }
+        ],
+        "other_stocks": [],
+    }
+
+    rendered = format_scan_table(scan)
+
+    assert _SYMBOL in rendered
+    assert "CONFIRMED RESEARCH CANDIDATES" in rendered
+
+
+def test_scan_retains_capacity_overflow_and_every_universe_symbol(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    symbols = tuple(f"TEST{index:02d}" for index in range(12))
+
+    def fake_resolve(
+        *_args: object, **_kwargs: object
+    ) -> tuple[tuple[str, ...], str, frozenset[str], dict[str, object] | None]:
+        return (
+            symbols,
+            "NIFTY_100_PRIORITY_NIFTY_500",
+            frozenset(symbols),
+            {"source": "test"},
+        )
+
+    def fake_scan(
+        symbol: str, *_args: object, **_kwargs: object
+    ) -> tuple[dict[str, object], bool, str, str, None, str, None]:
+        brief: dict[str, object] = {
+            "schema": BRIEF_SCHEMA,
+            "symbol": symbol,
+            "decision": "RESEARCH_CANDIDATE",
+            "candidate_summary": {
+                "industry": "Testing",
+                "current_price_inr": "100.00",
+            },
+            "safety_eligibility": {"status": "ELIGIBLE", "explanation_ledger": []},
+            "ai_guidance": {"allowed_claims": [], "forbidden_claims": []},
+        }
+        return brief, True, "ELIGIBLE", "100.00", None, "UPTREND", None
+
+    monkeypatch.setattr(scan_module, "_resolve_target_symbols", fake_resolve)
+    monkeypatch.setattr(scan_module, "_scan_stock", fake_scan)
+
+    result = scan_signal_decisions_v3(tmp_path, symbols=symbols, clock=lambda: _NOW)
+
+    assert result["universe_type"] == "NIFTY_100_PRIORITY_NIFTY_500"
+    assert result["total_stocks_scanned"] == 12
+    assert result["nifty100_validated_candidate_count"] == 12
+    assert result["nifty500_fallback_triggered"] is False
+    assert result["candidate_count"] == 10
+    candidates = cast(list[dict[str, object]], result["candidates"])
+    retained = cast(list[dict[str, object]], result["other_stocks"])
+    observed = [str(row["symbol"]) for row in [*candidates, *retained]]
+    assert sorted(observed) == list(symbols)
+    assert len(retained) == 2
+    assert all(
+        row["failed_rule"] == "BASKET_CAPACITY_OR_NIFTY100_PRIORITY" for row in retained
+    )
+    assert all(row["decision"] == "RESEARCH_CANDIDATE" for row in retained)

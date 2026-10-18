@@ -247,6 +247,7 @@ def _rows(  # noqa: C901 - complete fail-closed evidence binding
             observation = read_stock_observation_v1(root, handle)
             if (
                 observation.question != "CURRENT_STRUCTURE"
+                or observation.status != "READY"
                 or observation.symbol != symbol
             ):
                 raise ValueError("observation binding mismatch")

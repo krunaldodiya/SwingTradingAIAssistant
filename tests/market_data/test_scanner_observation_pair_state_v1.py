@@ -10,6 +10,7 @@ from typing import cast
 import pytest
 from test_stock_eligibility_v3 import _structure_observation
 
+import swing_trading_ai_assistant.market_data.scanner_observation_pair_state_v1 as pair_state_module
 from swing_trading_ai_assistant.market_data import current_stock_research_v2 as producer
 from swing_trading_ai_assistant.market_data.current_stock_research_v2 import (
     CurrentStockResearchResultV2,
@@ -338,3 +339,25 @@ def test_root_and_symbol_validation(tmp_path: Path) -> None:
             expected_current_observation_identity_sha256=None,
             new_current_observation_identity_sha256=first,
         )
+
+
+def test_read_rejects_referenced_observation_with_wrong_question(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    handle = _record(tmp_path, later=False)
+    raw = _craft_state(current=handle)
+    _publish_crafted(tmp_path, f"00000001.{hashlib.sha256(raw).hexdigest()}.json", raw)
+
+    class _SubstitutedObservation:
+        question = "CURRENT_STRUCTURE_SUMMARY"
+        status = "READY"
+        symbol = "RELIANCE"
+
+    monkeypatch.setattr(
+        pair_state_module,
+        "read_stock_observation_v1",
+        lambda *_args, **_kwargs: _SubstitutedObservation(),
+    )
+
+    with pytest.raises(ScannerPairStateUnavailableV1, match="observation mismatch"):
+        read_scanner_pair_state_v1(tmp_path, "RELIANCE")

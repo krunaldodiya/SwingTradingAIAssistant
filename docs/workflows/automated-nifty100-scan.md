@@ -2,7 +2,7 @@
 
 The `signal-decisions scan` command provides a unified, 1-click scanning and research briefing workflow for human CLI analysts and external AI agent harnesses. It combines:
 1. Automated **24/7 safety eligibility** screening (8 conservative rules).
-2. Automated **causal Break-of-Structure (BOS/CHOCH)** candidate evaluation.
+2. Canonical **retained-observation pair policy** candidate evaluation: each symbol's exact previous/current `CURRENT_STRUCTURE` observation pair is evaluated by the Plan 70 policy; the scanner never invents a pair or a scanner-local causal candidate.
 3. Prompt-ready **trade briefing cards** (`swing-trade-brief@v1`) with structural protective stop levels, risk per share, and deterministic explanation ledgers.
 
 ---
@@ -49,7 +49,7 @@ doppler run -- signal-decisions scan \
 
 * `--output table` *(Default)*: Formatted ASCII/Unicode summary table for terminal display.
 * `--output json`: Compact canonical JSON adhering to `swing-trade-scan@v1` for automated ingestion.
-* `--refresh`: Optional flag to force re-acquisition of the latest daily bars from BharatStock.
+* `--refresh`: Admit a new `CURRENT_STRUCTURE` observation for each symbol so the retained pair state can advance. Without it, an existing state is replayed (or a retained observation bootstraps the first seed); a scan never pairs stale data or invents a new predecessor.
 
 
 ### D. Retain exact decision evidence for later qualification
@@ -79,6 +79,42 @@ signal-decisions read-decision-evidence \
 The readback rejects altered, missing, substituted, or incompatible retained
 observations. It is evidence retention only—not historical replay, an AI-model
 evaluation, a performance/profit claim, execution-cost evidence, or trading advice.
+
+Aggregate the retained evidence into the reachable G09 measurement:
+
+```bash
+signal-decisions measure-decision-evidence \
+  --storage-root /absolute/path/to/SwingTradingAIAssistantData \
+  --output json
+```
+
+Optional `--split-at <instant>` partitions retained scans into earlier/later
+subsets with an explicit no-future-leakage guard; optional
+`--execution-convention` records the caller-named execution assumption. The
+report measures the mandatory policy independently from optional context,
+performs no AI evaluation, and always lists the external prerequisites that
+remain hard final-qualification gates (per-decision-date historical backfill,
+out-of-sample/walk-forward evidence, an approved execution cost/slippage
+convention, named AI model/source with immutable prompt/output provenance, and
+return/profitability evidence). It never simulates or invents those results.
+
+### E. Retained pair state and daily progression
+
+The scanner persists at most one admitted pair transition per symbol under the
+private `scanner-pair-state-v1/` namespace:
+
+1. The first admitted observation seeds the state and the symbol is reported as
+   an explicit non-candidate (`INSUFFICIENT_OBSERVATION_PAIR`); no predecessor is
+   fabricated.
+2. A later distinct admitted observation forms the exact previous/current pair,
+   is evaluated by the canonical policy, and only then advances the state.
+3. Re-scanning the same admitted observation replays the canonical policy result
+   (`CAUSAL_REPLAY_HAS_NO_NEW_CONFIRMATION`) instead of recreating a candidate.
+
+Malformed, foreign, race-conflicted, or runtime-mismatched state fails closed as
+`OBSERVATION_PAIR_STATE_UNAVAILABLE` with an `UNKNOWN`/`UNKNOWN` row, and every
+requested symbol still appears exactly once in `candidates` or `other_stocks`.
+
 ---
 
 ## 3. Terminal Table Output Example

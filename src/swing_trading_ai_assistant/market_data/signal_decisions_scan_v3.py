@@ -397,7 +397,10 @@ def _build_candidate_display_summary(
 
     This display layer never decides anything: the canonical pair-policy
     disposition is the only candidate authority, and any missing display input
-    yields an explicit null summary instead of a fabricated one.
+    yields an explicit null summary instead of a fabricated one. Its event,
+    level, stop, and age numbers are informational projections of the admitted
+    current observation, not the policy's anchors; the canonical anchors and
+    relations are available only through the attached ``policy_decision``.
     """
     extracted = _extract_market_structure_calculation(observation)
     if extracted is None:
@@ -447,8 +450,9 @@ def build_trade_brief(
 
     ``policy_decision`` carries the exact canonical pair-policy result and
     ``optional_context`` carries Plan 58/60 first-inclusion facts projected from
-    that same result. Both are attached only when the canonical policy ran, and
-    neither can change the decision, selection, or ordering.
+    that same result. Both are attached only when the canonical policy ran and
+    still owns the effective decision; a later safety override replaces the
+    decision authority and therefore attaches neither.
     """
     is_candidate = decision == "RESEARCH_CANDIDATE" and candidate_summary is not None
     if is_candidate and candidate_summary is not None:
@@ -466,7 +470,7 @@ def build_trade_brief(
             f"State candidate age is {candidate_summary['age_completed_sessions']} completed session(s) (within the 1–5 freshness window).",
             f"State candidate belongs to {candidate_summary.get('industry', 'NSE Equity')} industry.",
             f"State breakout price action status is {retest} ({dist} relative to breakout level).",
-            f"State institutional demand zone support is INR {candidate_summary['supporting_stop_reference_inr']} with zone width INR {smc.get('demand_zone_width_inr')}.",
+            f"State SMC computed demand-area support reference is INR {candidate_summary['supporting_stop_reference_inr']} with implied zone width INR {smc.get('demand_zone_width_inr')}.",
             f"State breakout volume expansion is {vol.get('volume_expansion')} with relative volume {vol.get('rvol')}.",
             f"State breakout candle quality is {pa.get('quality')} with body forming {pa.get('body_percent')} of range.",
             f"State 20-session relative strength vs Nifty benchmark is {rs.get('relative_strength')} ({rs.get('excess_return')}).",
@@ -679,7 +683,7 @@ def _scan_stock(  # noqa: C901 - multi-family screening and anti-manipulation ga
     """
     try:
         state = read_scanner_pair_state_v1(storage_root, symbol)
-    except ScannerPairStateUnavailableV1:
+    except Exception:  # noqa: BLE001 - per-symbol fail-closed boundary
         return _unavailable_result(symbol, "OBSERVATION_PAIR_STATE_UNAVAILABLE")
 
     try:
@@ -792,6 +796,7 @@ def _scan_stock(  # noqa: C901 - multi-family screening and anti-manipulation ga
                         trend = str(getattr(calc, "trend", "INSUFFICIENT_STRUCTURE"))
 
     final_eligibility = elig_result
+    safety_override = False
     if safety_status == "ELIGIBLE":
         # Anti-Manipulation & Asset Quality Gate
         cur_price_dec = Decimal(price_inr) if price_inr else None
@@ -805,6 +810,7 @@ def _scan_stock(  # noqa: C901 - multi-family screening and anti-manipulation ga
             decision = "NO_TRADE"
             candidate_summary = None
             safety_status = "INELIGIBLE"
+            safety_override = True
             final_eligibility = {
                 **elig_result,
                 "status": "INELIGIBLE",
@@ -839,14 +845,17 @@ def _scan_stock(  # noqa: C901 - multi-family screening and anti-manipulation ga
         decision_code = policy_result.get("decision_code")
         failed_rule = str(decision_code) if decision_code else None
 
+    decision_authority: dict[str, object] | None = (
+        None if safety_override else policy_result
+    )
     brief = build_trade_brief(
         symbol=symbol,
         isin=isin,
         decision=decision,
         candidate_summary=candidate_summary,
         eligibility_result=final_eligibility,
-        policy_decision=policy_result,
-        optional_context=_optional_context_from_policy(policy_result),
+        policy_decision=decision_authority,
+        optional_context=_optional_context_from_policy(decision_authority),
     )
     is_candidate = decision == "RESEARCH_CANDIDATE"
     return brief, is_candidate, safety_status, price_inr, failed_rule, trend, handle
@@ -1123,7 +1132,12 @@ def format_scan_table(scan_result: dict[str, object]) -> str:
         lines.append("-" * 125)
         for c in candidates:
             sym = str(c.get("symbol", ""))
-            summary = cast(dict[str, object], c.get("candidate_summary", {}))
+            summary_value = c.get("candidate_summary")
+            summary = (
+                cast(dict[str, object], summary_value)
+                if type(summary_value) is dict
+                else {}
+            )
             smc = cast(dict[str, object], summary.get("smc_price_action", {}))
             vol = cast(dict[str, object], summary.get("volume_analysis", {}))
             pa = cast(dict[str, object], summary.get("price_action_quality", {}))

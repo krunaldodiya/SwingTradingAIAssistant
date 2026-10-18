@@ -182,11 +182,19 @@ def _metrics(records: Sequence[dict[str, object]]) -> dict[str, object]:
                 str(reason) if reason is not None else "NO_EXCLUSION_REASON_RECORDED"
             ] += 1
     total = sum(decision.values())
+    families: Counter[str] = Counter(
+        reason.split(" (", 1)[0] for reason in exclusions.elements()
+    )
     return {
-        "scan_count": len(records),
-        "symbol_observations": total,
-        "distinct_symbols": len(symbols),
-        "universe_types": _counts(universe),
+        "coverage": {
+            "scan_count": len(records),
+            "symbol_observations": total,
+            "distinct_symbols": len(symbols),
+            "mean_symbol_observations_per_scan": (
+                f"{total / len(records):.2f}" if records else "0.00"
+            ),
+            "universe_types": _counts(universe),
+        },
         "decision_counts": _counts(decision),
         "decision_rates": _rates(decision, total),
         "safety_counts": _counts(safety),
@@ -196,6 +204,7 @@ def _metrics(records: Sequence[dict[str, object]]) -> dict[str, object]:
         "candidate_retention_rate": _rate(selected, raw_qualified),
         "basket_selection_loss": raw_qualified - selected,
         "exclusion_reasons": _counts(exclusions),
+        "exclusion_reason_families": _counts(families),
         "optional_context": {
             "measured_separately_from_decision": True,
             "candidates_with_context": candidates_with_context,

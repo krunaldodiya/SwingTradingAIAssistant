@@ -304,7 +304,11 @@ def _read_state_record(
     saved = _closed(raw)
     if frozenset(saved) != _KEYS or saved["contract_version"] != CONTRACT_VERSION_V1:
         raise ScannerPairStateUnavailableV1("unsupported scanner pair state record")
-    if saved["sequence"] != sequence or saved["symbol"] != symbol:
+    if (
+        type(saved["sequence"]) is not int
+        or saved["sequence"] != sequence
+        or saved["symbol"] != symbol
+    ):
         raise ScannerPairStateUnavailableV1("scanner pair state binding invalid")
     current = _admit_digest(
         saved["current_observation_identity_sha256"], allow_none=False
