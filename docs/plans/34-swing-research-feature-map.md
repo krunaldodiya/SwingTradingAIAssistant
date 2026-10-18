@@ -80,6 +80,34 @@ unacceptable collapse in usable opportunities. The accepted strategy contract
 must define that tradeoff; Plan 34 does not invent a universal threshold. If the
 simpler rule is adequate, keep it simple and reject the extra filter.
 
+### Owner-confirmed candidate-preservation direction — 2026-10-18
+
+Status: **accepted**. Owner: Krunal Dodiya. Scope: every current and future
+swing-research screen.
+
+- Consider a Price Action or Liquidity/SMC capability only when it answers a
+  named, unmet swing-research decision and is demonstrably useful, important,
+  and non-duplicative of delivered facts. Popularity or catalogue completeness
+  is not sufficient.
+
+- The tool MUST preserve every evaluated canonical stock in its output with its
+  explicit decision and reason; an optional analytical feature MUST NOT suppress
+  or silently omit a stock.
+- Mandatory safety, identity, provenance, and required-evidence failures remain
+  fail-closed. Their thresholds are not weakened merely to fill a basket.
+- Price Action, Volume, Relative Strength, regime, Industry, and future
+  Liquidity/SMC facts are additive by default. A new hard gate requires
+  claim-specific evidence that it materially improves the declared outcome
+  without an unacceptable reduction in candidate coverage or retained
+  opportunities.
+- A zero-candidate result is an honest valid outcome, not an error to be
+  backfilled with weaker evidence or relaxed safety. The 5–10 basket target is
+  a research objective, not a guarantee.
+
+Open question: G09 must freeze the measured baseline, acceptable coverage-loss
+rule, and out-of-sample comparison before any optional analytical fact becomes
+a decision gate.
+
 ## Current delivery status
 
 The current/live ordered lane is governed by
