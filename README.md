@@ -25,6 +25,14 @@ insufficient-evidence result.
 The objective is capital preservation, consistency, low drawdown, explainable
 high-quality setups, and repeatability—not maximum returns or frequent trades.
 
+## Using the tool as an AI assistant
+
+The [AI agent tool usage guide](docs/agent-usage.md) is the single source of
+truth for how an external AI assistant uses the tool: which command answers
+which research question, the private inputs and exit codes, interpretation
+limits, and links to each capability's authoritative contract. Start there
+before running any command.
+
 ## Developing with an AI agent
 
 Start with [AGENTS.md](AGENTS.md) and the [mandatory project instructions](docs/mandatory-agent-instructions.md).
