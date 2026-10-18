@@ -7,6 +7,7 @@ from datetime import timedelta
 from decimal import Decimal
 from inspect import signature
 from pathlib import Path
+from typing import cast
 
 import pytest
 from test_current_stock_research import _NOW
@@ -92,6 +93,8 @@ def _evidence_with(
     *,
     age: int | None = None,
     invalidation_status: str | None = None,
+    inclusion_status: str | None = None,
+    inclusion_observed: bool | None = None,
 ) -> dict[str, object]:
     value = copy.deepcopy(decision_module.assemble_setup_evidence_v4(previous, current))
     if age is not None:
@@ -99,6 +102,10 @@ def _evidence_with(
         value["age"]["completed_sessions_elapsed"] = age
     if invalidation_status is not None:
         value["invalidation"]["status"] = invalidation_status
+    if inclusion_status is not None:
+        value["level_range_inclusion"]["status"] = inclusion_status
+    if inclusion_observed is not None:
+        value["level_range_inclusion"]["inclusion_observed"] = inclusion_observed
     unsigned = dict(value)
     unsigned.pop("result_identity_sha256")
     value["result_identity_sha256"] = hashlib.sha256(
@@ -170,6 +177,58 @@ def test_v3_decision_returns_a_complete_explanation_for_candidate(
         "history",
         "actions:INE002A01018",
     ]
+
+
+def test_v3_optional_inclusion_facts_never_change_the_decision(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    previous, previous_handle, current, current_handle = _retained_pair(tmp_path)
+    baseline = _evaluate(
+        previous,
+        previous_handle,
+        current,
+        current_handle,
+        _providers(current),
+        tmp_path,
+    )
+    assert baseline["disposition"] == "RESEARCH_CANDIDATE"
+
+    evidence = _evidence_with(
+        previous,
+        current,
+        inclusion_status="REPLAY",
+        inclusion_observed=True,
+    )
+    monkeypatch.setattr(
+        decision_module, "assemble_setup_evidence_v4", lambda *_args: evidence
+    )
+    changed = _evaluate(
+        previous,
+        previous_handle,
+        current,
+        current_handle,
+        _providers(current),
+        tmp_path,
+    )
+
+    assert changed["disposition"] == baseline["disposition"]
+    assert changed["decision_code"] == baseline["decision_code"]
+    assert [
+        (row["rule_id"], row["outcome"]) for row in changed["explanation_ledger"]
+    ] == [(row["rule_id"], row["outcome"]) for row in baseline["explanation_ledger"]]
+    baseline_evidence = cast(dict[str, object], baseline["causal_evidence"])
+    changed_evidence = cast(dict[str, object], changed["causal_evidence"])
+    assert changed_evidence["level_range_inclusion_status"] == "REPLAY"
+    assert changed_evidence["level_range_inclusion_observed"] is True
+    assert (
+        changed_evidence["first_inclusion_close_status"]
+        == baseline_evidence["first_inclusion_close_status"]
+    )
+    assert (
+        changed_evidence["first_inclusion_close_relation"]
+        == baseline_evidence["first_inclusion_close_relation"]
+    )
 
 
 def test_v3_decision_stops_before_causal_analysis_when_safety_fails(

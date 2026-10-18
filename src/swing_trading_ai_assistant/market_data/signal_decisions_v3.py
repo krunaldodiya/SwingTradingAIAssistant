@@ -14,6 +14,9 @@ from typing import Final, Protocol, cast
 from swing_trading_ai_assistant.research_comparison.setup_evidence_v4 import (
     assemble_setup_evidence_v4,
 )
+from swing_trading_ai_assistant.research_comparison.setup_first_inclusion_close import (
+    observe_setup_first_inclusion_close_v1,
+)
 from swing_trading_ai_assistant.research_comparison.setup_observation_comparison import (
     canonical_comparison_bytes,
 )
@@ -47,6 +50,7 @@ _SOURCES: Final = (
     "src/swing_trading_ai_assistant/market_data/stock_observations.py",
     "src/swing_trading_ai_assistant/market_data/runtime_source_verifier.py",
     "src/swing_trading_ai_assistant/research_comparison/setup_evidence_v4.py",
+    "src/swing_trading_ai_assistant/research_comparison/setup_first_inclusion_close.py",
     "src/swing_trading_ai_assistant/research_comparison/setup_observation_comparison.py",
     "src/swing_trading_ai_assistant/research_packet/bharatstock.py",
     "src/swing_trading_ai_assistant/research_packet/bharatstock_v2.py",
@@ -217,6 +221,14 @@ def _safe_nonnegative_int(value: object, label: str) -> int | None:
     return value
 
 
+def _safe_bool(value: object, label: str) -> bool | None:
+    if value is None:
+        return None
+    if type(value) is not bool:
+        raise ValueError(f"invalid setup evidence {label}")
+    return value
+
+
 def _admit_setup_evidence(
     value: object,
 ) -> dict[str, object]:
@@ -233,11 +245,25 @@ def _admit_setup_evidence(
     return evidence
 
 
-def _causal_summary(evidence: dict[str, object]) -> dict[str, object]:
+def _causal_summary(
+    evidence: dict[str, object], close: dict[str, object]
+) -> dict[str, object]:
     continuity = _safe_component(evidence.get("continuity"), "continuity")
     invalidation = _safe_component(evidence.get("invalidation"), "invalidation")
     age = _safe_component(evidence.get("age"), "age")
     level = _safe_component(evidence.get("level"), "level")
+    inclusion = _safe_component(
+        evidence.get("level_range_inclusion"), "level range inclusion"
+    )
+    close_identity = close.get("result_identity_sha256")
+    if (
+        close.get("contract_version") != "causal-setup-first-inclusion-close@v1"
+        or close.get("range_inclusion_identity_sha256")
+        != inclusion.get("result_identity_sha256")
+        or type(close_identity) is not str
+        or _DIGEST.fullmatch(close_identity) is None
+    ):
+        raise ValueError("invalid first inclusion close binding")
     return {
         "setup_evidence_identity_sha256": evidence["result_identity_sha256"],
         "continuity_status": _safe_text(continuity.get("status"), "continuity status"),
@@ -254,6 +280,18 @@ def _causal_summary(evidence: dict[str, object]) -> dict[str, object]:
         ),
         "level_status": _safe_text(level.get("status"), "level status"),
         "level_relation": _safe_text(level.get("relation"), "level relation"),
+        "level_range_inclusion_status": _safe_text(
+            inclusion.get("status"), "inclusion status"
+        ),
+        "level_range_inclusion_observed": _safe_bool(
+            inclusion.get("inclusion_observed"), "inclusion observed"
+        ),
+        "first_inclusion_close_status": _safe_text(
+            close.get("status"), "first inclusion close status"
+        ),
+        "first_inclusion_close_relation": _safe_text(
+            close.get("first_close_relation"), "first inclusion close relation"
+        ),
     }
 
 
@@ -534,7 +572,9 @@ def _evaluate_causal_policy(  # noqa: C901 - ordered closed candidate policy
     runtime: str,
 ) -> dict[str, object]:
     evidence = _admit_setup_evidence(assemble_setup_evidence_v4(previous, current))
-    summary = _causal_summary(evidence)
+    summary = _causal_summary(
+        evidence, observe_setup_first_inclusion_close_v1(previous, current)
+    )
     continuity = _safe_component(evidence["continuity"], "continuity")
     continuity_status = summary["continuity_status"]
     if continuity_status == "REPLAY":

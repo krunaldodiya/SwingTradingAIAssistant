@@ -25,6 +25,15 @@ from .scan_decision_evidence import (  # pyright: ignore[reportPrivateUsage]
     _record_scan_decision_evidence_v1,  # pyright: ignore[reportPrivateUsage]
     read_scan_decision_evidence_v1,
 )
+from .scan_decision_measurement import (
+    _INSTANT as MEASUREMENT_INSTANT,  # pyright: ignore[reportPrivateUsage]
+)
+from .scan_decision_measurement import (
+    SCHEMA as MEASUREMENT_SCHEMA,
+)
+from .scan_decision_measurement import (
+    measure_scan_decision_evidence_v1,
+)
 from .signal_decisions import SCHEMA as V2_SCHEMA
 from .signal_decisions import evaluate_signal_decision_from_records_v2
 from .signal_decisions_scan_v3 import (
@@ -79,6 +88,13 @@ class _ReadDecisionEvidenceRequest:
 
 
 @dataclass(frozen=True)
+class _MeasureDecisionEvidenceRequest:
+    storage_root: Path
+    split_at: str | None
+    execution_convention: str | None
+
+
+@dataclass(frozen=True)
 class _TrackRequest:
     storage_root: Path
     log_scan: Path | None
@@ -109,6 +125,11 @@ def _parser() -> argparse.ArgumentParser:
     read_evidence.add_argument("--storage-root", type=Path, required=True)
     read_evidence.add_argument("--decision-evidence", required=True)
     read_evidence.add_argument("--output", choices=("json",), required=True)
+    measure_evidence = commands.add_parser("measure-decision-evidence")
+    measure_evidence.add_argument("--storage-root", type=Path, required=True)
+    measure_evidence.add_argument("--split-at", default=None)
+    measure_evidence.add_argument("--execution-convention", default=None)
+    measure_evidence.add_argument("--output", choices=("json",), required=True)
     track = commands.add_parser("track")
     track.add_argument("--storage-root", type=Path, required=True)
     track.add_argument("--log-scan", type=Path, default=None)
@@ -127,6 +148,7 @@ def _valid_request(  # noqa: C901 - command-specific closed request validation
     | _ScanRequest
     | _TrackRequest
     | _ReadDecisionEvidenceRequest
+    | _MeasureDecisionEvidenceRequest
 ):
     storage_root: object = getattr(args, "storage_root", None)
     command: object = getattr(args, "command", None)
@@ -189,6 +211,18 @@ def _valid_request(  # noqa: C901 - command-specific closed request validation
         if type(handle) is not str or _DIGEST.fullmatch(handle) is None:
             raise ValueError("invalid handle")
         return _ReadDecisionEvidenceRequest(storage_root, handle)
+    if command == "measure-decision-evidence":
+        split_at: object = getattr(args, "split_at", None)
+        convention: object = getattr(args, "execution_convention", None)
+        if split_at is not None and (
+            type(split_at) is not str or MEASUREMENT_INSTANT.fullmatch(split_at) is None
+        ):
+            raise ValueError("invalid split instant")
+        if convention is not None and (
+            type(convention) is not str or not 1 <= len(convention) <= 200
+        ):
+            raise ValueError("invalid execution convention")
+        return _MeasureDecisionEvidenceRequest(storage_root, split_at, convention)
     if command not in {"evaluate", "evaluate-v3"}:
         raise ValueError("invalid command")
     previous: object = getattr(args, "previous_observation", None)
@@ -273,6 +307,14 @@ def _decision_evidence_unavailable() -> dict[str, object]:
     }
 
 
+def _measurement_unavailable() -> dict[str, object]:
+    return {
+        "schema": MEASUREMENT_SCHEMA,
+        "status": "UNAVAILABLE",
+        "code": "DECISION_EVIDENCE_UNAVAILABLE",
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     try:
         request = _valid_request(_parser().parse_args(argv))
@@ -283,6 +325,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_track(request)
     if isinstance(request, _ReadDecisionEvidenceRequest):
         return _run_read_decision_evidence(request)
+    if isinstance(request, _MeasureDecisionEvidenceRequest):
+        return _run_measure_decision_evidence(request)
     if isinstance(request, _ScanRequest):
         return _run_scan(request)
     if request.version == "v2":
@@ -376,6 +420,23 @@ def _run_read_decision_evidence(request: _ReadDecisionEvidenceRequest) -> int:
         return 0
     except Exception:  # noqa: BLE001 - closed CLI error boundary
         _write(_decision_evidence_unavailable())
+        return 1
+
+
+def _run_measure_decision_evidence(
+    request: _MeasureDecisionEvidenceRequest,
+) -> int:
+    try:
+        _write(
+            measure_scan_decision_evidence_v1(
+                request.storage_root,
+                split_at=request.split_at,
+                execution_convention=request.execution_convention,
+            )
+        )
+        return 0
+    except Exception:  # noqa: BLE001 - closed CLI error boundary
+        _write(_measurement_unavailable())
         return 1
 
 

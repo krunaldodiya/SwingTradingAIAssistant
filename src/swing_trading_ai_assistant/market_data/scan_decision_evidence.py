@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+import stat
 from contextlib import ExitStack
 from pathlib import Path
 from typing import Final, cast
@@ -22,6 +24,7 @@ ENVELOPE_SCHEMA: Final = "scan-decision-evidence-envelope@v1"
 _NAMESPACE: Final = "scan-decision-evidence-v1"
 _DIGEST: Final = re.compile(r"[0-9a-f]{64}\Z")
 _MAX_BYTES: Final = 4 * 1024 * 1024
+_MAX_LISTED_RECORDS: Final = 4096
 _MAX_DEPTH: Final = 64
 _SCAN_KEYS: Final = frozenset(
     {
@@ -244,6 +247,7 @@ def _rows(  # noqa: C901 - complete fail-closed evidence binding
             observation = read_stock_observation_v1(root, handle)
             if (
                 observation.question != "CURRENT_STRUCTURE"
+                or observation.status != "READY"
                 or observation.symbol != symbol
             ):
                 raise ValueError("observation binding mismatch")
@@ -282,6 +286,59 @@ def _record_scan_decision_evidence_v1(  # pyright: ignore[reportUnusedFunction]
             )
         return handle
     except Exception as error:  # noqa: BLE001 - closed persistence boundary
+        raise ScanDecisionEvidenceUnavailable(
+            "DECISION_EVIDENCE_UNAVAILABLE"
+        ) from error
+
+
+def _admitted_handle(
+    directory: private_store._PrivateDirectory,  # pyright: ignore[reportPrivateUsage]
+    name: str,
+) -> str:
+    handle = name.removesuffix(".json")
+    if not name.endswith(".json") or _DIGEST.fullmatch(handle) is None:
+        raise ValueError("unexpected decision evidence entry")
+    try:
+        info = os.stat(name, dir_fd=directory.descriptor, follow_symlinks=False)
+    except OSError as error:
+        raise ValueError("decision evidence entry unreadable") from error
+    if (
+        not stat.S_ISREG(info.st_mode)
+        or info.st_uid != os.geteuid()
+        or info.st_nlink != 1
+        or stat.S_IMODE(info.st_mode) != 0o400
+        or not 1 <= info.st_size <= _MAX_BYTES
+    ):
+        raise ValueError("unsafe decision evidence entry")
+    return handle
+
+
+def list_scan_decision_evidence_handles_v1(root: Path) -> tuple[str, ...]:
+    """List retained immutable decision-evidence handles in deterministic order.
+
+    A missing namespace means no retained evidence. Any foreign, unsafe, or
+    oversized entry fails closed instead of being silently skipped.
+    """
+    try:
+        with _lease(root) as lease, ExitStack() as stack:
+            operation = stack.enter_context(lease.read_operation(root))
+            try:
+                directory = stack.enter_context(
+                    private_store._open_private_directory(  # pyright: ignore[reportPrivateUsage]
+                        operation, operation.descriptor, _NAMESPACE, create=False
+                    )
+                )
+            except FileNotFoundError:
+                return ()
+            names = os.listdir(directory.descriptor)
+            if len(names) > _MAX_LISTED_RECORDS:
+                raise ValueError("decision evidence store exceeded")
+            handles = sorted(_admitted_handle(directory, name) for name in names)
+            directory.ensure_live()
+        return tuple(handles)
+    except ScanDecisionEvidenceUnavailable:
+        raise
+    except Exception as error:  # noqa: BLE001 - redacted public read boundary
         raise ScanDecisionEvidenceUnavailable(
             "DECISION_EVIDENCE_UNAVAILABLE"
         ) from error

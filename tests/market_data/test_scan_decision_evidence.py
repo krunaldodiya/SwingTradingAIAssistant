@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+import swing_trading_ai_assistant.market_data.scan_decision_evidence as evidence_module
 from swing_trading_ai_assistant.market_data.scan_decision_evidence import (
     ScanDecisionEvidenceUnavailable,
     _record_scan_decision_evidence_v1,
@@ -41,6 +42,11 @@ def _scan() -> dict[str, object]:
         ],
         "runtime_code_identity_sha256": _runtime_identity(),
     }
+    return _reseal(value)
+
+
+def _reseal(value: dict[str, object]) -> dict[str, object]:
+    value.pop("result_identity_sha256", None)
     raw = (
         json.dumps(
             value,
@@ -116,3 +122,47 @@ def test_tampered_evidence_fails_closed(tmp_path: Path) -> None:
 def test_duplicate_symbol_evidence_refuses_publication(tmp_path: Path) -> None:
     with pytest.raises(ScanDecisionEvidenceUnavailable):
         _record_scan_decision_evidence_v1(tmp_path, _scan(), _rows() + _rows())
+
+
+def test_non_ready_observation_reference_refuses_publication(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    scan = _scan()
+    scan.update(
+        {
+            "candidate_count": 1,
+            "eligible_count": 1,
+            "unknown_count": 0,
+            "candidates": [
+                {
+                    "symbol": "DEMO",
+                    "decision": "RESEARCH_CANDIDATE",
+                    "safety_eligibility": {"status": "ELIGIBLE"},
+                }
+            ],
+            "other_stocks": [],
+        }
+    )
+    _reseal(scan)
+    rows: list[dict[str, object]] = [
+        {
+            "symbol": "DEMO",
+            "decision": "RESEARCH_CANDIDATE",
+            "safety_status": "ELIGIBLE",
+            "observation_handle": "b" * 64,
+        }
+    ]
+
+    class _NotReadyObservation:
+        question = "CURRENT_STRUCTURE"
+        status = "UNAVAILABLE"
+        symbol = "DEMO"
+
+    monkeypatch.setattr(
+        evidence_module,
+        "read_stock_observation_v1",
+        lambda *_args, **_kwargs: _NotReadyObservation(),
+    )
+
+    with pytest.raises(ScanDecisionEvidenceUnavailable):
+        _record_scan_decision_evidence_v1(tmp_path, scan, rows)

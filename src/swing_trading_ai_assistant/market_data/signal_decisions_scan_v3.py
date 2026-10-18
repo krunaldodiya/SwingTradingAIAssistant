@@ -17,9 +17,15 @@ import pyarrow.parquet as _pyarrow_parquet  # pyright: ignore[reportMissingImpor
 from .current_stock_research_v2 import research_current_stock_v2
 from .historical_nifty_universe import read_historic_nifty_universe
 from .runtime_source_verifier import runtime_source_sha256
+from .scanner_observation_pair_state_v1 import (
+    ScannerPairStateUnavailableV1,
+    advance_scanner_pair_state_v1,
+    read_scanner_pair_state_v1,
+)
 from .signal_decisions_scan_v3_runtime_identity_manifest import (
     SIGNAL_DECISIONS_SCAN_RUNTIME_SOURCE_SHA256_V3,
 )
+from .signal_decisions_v3 import evaluate_signal_decision_from_records_v3
 from .stock_eligibility_v3 import evaluate_stock_eligibility_from_record_v3
 from .stock_observations import (
     read_stock_observation_v1,
@@ -35,6 +41,7 @@ _SOURCES: Final = (
     "src/swing_trading_ai_assistant/market_data/historical_nifty_universe.py",
     "src/swing_trading_ai_assistant/market_data/stock_eligibility_v3.py",
     "src/swing_trading_ai_assistant/market_data/signal_decisions_v3.py",
+    "src/swing_trading_ai_assistant/market_data/scanner_observation_pair_state_v1.py",
     "src/swing_trading_ai_assistant/market_data/stock_observations.py",
     "src/swing_trading_ai_assistant/market_data/current_stock_research_v2.py",
     "src/swing_trading_ai_assistant/market_data/runtime_source_verifier.py",
@@ -379,44 +386,46 @@ def _evaluate_break_event(
     return latest_up, event_pos, age
 
 
-def _extract_causal_candidate(
+def _build_candidate_display_summary(
     observation: object,
     eligibility_result: dict[str, object],
     bars: dict[date, dict[str, Any]],
     industry: str,
     benchmark_median_return: Decimal,
-) -> tuple[str, dict[str, object] | None]:
-    """Evaluate whether an admitted observation has a valid causal swing candidate setup."""
-    status = eligibility_result.get("status")
-    if status == "UNKNOWN":
-        return "UNKNOWN", None
-    if status != "ELIGIBLE":
-        return "NO_TRADE", None
+) -> dict[str, object] | None:
+    """Project display analytics for a policy-made candidate from the same observation.
 
+    This display layer never decides anything: the canonical pair-policy
+    disposition is the only candidate authority, and any missing display input
+    yields an explicit null summary instead of a fabricated one. Its event,
+    level, stop, and age numbers are informational projections of the admitted
+    current observation, not the policy's anchors; the canonical anchors and
+    relations are available only through the attached ``policy_decision``.
+    """
     extracted = _extract_market_structure_calculation(observation)
     if extracted is None:
-        return "UNKNOWN", None
+        return None
     _, admitted_bars, events, pivots = extracted
 
     break_event = _evaluate_break_event(events, admitted_bars)
     if break_event is None:
-        return "NO_TRADE", None
+        return None
     latest_up, event_pos, age = break_event
 
     stop_price = _find_supporting_swing_low(pivots, event_pos)
     if stop_price is None:
-        return "NO_TRADE", None
+        return None
 
     ve = cast(dict[str, object], eligibility_result.get("verified_evidence", {}))
     price_raw = ve.get("current_quote_price_inr")
     if not price_raw:
-        return "UNKNOWN", None
+        return None
 
     current_price = Decimal(str(price_raw))
     if current_price <= stop_price:
-        return "NO_TRADE", None
+        return None
 
-    return "RESEARCH_CANDIDATE", _build_candidate_summary(
+    return _build_candidate_summary(
         latest_up,
         age,
         stop_price,
@@ -433,8 +442,18 @@ def build_trade_brief(
     decision: str,
     candidate_summary: dict[str, object] | None,
     eligibility_result: dict[str, object],
+    *,
+    policy_decision: dict[str, object] | None = None,
+    optional_context: dict[str, object] | None = None,
 ) -> dict[str, object]:
-    """Construct a versioned swing-trade-brief@v1 card for human or AI assistant consumption."""
+    """Construct a versioned swing-trade-brief@v1 card for human or AI assistant consumption.
+
+    ``policy_decision`` carries the exact canonical pair-policy result and
+    ``optional_context`` carries Plan 58/60 first-inclusion facts projected from
+    that same result. Both are attached only when the canonical policy ran and
+    still owns the effective decision; a later safety override replaces the
+    decision authority and therefore attaches neither.
+    """
     is_candidate = decision == "RESEARCH_CANDIDATE" and candidate_summary is not None
     if is_candidate and candidate_summary is not None:
         smc = cast(dict[str, object], candidate_summary.get("smc_price_action", {}))
@@ -451,7 +470,7 @@ def build_trade_brief(
             f"State candidate age is {candidate_summary['age_completed_sessions']} completed session(s) (within the 1–5 freshness window).",
             f"State candidate belongs to {candidate_summary.get('industry', 'NSE Equity')} industry.",
             f"State breakout price action status is {retest} ({dist} relative to breakout level).",
-            f"State institutional demand zone support is INR {candidate_summary['supporting_stop_reference_inr']} with zone width INR {smc.get('demand_zone_width_inr')}.",
+            f"State SMC computed demand-area support reference is INR {candidate_summary['supporting_stop_reference_inr']} with implied zone width INR {smc.get('demand_zone_width_inr')}.",
             f"State breakout volume expansion is {vol.get('volume_expansion')} with relative volume {vol.get('rvol')}.",
             f"State breakout candle quality is {pa.get('quality')} with body forming {pa.get('body_percent')} of range.",
             f"State 20-session relative strength vs Nifty benchmark is {rs.get('relative_strength')} ({rs.get('excess_return')}).",
@@ -467,7 +486,7 @@ def build_trade_brief(
         "Do not set speculative target prices, reward multipliers, or profit-taking exits.",
         "Do not issue automated broker orders, capital allocation advice, or position sizes.",
     ]
-    return {
+    brief: dict[str, object] = {
         "schema": BRIEF_SCHEMA,
         "symbol": symbol,
         "isin": isin,
@@ -483,15 +502,26 @@ def build_trade_brief(
             "forbidden_claims": forbidden_claims,
         },
     }
+    if policy_decision is not None:
+        brief["policy_decision"] = policy_decision
+    if optional_context is not None:
+        brief["optional_context"] = optional_context
+    return brief
 
 
-def _current_structure_observation_handles(storage_root: Path) -> dict[str, str]:
-    """Index retained current-structure observations once per universe scan."""
+def _retained_structure_handles(storage_root: Path) -> dict[str, str]:
+    """Index retained current-structure observations once per universe scan.
+
+    The index is used only to bootstrap the first admitted predecessor of a
+    symbol whose scanner pair state does not exist yet. It never supplies a
+    previous/current pair for a causal decision, and selection is deterministic
+    (sorted handle order) among admitted READY observations.
+    """
     handles: dict[str, str] = {}
     obs_dir = storage_root / "stock-observations-v1"
     if not obs_dir.exists():
         return handles
-    for path in obs_dir.glob("*.json"):
+    for path in sorted(obs_dir.glob("*.json")):
         if len(path.stem) != 64:
             continue
         try:
@@ -564,6 +594,78 @@ def _evaluate_anti_manipulation_safety(
     return True, None
 
 
+def _unavailable_result(
+    symbol: str, reason: str
+) -> tuple[dict[str, object], bool, str, str | None, str | None, str, str | None]:
+    """Return one explicit fail-closed symbol result with no pair and no candidate."""
+    brief: dict[str, object] = {
+        "schema": BRIEF_SCHEMA,
+        "symbol": symbol,
+        "isin": "",
+        "exchange": "NSE",
+        "decision": "UNKNOWN",
+        "candidate_summary": None,
+        "safety_eligibility": {"status": "UNKNOWN", "explanation_ledger": []},
+        "ai_guidance": {
+            "allowed_claims": [f"State stock {symbol} is UNAVAILABLE."],
+            "forbidden_claims": [],
+        },
+    }
+    return brief, False, "UNKNOWN", None, reason, "INSUFFICIENT_STRUCTURE", None
+
+
+def _optional_context_from_policy(
+    policy_result: dict[str, object] | None,
+) -> dict[str, object] | None:
+    """Project existing Plan 58/60 first-inclusion facts from canonical pair evidence."""
+    if policy_result is None:
+        return None
+    evidence = policy_result.get("causal_evidence")
+    if type(evidence) is not dict:
+        return None
+    admitted = cast(dict[str, object], evidence)
+    return {
+        "level_range_inclusion_status": admitted.get("level_range_inclusion_status"),
+        "level_range_inclusion_observed": admitted.get(
+            "level_range_inclusion_observed"
+        ),
+        "first_inclusion_close_status": admitted.get("first_inclusion_close_status"),
+        "first_inclusion_close_relation": admitted.get(
+            "first_inclusion_close_relation"
+        ),
+    }
+
+
+def _retained_unselected_stocks(
+    all_candidates: Sequence[dict[str, object]],
+    selected: Sequence[dict[str, object]],
+) -> list[dict[str, object]]:
+    """Retain every policy-qualified candidate that did not fit the basket.
+
+    Basket capacity and Nifty 100 priority are selection reasons, never policy
+    failures: each unselected qualified symbol keeps its policy decision and one
+    explicit reason.
+    """
+    selected_symbols = {str(candidate["symbol"]) for candidate in selected}
+    retained: list[dict[str, object]] = []
+    for candidate in all_candidates:
+        if str(candidate["symbol"]) in selected_symbols:
+            continue
+        summary = cast(dict[str, object], candidate.get("candidate_summary") or {})
+        safety = cast(dict[str, object], candidate.get("safety_eligibility") or {})
+        retained.append(
+            {
+                "symbol": candidate["symbol"],
+                "industry": summary.get("industry", "Unknown"),
+                "decision": candidate["decision"],
+                "safety_status": safety.get("status"),
+                "failed_rule": "BASKET_CAPACITY_OR_NIFTY100_PRIORITY",
+                "current_price_inr": summary.get("current_price_inr"),
+            }
+        )
+    return retained
+
+
 def _scan_stock(  # noqa: C901 - multi-family screening and anti-manipulation gate
     symbol: str,
     storage_root: Path,
@@ -572,9 +674,23 @@ def _scan_stock(  # noqa: C901 - multi-family screening and anti-manipulation ga
     benchmark_median_return: Decimal,
     retained_handle: str | None = None,
 ) -> tuple[dict[str, object], bool, str, str | None, str | None, str, str | None]:
-    """Execute single-stock structure observation, safety eligibility, and brief generation."""
+    """Execute the canonical pair policy, safety eligibility, and brief generation.
+
+    Pair state is the only source of a prior/current observation pair. The
+    retained index may bootstrap a first admitted predecessor, replay evaluates
+    the exact admitted pair as an explicit replay, and every state failure
+    fails closed with no pair and no candidate.
+    """
     try:
-        if retained_handle is not None and not refresh:
+        state = read_scanner_pair_state_v1(storage_root, symbol)
+    except Exception:  # noqa: BLE001 - per-symbol fail-closed boundary
+        return _unavailable_result(symbol, "OBSERVATION_PAIR_STATE_UNAVAILABLE")
+
+    try:
+        if state is not None and not refresh:
+            handle = state.current_observation_identity_sha256
+            obs_result = read_stock_observation_v1(storage_root, handle)
+        elif retained_handle is not None and not refresh:
             handle = retained_handle
             obs_result = read_stock_observation_v1(storage_root, handle)
         else:
@@ -585,30 +701,68 @@ def _scan_stock(  # noqa: C901 - multi-family screening and anti-manipulation ga
                 refresh=refresh,
             )
             handle = record_stock_observation_v1(storage_root, obs_result)
-        elig_result = evaluate_stock_eligibility_from_record_v3(storage_root, handle)
     except Exception:
-        fallback_brief: dict[str, object] = {
-            "schema": BRIEF_SCHEMA,
-            "symbol": symbol,
-            "isin": "",
-            "exchange": "NSE",
-            "decision": "UNKNOWN",
-            "candidate_summary": None,
-            "safety_eligibility": {"status": "UNKNOWN", "explanation_ledger": []},
-            "ai_guidance": {
-                "allowed_claims": [f"State stock {symbol} is UNAVAILABLE."],
-                "forbidden_claims": [],
-            },
-        }
-        return (
-            fallback_brief,
-            False,
-            "UNKNOWN",
-            None,
-            "OBSERVATION_OR_PROVIDER_UNAVAILABLE",
-            "INSUFFICIENT_STRUCTURE",
-            None,
-        )
+        return _unavailable_result(symbol, "OBSERVATION_OR_PROVIDER_UNAVAILABLE")
+
+    if (
+        getattr(obs_result, "question", None) != "CURRENT_STRUCTURE"
+        or getattr(obs_result, "symbol", None) != symbol
+        or getattr(obs_result, "status", None) != "READY"
+    ):
+        return _unavailable_result(symbol, "OBSERVATION_STRUCTURE_NOT_READY")
+
+    policy_result: dict[str, object] | None = None
+    failure_reason: str | None = None
+    try:
+        if state is None:
+            advance_scanner_pair_state_v1(
+                storage_root,
+                symbol,
+                expected_current_observation_identity_sha256=None,
+                new_current_observation_identity_sha256=handle,
+            )
+            failure_reason = "INSUFFICIENT_OBSERVATION_PAIR"
+        elif handle == state.current_observation_identity_sha256:
+            policy_result = evaluate_signal_decision_from_records_v3(
+                storage_root, handle, handle
+            )
+        else:
+            policy_result = evaluate_signal_decision_from_records_v3(
+                storage_root,
+                state.current_observation_identity_sha256,
+                handle,
+            )
+            advance_scanner_pair_state_v1(
+                storage_root,
+                symbol,
+                expected_current_observation_identity_sha256=(
+                    state.current_observation_identity_sha256
+                ),
+                new_current_observation_identity_sha256=handle,
+            )
+    except ScannerPairStateUnavailableV1:
+        return _unavailable_result(symbol, "OBSERVATION_PAIR_STATE_UNAVAILABLE")
+    except Exception:
+        return _unavailable_result(symbol, "OBSERVATION_OR_PROVIDER_UNAVAILABLE")
+
+    policy_eligibility = (
+        policy_result.get("eligibility") if policy_result is not None else None
+    )
+    if type(policy_eligibility) is dict:
+        elig_result = cast(dict[str, object], policy_eligibility)
+    else:
+        try:
+            elig_result = evaluate_stock_eligibility_from_record_v3(
+                storage_root, handle
+            )
+        except Exception:
+            return _unavailable_result(symbol, "OBSERVATION_OR_PROVIDER_UNAVAILABLE")
+
+    decision = "UNKNOWN"
+    if policy_result is not None:
+        disposition = str(policy_result.get("disposition", "UNKNOWN"))
+        if disposition in {"RESEARCH_CANDIDATE", "NO_TRADE", "UNKNOWN"}:
+            decision = disposition
 
     safety_status = str(elig_result.get("status", "UNKNOWN"))
     ve = cast(dict[str, object], elig_result.get("verified_evidence") or {})
@@ -619,9 +773,11 @@ def _scan_stock(  # noqa: C901 - multi-family screening and anti-manipulation ga
     )
 
     bars = _load_historical_bars_for_symbol(storage_root, symbol)
-    decision, candidate_summary = _extract_causal_candidate(
-        obs_result, elig_result, bars, industry, benchmark_median_return
-    )
+    candidate_summary: dict[str, object] | None = None
+    if decision == "RESEARCH_CANDIDATE":
+        candidate_summary = _build_candidate_display_summary(
+            obs_result, elig_result, bars, industry, benchmark_median_return
+        )
 
     isin = ""
     trend = "INSUFFICIENT_STRUCTURE"
@@ -639,24 +795,9 @@ def _scan_stock(  # noqa: C901 - multi-family screening and anti-manipulation ga
                     if calc:
                         trend = str(getattr(calc, "trend", "INSUFFICIENT_STRUCTURE"))
 
-    brief = build_trade_brief(
-        symbol=symbol,
-        isin=isin,
-        decision=decision,
-        candidate_summary=candidate_summary,
-        eligibility_result=elig_result,
-    )
-
-    failed_rule = None
-    if safety_status != "ELIGIBLE":
-        ledger = cast(
-            list[dict[str, object]], elig_result.get("explanation_ledger", [])
-        )
-        failed_entry = next(
-            (e for e in ledger if e.get("outcome") in {"FAIL", "UNKNOWN"}), None
-        )
-        failed_rule = str(failed_entry.get("rule_id", "")) if failed_entry else None
-    else:
+    final_eligibility = elig_result
+    safety_override = False
+    if safety_status == "ELIGIBLE":
         # Anti-Manipulation & Asset Quality Gate
         cur_price_dec = Decimal(price_inr) if price_inr else None
         safe_asset, safety_reason = _evaluate_anti_manipulation_safety(
@@ -669,15 +810,53 @@ def _scan_stock(  # noqa: C901 - multi-family screening and anti-manipulation ga
             decision = "NO_TRADE"
             candidate_summary = None
             safety_status = "INELIGIBLE"
-            failed_rule = safety_reason
-            # Rebuild brief with updated decision
-            brief = build_trade_brief(
-                symbol=symbol,
-                isin=isin,
-                decision=decision,
-                candidate_summary=candidate_summary,
-                eligibility_result=elig_result,
-            )
+            safety_override = True
+            final_eligibility = {
+                **elig_result,
+                "status": "INELIGIBLE",
+                "explanation_ledger": [
+                    *cast(
+                        list[dict[str, object]],
+                        elig_result.get("explanation_ledger", []),
+                    ),
+                    {
+                        "rule_id": safety_reason,
+                        "outcome": "FAIL",
+                        "reason": (
+                            "Anti-manipulation and asset-quality gate rejected stock."
+                        ),
+                    },
+                ],
+            }
+
+    failed_rule: str | None = None
+    if safety_status != "ELIGIBLE":
+        ledger = cast(
+            list[dict[str, object]],
+            final_eligibility.get("explanation_ledger", []),
+        )
+        failed_entry = next(
+            (e for e in ledger if e.get("outcome") in {"FAIL", "UNKNOWN"}), None
+        )
+        failed_rule = str(failed_entry.get("rule_id", "")) if failed_entry else None
+    elif failure_reason is not None:
+        failed_rule = failure_reason
+    elif policy_result is not None and decision in {"NO_TRADE", "UNKNOWN"}:
+        decision_code = policy_result.get("decision_code")
+        failed_rule = str(decision_code) if decision_code else None
+
+    decision_authority: dict[str, object] | None = (
+        None if safety_override else policy_result
+    )
+    brief = build_trade_brief(
+        symbol=symbol,
+        isin=isin,
+        decision=decision,
+        candidate_summary=candidate_summary,
+        eligibility_result=final_eligibility,
+        policy_decision=decision_authority,
+        optional_context=_optional_context_from_policy(decision_authority),
+    )
     is_candidate = decision == "RESEARCH_CANDIDATE"
     return brief, is_candidate, safety_status, price_inr, failed_rule, trend, handle
 
@@ -790,9 +969,7 @@ def scan_signal_decisions_v3(  # noqa: C901 - lifecycle orchestration
     eligible_count = 0
     ineligible_count = 0
     unknown_count = 0
-    retained_handles = (
-        {} if refresh else _current_structure_observation_handles(storage_root)
-    )
+    retained_handles = {} if refresh else _retained_structure_handles(storage_root)
 
     for symbol in target_symbols:
         ind = industry_map.get(symbol, "Unknown")
@@ -869,25 +1046,13 @@ def scan_signal_decisions_v3(  # noqa: C901 - lifecycle orchestration
             )[:10]
         else:
             candidates = nifty100_candidates[:10]
-        selected_symbols = {str(candidate["symbol"]) for candidate in candidates}
-        for candidate in all_candidates:
-            if str(candidate["symbol"]) in selected_symbols:
-                continue
-            summary = cast(dict[str, object], candidate.get("candidate_summary") or {})
-            safety = cast(dict[str, object], candidate.get("safety_eligibility") or {})
-            other_stocks.append(
-                {
-                    "symbol": candidate["symbol"],
-                    "industry": summary.get("industry", "Unknown"),
-                    "decision": candidate["decision"],
-                    "safety_status": safety.get("status"),
-                    "failed_rule": "BASKET_CAPACITY_OR_NIFTY100_PRIORITY",
-                    "current_price_inr": summary.get("current_price_inr"),
-                }
-            )
+        other_stocks.extend(_retained_unselected_stocks(all_candidates, candidates))
     # Attach sector peer participation to each candidate
     for c in candidates:
-        summary = cast(dict[str, object], c.get("candidate_summary", {}))
+        summary_value = c.get("candidate_summary")
+        if type(summary_value) is not dict:
+            continue
+        summary = cast(dict[str, object], summary_value)
         c_ind = str(summary.get("industry", "Unknown"))
         all_in_ind = sum(1 for sym in target_symbols if industry_map.get(sym) == c_ind)
         peer_cands: list[str] = []
@@ -967,7 +1132,12 @@ def format_scan_table(scan_result: dict[str, object]) -> str:
         lines.append("-" * 125)
         for c in candidates:
             sym = str(c.get("symbol", ""))
-            summary = cast(dict[str, object], c.get("candidate_summary", {}))
+            summary_value = c.get("candidate_summary")
+            summary = (
+                cast(dict[str, object], summary_value)
+                if type(summary_value) is dict
+                else {}
+            )
             smc = cast(dict[str, object], summary.get("smc_price_action", {}))
             vol = cast(dict[str, object], summary.get("volume_analysis", {}))
             pa = cast(dict[str, object], summary.get("price_action_quality", {}))
