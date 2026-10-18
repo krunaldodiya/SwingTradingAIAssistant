@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import date
+import os
+from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import cast
@@ -14,14 +15,20 @@ from test_current_stock_research import _NOW
 from test_stock_eligibility_v3 import (
     _actions,
     _history,
+    _immediate_successor_session,
     _Providers,
     _quote,
     _structure_observation,
 )
 
+import swing_trading_ai_assistant.market_data.signal_decisions_scan_v3 as scan_module
+import swing_trading_ai_assistant.market_data.signal_decisions_v3 as decision_module
 import swing_trading_ai_assistant.market_data.stock_eligibility_v3 as stock_eligibility_v3_module
 from swing_trading_ai_assistant.market_data.current_stock_research_v2 import (
     CurrentStockResearchResultV2,
+)
+from swing_trading_ai_assistant.market_data.scanner_observation_pair_state_v1 import (
+    read_scanner_pair_state_v1,
 )
 from swing_trading_ai_assistant.market_data.signal_decisions_scan_v3 import (
     BRIEF_SCHEMA,
@@ -39,6 +46,16 @@ from swing_trading_ai_assistant.market_data.stock_observations import (
 )
 
 _SYMBOL = "RELIANCE"
+
+
+def _install_providers(monkeypatch: pytest.MonkeyPatch, providers: _Providers) -> None:
+    """Install one provider stack for both the scan safety and canonical policy paths."""
+
+    def factory(*, clock: object) -> _Providers:
+        return providers
+
+    monkeypatch.setattr(stock_eligibility_v3_module, "_LiveProviders", factory)
+    monkeypatch.setattr(decision_module, "_LiveProviders", factory)
 
 
 def _write_adjusted_day_bars(storage_root: Path, rows: list[dict[str, object]]) -> None:
@@ -375,3 +392,164 @@ def test_anti_manipulation_safety_filters() -> None:
     )
     assert ipo_ok is False
     assert "NEWLY_LISTED_EXCLUDED" in str(ipo_reason)
+
+
+def test_scan_first_observation_records_explicit_non_candidate_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    observation = cast(CurrentStockResearchResultV2, _structure_observation(tmp_path))
+    handle = record_stock_observation_v1(tmp_path, observation)
+    source = observation.packet.source("MARKET_STRUCTURE")
+    assert source is not None
+    _install_providers(
+        monkeypatch,
+        _Providers(
+            _quote(source.admitted_sessions[-1]),
+            _history(observation, volume=3_000_000),
+            _actions(observation),
+        ),
+    )
+
+    result = scan_signal_decisions_v3(tmp_path, symbols=(_SYMBOL,), clock=lambda: _NOW)
+
+    assert result["candidate_count"] == 0
+    assert result["eligible_count"] == 1
+    rows = cast(list[dict[str, object]], result["other_stocks"])
+    assert len(rows) == 1
+    assert rows[0]["decision"] == "UNKNOWN"
+    assert rows[0]["safety_status"] == "ELIGIBLE"
+    assert rows[0]["failed_rule"] == "INSUFFICIENT_OBSERVATION_PAIR"
+
+    state = read_scanner_pair_state_v1(tmp_path, _SYMBOL)
+    assert state is not None
+    assert state.sequence == 1
+    assert state.previous_observation_identity_sha256 is None
+    assert state.current_observation_identity_sha256 == handle
+
+
+def test_scan_advances_distinct_observation_with_canonical_pair_policy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    previous = cast(CurrentStockResearchResultV2, _structure_observation(tmp_path))
+    previous_handle = record_stock_observation_v1(tmp_path, previous)
+    previous_source = previous.packet.source("MARKET_STRUCTURE")
+    assert previous_source is not None
+    _install_providers(
+        monkeypatch,
+        _Providers(
+            _quote(previous_source.admitted_sessions[-1]),
+            _history(previous, volume=3_000_000),
+            _actions(previous),
+        ),
+    )
+    first = scan_signal_decisions_v3(tmp_path, symbols=(_SYMBOL,), clock=lambda: _NOW)
+    assert first["candidate_count"] == 0
+
+    current = cast(
+        CurrentStockResearchResultV2, _structure_observation(tmp_path, later=True)
+    )
+    current_handle = record_stock_observation_v1(tmp_path, current)
+    successor = _immediate_successor_session(tmp_path, current)
+    _install_providers(
+        monkeypatch,
+        _Providers(
+            _quote(
+                successor.trade_date,
+                timestamp=successor.open_at + timedelta(minutes=45),
+            ),
+            _history(current, volume=3_000_000),
+            _actions(current),
+        ),
+    )
+    monkeypatch.setattr(
+        scan_module, "research_current_stock_v2", lambda *_args, **_kwargs: current
+    )
+
+    result = scan_signal_decisions_v3(
+        tmp_path, symbols=(_SYMBOL,), refresh=True, clock=lambda: _NOW
+    )
+
+    assert result["candidate_count"] == 1
+    candidates = cast(list[dict[str, object]], result["candidates"])
+    candidate = candidates[0]
+    policy = cast(dict[str, object], candidate["policy_decision"])
+    assert policy["disposition"] == "RESEARCH_CANDIDATE"
+    assert policy["decision_code"] == "SUPPORTED_CAUSAL_POLICY_PASSED"
+    assert type(candidate["candidate_summary"]) is dict
+    evidence = cast(dict[str, object], policy["causal_evidence"])
+    assert candidate["optional_context"] == {
+        "level_range_inclusion_status": evidence["level_range_inclusion_status"],
+        "level_range_inclusion_observed": evidence["level_range_inclusion_observed"],
+        "first_inclusion_close_status": evidence["first_inclusion_close_status"],
+        "first_inclusion_close_relation": evidence["first_inclusion_close_relation"],
+    }
+
+    state = read_scanner_pair_state_v1(tmp_path, _SYMBOL)
+    assert state is not None
+    assert state.sequence == 2
+    assert state.previous_observation_identity_sha256 == previous_handle
+    assert state.current_observation_identity_sha256 == current_handle
+
+
+def test_scan_replay_returns_canonical_policy_without_candidate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    observation = cast(CurrentStockResearchResultV2, _structure_observation(tmp_path))
+    handle = record_stock_observation_v1(tmp_path, observation)
+    source = observation.packet.source("MARKET_STRUCTURE")
+    assert source is not None
+    _install_providers(
+        monkeypatch,
+        _Providers(
+            _quote(source.admitted_sessions[-1]),
+            _history(observation, volume=3_000_000),
+            _actions(observation),
+        ),
+    )
+
+    scan_signal_decisions_v3(tmp_path, symbols=(_SYMBOL,), clock=lambda: _NOW)
+    result = scan_signal_decisions_v3(tmp_path, symbols=(_SYMBOL,), clock=lambda: _NOW)
+
+    assert result["candidate_count"] == 0
+    rows = cast(list[dict[str, object]], result["other_stocks"])
+    assert len(rows) == 1
+    assert rows[0]["decision"] == "NO_TRADE"
+    assert rows[0]["failed_rule"] == "CAUSAL_REPLAY_HAS_NO_NEW_CONFIRMATION"
+
+    state = read_scanner_pair_state_v1(tmp_path, _SYMBOL)
+    assert state is not None
+    assert state.sequence == 1
+    assert state.current_observation_identity_sha256 == handle
+
+
+def test_scan_fails_closed_when_pair_state_is_unavailable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    observation = cast(CurrentStockResearchResultV2, _structure_observation(tmp_path))
+    record_stock_observation_v1(tmp_path, observation)
+    source = observation.packet.source("MARKET_STRUCTURE")
+    assert source is not None
+    _install_providers(
+        monkeypatch,
+        _Providers(
+            _quote(source.admitted_sessions[-1]),
+            _history(observation, volume=3_000_000),
+            _actions(observation),
+        ),
+    )
+    scan_signal_decisions_v3(tmp_path, symbols=(_SYMBOL,), clock=lambda: _NOW)
+
+    state_file = next((tmp_path / "scanner-pair-state-v1").glob("*/*/*.json"))
+    os.chmod(state_file, 0o600)
+    state_file.write_bytes(b"{}\n")
+    os.chmod(state_file, 0o400)
+
+    result = scan_signal_decisions_v3(tmp_path, symbols=(_SYMBOL,), clock=lambda: _NOW)
+
+    assert result["candidate_count"] == 0
+    assert result["unknown_count"] == 1
+    rows = cast(list[dict[str, object]], result["other_stocks"])
+    assert len(rows) == 1
+    assert rows[0]["decision"] == "UNKNOWN"
+    assert rows[0]["safety_status"] == "UNKNOWN"
+    assert rows[0]["failed_rule"] == "OBSERVATION_PAIR_STATE_UNAVAILABLE"
