@@ -97,9 +97,10 @@ Command families with extra codes:
 | `130` | Operator cancelled | the same three commands |
 | `3` | One fixed "unavailable" diagnostic (not partial coverage) | `historical-census`, `evidence-readiness` |
 
-stderr is never data. On exit `2` (and the fixed `3` above) stderr carries one
-sanitized token such as `request_invalid`, `internal_error`, `unavailable`, or
-`probe_failed`. Never parse stderr text as market facts.
+stderr is never data. On exit `2` (and the fixed `3` above) stderr, when
+non-empty, carries one sanitized token such as `request_invalid`,
+`internal_error`, `unavailable`, or `probe_failed`; on the stdout-envelope
+paths above it stays empty. Never parse stderr text as market facts.
 
 ### 2.4 Evidence discipline
 
