@@ -39,7 +39,9 @@ def _record(root: Path, *, later: bool) -> str:
     return record_stock_observation_v1(root, observation)
 
 
-def _chain_directory(root: Path, symbol: str = "RELIANCE", *, create: bool = False) -> Path:
+def _chain_directory(
+    root: Path, symbol: str = "RELIANCE", *, create: bool = False
+) -> Path:
     directory = root
     for part in ("scanner-pair-state-v1", _generation_name(), symbol):
         directory = directory / part
