@@ -8,6 +8,7 @@ Harness portability revision: [#170](https://github.com/krunaldodiya/SwingTradin
 Review-efficiency revision: [#174](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/174)
 Decision-retention revision: [#179](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/179)
 Interactive-responsiveness revision: [#194](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/194)
+Scan-universe revision: [#339](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/339)
 
 This revision supersedes the OMP-only runtime, named-model routing, Herdr-only orchestration, and harness-specific session/permission choices in #163 and #168. Historical records retain their original evidence; their harness choices are not requirements for new work.
 
@@ -288,16 +289,24 @@ autonomous trading bot.
 - Target Portfolio Basket: A swing trading research basket contains 5 to 10
   validated candidates. Every validated Nifty 100 stock has absolute priority
   and may fill all 10 basket slots.
-- One-Pass Nifty 500 Evaluation: Resolve current official Nifty 500 membership,
-  evaluate each member only once, and tag the current Nifty 100 subset. The
-  current member need not have existed throughout the retained price window; an
-  absent or insufficient historic record fails that stock only.
-- Conditional Tier-2 Basket Fill (Nifty 500 Ex-Nifty 100): Only when fewer than
-  5 Nifty 100 candidates validate may Nifty 500-only candidates fill remaining
+- Exact Scan Universes: `signal-decisions scan` resolves exactly one current
+  official universe per run: Nifty 50 (50 members), Nifty Next 50 (50 members),
+  Nifty 100 (100 members; Nifty 50 plus Nifty Next 50), or Nifty 200 (200
+  members; includes Nifty 100). Nifty 50, Nifty Next 50, and Nifty 100 scans
+  evaluate exactly their resolved membership with no cross-universe gap fill.
+  Nifty 500 is retired as a runtime scan universe; its historical evidence
+  remains preserved and no scan path resolves it.
+- One-Pass Nifty 200 Evaluation: For a Nifty 200 scan, resolve current official
+  Nifty 200 membership, evaluate each member only once, and tag the current
+  Nifty 100 subset. The current member need not have existed throughout the
+  retained price window; an absent or insufficient historic record fails that
+  stock only.
+- Conditional Tier-2 Basket Fill (Nifty 200 Ex-Nifty 100): Only when fewer than
+  5 Nifty 100 candidates validate may Nifty 200-only candidates fill remaining
   basket slots. They never displace a validated Nifty 100 candidate, and no
   Nifty 100 provider or data work is repeated.
 - Strict Anti-Manipulation & Asset Quality Filter: Every candidate, whether from
-  Nifty 100 or Nifty 500 expansion, MUST pass an explicit anti-manipulation and
+  Nifty 100 or Nifty 200 expansion, MUST pass an explicit anti-manipulation and
   asset-quality gate before admission:
   1. Newly Listed Stock Exclusion: Must have at least 120 trading sessions
      (>= 6 months) of continuous public history. Untested recent IPOs fail
@@ -311,7 +320,7 @@ autonomous trading bot.
      and lower daily price bands (`CIRCUIT_PROXIMITY`).
 - A supported stock outside Nifty 100 may use the same capabilities when it
   passes those gates. It must not be rejected solely for index non-membership;
-  conversely, Nifty 100 or Nifty 500 membership never bypasses a gate.
+  conversely, Nifty 100 or Nifty 200 membership never bypasses a gate.
 - Return explicit malformed, unsupported, or insufficient-evidence outcomes
   instead of embedding an index/category check, omitting a member, weakening a
   threshold, or silently substituting another stock.
