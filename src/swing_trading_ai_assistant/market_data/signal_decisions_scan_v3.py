@@ -1,4 +1,4 @@
-"""Automated Nifty 100 and explicit stock-list swing trade candidate scanning."""
+"""Automated retained-universe and explicit stock-list swing trade candidate scanning."""
 
 from __future__ import annotations
 
@@ -32,7 +32,7 @@ from .stock_observations import (
     record_stock_observation_v1,
 )
 
-SCHEMA: Final = "swing-trade-scan@v1"
+SCHEMA: Final = "swing-trade-scan@v2"
 SCAN_SCHEMA: Final = SCHEMA
 BRIEF_SCHEMA: Final = "swing-trade-brief@v1"
 _SYMBOL: Final = re.compile(r"[A-Z0-9][A-Z0-9.&_-]{0,31}\Z")
@@ -645,10 +645,12 @@ def _optional_context_from_policy(
 def _retained_unselected_stocks(
     all_candidates: Sequence[dict[str, object]],
     selected: Sequence[dict[str, object]],
+    *,
+    reason: str,
 ) -> list[dict[str, object]]:
     """Retain every policy-qualified candidate that did not fit the basket.
 
-    Basket capacity and Nifty 100 priority are selection reasons, never policy
+    Basket capacity and priority tiers are selection reasons, never policy
     failures: each unselected qualified symbol keeps its policy decision and one
     explicit reason.
     """
@@ -665,7 +667,7 @@ def _retained_unselected_stocks(
                 "industry": summary.get("industry", "Unknown"),
                 "decision": candidate["decision"],
                 "safety_status": safety.get("status"),
-                "failed_rule": "BASKET_CAPACITY_OR_NIFTY100_PRIORITY",
+                "failed_rule": reason,
                 "current_price_inr": summary.get("current_price_inr"),
             }
         )
@@ -867,29 +869,48 @@ def _scan_stock(  # noqa: C901 - multi-family screening and anti-manipulation ga
     return brief, is_candidate, safety_status, price_inr, failed_rule, trend, handle
 
 
+_UNIVERSE_SOURCE_LISTS: Final = {
+    "NIFTY_50": ("nifty50",),
+    "NIFTY_NEXT_50": ("niftynext50",),
+    "NIFTY_100": ("nifty100",),
+    "NIFTY_200": ("nifty100", "nifty200"),
+}
+
+
 def _resolve_target_symbols(
     storage_root: Path,
     symbols: Sequence[str] | None,
-    nifty100: bool,
+    universe: str | None,
 ) -> tuple[tuple[str, ...], str, frozenset[str], dict[str, object] | None]:
-    if nifty100:
+    if universe is not None:
         if symbols is not None:
-            raise ValueError("cannot supply both explicit symbols and nifty100 flag")
-        universe = read_historic_nifty_universe(storage_root)
-        return (
-            universe.nifty500,
-            "NIFTY_100_PRIORITY_NIFTY_500",
-            frozenset(universe.nifty100),
-            {
-                "nifty100_source_sha256": universe.nifty100_source_sha256,
-                "nifty500_source_sha256": universe.nifty500_source_sha256,
-                "nifty100_source_url": universe.nifty100_source_url,
-                "nifty500_source_url": universe.nifty500_source_url,
-                "retrieved_at": universe.retrieved_at.isoformat(),
-                "window_start": universe.window_start.isoformat(),
-                "window_end": universe.window_end.isoformat(),
-            },
+            raise ValueError("cannot supply both explicit symbols and a universe flag")
+        if universe not in _UNIVERSE_SOURCE_LISTS:
+            raise ValueError("invalid universe")
+        retained = read_historic_nifty_universe(storage_root)
+        targets = {
+            "NIFTY_50": retained.nifty50,
+            "NIFTY_NEXT_50": retained.niftynext50,
+            "NIFTY_100": retained.nifty100,
+            "NIFTY_200": retained.nifty200,
+        }[universe]
+        priority = (
+            frozenset(retained.nifty100)
+            if universe == "NIFTY_200"
+            else frozenset(targets)
         )
+        evidence: dict[str, object] = {
+            "universe": universe,
+            "retrieved_at": retained.retrieved_at.isoformat(),
+            "window_start": retained.window_start.isoformat(),
+            "window_end": retained.window_end.isoformat(),
+        }
+        for name in _UNIVERSE_SOURCE_LISTS[universe]:
+            evidence[f"{name}_source_url"] = getattr(retained, f"{name}_source_url")
+            evidence[f"{name}_source_sha256"] = getattr(
+                retained, f"{name}_source_sha256"
+            )
+        return targets, universe, priority, evidence
     if not symbols or not 1 <= len(symbols) <= 100:
         raise ValueError("must supply 1 to 100 valid symbols")
     for sym in symbols:
@@ -947,23 +968,23 @@ def scan_signal_decisions_v3(  # noqa: C901 - lifecycle orchestration
     storage_root: Path,
     *,
     symbols: Sequence[str] | None = None,
-    nifty100: bool = False,
+    universe: str | None = None,
     refresh: bool = False,
     clock: Callable[[], datetime] | None = None,
     evidence_rows: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
-    """Scan Nifty 100 or explicit equities integrating all 7 research families."""
+    """Scan one exact retained universe or an explicit equity list."""
     if not storage_root.is_absolute():
         raise ValueError("invalid storage root")
 
-    target_symbols, universe_type, nifty100_symbols, universe_evidence = (
-        _resolve_target_symbols(storage_root, symbols, nifty100)
+    target_symbols, universe_type, priority_symbols, universe_evidence = (
+        _resolve_target_symbols(storage_root, symbols, universe)
     )
     now = datetime.now(UTC) if clock is None else clock()
     industry_map = _load_industry_mapping(storage_root)
     benchmark_symbols = (
-        tuple(symbol for symbol in target_symbols if symbol in nifty100_symbols)
-        if nifty100_symbols
+        tuple(symbol for symbol in target_symbols if symbol in priority_symbols)
+        if priority_symbols
         else target_symbols
     )
     benchmark_median = _compute_benchmark_median_return(storage_root, benchmark_symbols)
@@ -1014,9 +1035,14 @@ def scan_signal_decisions_v3(  # noqa: C901 - lifecycle orchestration
             unknown_count += 1
 
         if is_cand:
-            brief["universe_tier"] = (
-                "NIFTY_100" if symbol in nifty100_symbols else "NIFTY_500_EX_NIFTY_100"
-            )
+            if universe_type == "EXPLICIT":
+                pass
+            elif symbol in priority_symbols:
+                brief["universe_tier"] = (
+                    "NIFTY_100" if universe_type == "NIFTY_200" else universe_type
+                )
+            else:
+                brief["universe_tier"] = "NIFTY_200_EX_NIFTY_100"
             candidates.append(brief)
         else:
             other_stocks.append(
@@ -1030,29 +1056,36 @@ def scan_signal_decisions_v3(  # noqa: C901 - lifecycle orchestration
                 }
             )
 
-    nifty100_candidate_count: int | None = None
-    fallback_triggered = False
-    if nifty100_symbols:
+    priority_candidate_count: int | None = None
+    tier2_fallback_triggered = False
+    if universe_type != "EXPLICIT":
         all_candidates = list(candidates)
-        nifty100_candidates = [
+        priority_candidates = [
             candidate
             for candidate in all_candidates
-            if str(candidate["symbol"]) in nifty100_symbols
+            if str(candidate["symbol"]) in priority_symbols
         ]
-        nifty100_candidate_count = len(nifty100_candidates)
-        fallback_triggered = nifty100_candidate_count < 5
-        if fallback_triggered:
-            candidates = (
-                nifty100_candidates
-                + [
-                    candidate
-                    for candidate in all_candidates
-                    if str(candidate["symbol"]) not in nifty100_symbols
-                ]
-            )[:10]
+        priority_candidate_count = len(priority_candidates)
+        if universe_type == "NIFTY_200":
+            tier2_fallback_triggered = priority_candidate_count < 5
+            if tier2_fallback_triggered:
+                candidates = (
+                    priority_candidates
+                    + [
+                        candidate
+                        for candidate in all_candidates
+                        if str(candidate["symbol"]) not in priority_symbols
+                    ]
+                )[:10]
+            else:
+                candidates = priority_candidates[:10]
+            reason = "BASKET_CAPACITY_OR_NIFTY100_PRIORITY"
         else:
-            candidates = nifty100_candidates[:10]
-        other_stocks.extend(_retained_unselected_stocks(all_candidates, candidates))
+            candidates = priority_candidates[:10]
+            reason = "BASKET_CAPACITY"
+        other_stocks.extend(
+            _retained_unselected_stocks(all_candidates, candidates, reason=reason)
+        )
     # Attach sector peer participation to each candidate
     for c in candidates:
         summary_value = c.get("candidate_summary")
@@ -1087,8 +1120,8 @@ def scan_signal_decisions_v3(  # noqa: C901 - lifecycle orchestration
         "storage_root_sha256": _digest(str(storage_root)),
         "universe_type": universe_type,
         "universe_evidence": universe_evidence,
-        "nifty100_validated_candidate_count": nifty100_candidate_count,
-        "nifty500_fallback_triggered": fallback_triggered,
+        "priority_validated_candidate_count": priority_candidate_count,
+        "tier2_fallback_triggered": tier2_fallback_triggered,
         "market_regime": market_regime,
         "benchmark_median_return_20d": f"{benchmark_median:+.2f}%",
         "total_stocks_scanned": len(target_symbols),

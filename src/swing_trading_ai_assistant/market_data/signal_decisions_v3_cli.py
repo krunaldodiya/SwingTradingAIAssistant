@@ -75,7 +75,7 @@ class _EvaluationRequest:
 class _ScanRequest:
     storage_root: Path
     symbols: tuple[str, ...] | None
-    nifty100: bool
+    universe: str | None
     output: Literal["json", "table"]
     refresh: bool
     retain_decision_evidence: bool
@@ -116,7 +116,10 @@ def _parser() -> argparse.ArgumentParser:
     scan = commands.add_parser("scan")
     scan.add_argument("--storage-root", type=Path, required=True)
     scan_group = scan.add_mutually_exclusive_group(required=True)
+    scan_group.add_argument("--nifty50", action="store_true")
+    scan_group.add_argument("--niftynext50", action="store_true")
     scan_group.add_argument("--nifty100", action="store_true")
+    scan_group.add_argument("--nifty200", action="store_true")
     scan_group.add_argument("--symbol", action="append", dest="symbols")
     scan.add_argument("--output", choices=("json", "table"), default="json")
     scan.add_argument("--refresh", action="store_true")
@@ -164,7 +167,13 @@ def _valid_request(  # noqa: C901 - command-specific closed request validation
             observation,
         )
     if command == "scan":
-        nifty100 = bool(getattr(args, "nifty100", False))
+        universe_flags = (
+            ("NIFTY_50", bool(getattr(args, "nifty50", False))),
+            ("NIFTY_NEXT_50", bool(getattr(args, "niftynext50", False))),
+            ("NIFTY_100", bool(getattr(args, "nifty100", False))),
+            ("NIFTY_200", bool(getattr(args, "nifty200", False))),
+        )
+        selected = [name for name, enabled in universe_flags if enabled]
         symbols_raw: list[str] | None = getattr(args, "symbols", None)
         output_format = str(getattr(args, "output", "json"))
         refresh = bool(getattr(args, "refresh", False))
@@ -174,7 +183,8 @@ def _valid_request(  # noqa: C901 - command-specific closed request validation
         symbols = tuple(symbols_raw) if symbols_raw else None
         if (
             output_format not in {"json", "table"}
-            or (nifty100 == (symbols is not None))
+            or len(selected) > 1
+            or (len(selected) == 1) == (symbols is not None)
             or (
                 symbols is not None
                 and (
@@ -190,7 +200,7 @@ def _valid_request(  # noqa: C901 - command-specific closed request validation
         return _ScanRequest(
             storage_root,
             symbols,
-            nifty100,
+            selected[0] if selected else None,
             cast(Literal["json", "table"], output_format),
             refresh,
             retain_decision_evidence,
@@ -377,7 +387,7 @@ def _run_scan(request: _ScanRequest) -> int:
         scan_result = scan_signal_decisions_v3(
             request.storage_root,
             symbols=request.symbols,
-            nifty100=request.nifty100,
+            universe=request.universe,
             refresh=request.refresh,
             evidence_rows=rows,
         )

@@ -1,4 +1,4 @@
-# Automated Nifty 100 Scan & AI Assistant Briefing Workflow
+# Automated Nifty Universe Scan & AI Assistant Briefing Workflow
 
 The `signal-decisions scan` command provides a unified, 1-click scanning and research briefing workflow for human CLI analysts and external AI agent harnesses. It combines:
 1. Automated **24/7 safety eligibility** screening (8 conservative rules).
@@ -23,12 +23,19 @@ doppler run -- signal-decisions scan [OPTIONS]
 
 ## 2. Running the Scanner
 
-### A. Scan the Full Nifty 100 Universe
+### A. Scan an Exact Nifty Universe
+
+Choose exactly one universe per run: `--nifty50` (50), `--niftynext50` (50),
+`--nifty100` (100), or `--nifty200` (200). `--nifty100` scans exactly the
+current official Nifty 100. The nightly diary uses `--nifty200`, which keeps
+Nifty 100 priority and the conditional N200-ex-N100 tier-2 fill; Nifty 50,
+Nifty Next 50, and Nifty 100 scans are exact with no cross-universe gap fill.
+Nifty 500 is retired as a runtime scan universe.
 
 ```bash
 doppler run -- signal-decisions scan \
   --storage-root /absolute/path/to/SwingTradingAIAssistantData \
-  --nifty100 \
+  --nifty200 \
   --output table
 ```
 
@@ -48,7 +55,7 @@ doppler run -- signal-decisions scan \
 ### C. Output Formats
 
 * `--output table` *(Default)*: Formatted ASCII/Unicode summary table for terminal display.
-* `--output json`: Compact canonical JSON adhering to `swing-trade-scan@v1` for automated ingestion.
+* `--output json`: Compact canonical JSON adhering to `swing-trade-scan@v2` for automated ingestion.
 * `--refresh`: Admit a new `CURRENT_STRUCTURE` observation for each symbol so the retained pair state can advance. Without it, an existing state is replayed (or a retained observation bootstraps the first seed); a scan never pairs stale data or invents a new predecessor.
 
 
@@ -66,7 +73,7 @@ doppler run -- signal-decisions scan \
 ```
 
 The response is a `scan-decision-evidence-envelope@v1` containing the unchanged
-`swing-trade-scan@v1` result and a `decision_evidence_handle`. Read that exact
+`swing-trade-scan@v2` result and a `decision_evidence_handle`. Read that exact
 record later without a provider call:
 
 ```bash
@@ -224,11 +231,11 @@ The AI assistant and CLI operator must adhere to the following canonical portfol
 1. **Target Portfolio Size:** The swing trading basket contains between **5 to 10 stocks**.
 2. **Priority #1 — Nifty 100 Large Caps:** The basket first admits every validated
    Nifty 100 candidate, up to all 10 basket slots.
-3. **One-Pass Current Nifty 500 Scan:** The scanner evaluates each current official
-   Nifty 500 member once, tags the Nifty 100 subset, and never repeats provider or
+3. **One-Pass Current Nifty 200 Scan:** The scanner evaluates each current official
+   Nifty 200 member once, tags the Nifty 100 subset, and never repeats provider or
    data work for that subset.
-4. **Tier 2 Basket Fill (Nifty 500 Ex-Nifty 100):** Only when fewer than five
-   validated Nifty 100 candidates exist, validated Nifty 500-only candidates fill
+4. **Tier 2 Basket Fill (Nifty 200 Ex-Nifty 100):** Only when fewer than five
+   validated Nifty 100 candidates exist, validated Nifty 200-only candidates fill
    the remaining slots toward the 5–10 target. They never displace a validated
    Nifty 100 candidate.
 

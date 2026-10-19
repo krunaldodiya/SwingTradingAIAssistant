@@ -26,7 +26,9 @@ _DIGEST: Final = re.compile(r"[0-9a-f]{64}\Z")
 _MAX_BYTES: Final = 4 * 1024 * 1024
 _MAX_LISTED_RECORDS: Final = 4096
 _MAX_DEPTH: Final = 64
-_SCAN_KEYS: Final = frozenset(
+_SCAN_SCHEMA_V1: Final = "swing-trade-scan@v1"
+_SCAN_SCHEMA_V2: Final = "swing-trade-scan@v2"
+_SCAN_KEYS_V1: Final = frozenset(
     {
         "schema",
         "scan_timestamp",
@@ -49,6 +51,46 @@ _SCAN_KEYS: Final = frozenset(
         "result_identity_sha256",
     }
 )
+_SCAN_KEYS_V2: Final = frozenset(
+    {
+        "schema",
+        "scan_timestamp",
+        "storage_root_sha256",
+        "universe_type",
+        "universe_evidence",
+        "priority_validated_candidate_count",
+        "tier2_fallback_triggered",
+        "market_regime",
+        "benchmark_median_return_20d",
+        "total_stocks_scanned",
+        "evaluated_symbols",
+        "candidate_count",
+        "eligible_count",
+        "ineligible_count",
+        "unknown_count",
+        "candidates",
+        "other_stocks",
+        "runtime_code_identity_sha256",
+        "result_identity_sha256",
+    }
+)
+_SCAN_KEYS: Final = {
+    _SCAN_SCHEMA_V1: _SCAN_KEYS_V1,
+    _SCAN_SCHEMA_V2: _SCAN_KEYS_V2,
+}
+_UNIVERSE_TYPES: Final = {
+    _SCAN_SCHEMA_V1: frozenset({"EXPLICIT", "NIFTY_100_PRIORITY_NIFTY_500"}),
+    _SCAN_SCHEMA_V2: frozenset(
+        {"EXPLICIT", "NIFTY_50", "NIFTY_NEXT_50", "NIFTY_100", "NIFTY_200"}
+    ),
+}
+_UNIVERSE_TOTALS: Final = {
+    "NIFTY_100_PRIORITY_NIFTY_500": frozenset({500, 501}),
+    "NIFTY_50": frozenset({50}),
+    "NIFTY_NEXT_50": frozenset({50}),
+    "NIFTY_100": frozenset({100}),
+    "NIFTY_200": frozenset({200}),
+}
 
 
 class ScanDecisionEvidenceUnavailable(ValueError):
@@ -109,7 +151,10 @@ def _validate_scan(scan: object) -> dict[str, object]:
     if type(scan) is not dict:
         raise ValueError("invalid scan")
     value = cast(dict[str, object], scan)
-    if set(value) != set(_SCAN_KEYS):
+    schema = value.get("schema")
+    if type(schema) is not str or schema not in _SCAN_KEYS:
+        raise ValueError("invalid scan schema")
+    if set(value) != set(_SCAN_KEYS[schema]):
         raise ValueError("invalid scan schema")
     if value.get("runtime_code_identity_sha256") != _scanner_runtime_identity():
         raise ValueError("scanner runtime mismatch")
@@ -118,7 +163,7 @@ def _validate_scan(scan: object) -> dict[str, object]:
         raise ValueError("invalid scan identity")
     unsigned = dict(value)
     unsigned.pop("result_identity_sha256")
-    if _digest(unsigned) != identity or value["schema"] != "swing-trade-scan@v1":
+    if _digest(unsigned) != identity:
         raise ValueError("unadmitted scan")
     _validate_scan_shape(value)
     return value
@@ -147,15 +192,19 @@ def _validate_scan_shape(scan: dict[str, object]) -> None:
         or any(type(item) is not dict for item in candidates + other)
     ):
         raise ValueError("invalid scan shape")
+    schema = scan["schema"]
     universe_type = scan["universe_type"]
+    if universe_type not in _UNIVERSE_TYPES[cast(str, schema)]:
+        raise ValueError("invalid universe type")
     if universe_type == "EXPLICIT":
         if not 1 <= total <= 100 or scan["universe_evidence"] is not None:
             raise ValueError("invalid explicit selection")
-    elif universe_type == "NIFTY_100_PRIORITY_NIFTY_500":
-        if total not in {500, 501} or type(scan["universe_evidence"]) is not dict:
-            raise ValueError("invalid Nifty selection")
-    else:
-        raise ValueError("invalid universe type")
+        return
+    if (
+        total not in _UNIVERSE_TOTALS[cast(str, universe_type)]
+        or type(scan["universe_evidence"]) is not dict
+    ):
+        raise ValueError("invalid universe selection")
 
 
 def _rows(  # noqa: C901 - complete fail-closed evidence binding

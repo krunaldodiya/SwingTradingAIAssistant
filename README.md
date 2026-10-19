@@ -42,16 +42,18 @@ auto-load repository instructions, explicitly read those links before work.
 No particular harness, model, terminal manager, or unrestricted permission mode
 is required.
 
-## Scan Nifty 100 for swing candidates
+## Scan Nifty 50 / Nifty Next 50 / Nifty 100 / Nifty 200 for swing candidates
 
-Use the 1-click [automated Nifty 100 scan workflow](docs/workflows/automated-nifty100-scan.md) to screen the index, verify 24/7 safety eligibility, detect causal Break-of-Structure setups, and generate AI-ready briefing cards:
+Use the 1-click [automated universe scan workflow](docs/workflows/automated-nifty100-scan.md) to screen one exact index universe, verify 24/7 safety eligibility, detect causal Break-of-Structure setups, and generate AI-ready briefing cards:
 
 ```bash
 doppler run -- signal-decisions scan \
   --storage-root ~/SwingTradingAIAssistantData \
-  --nifty100 \
+  --nifty200 \
   --output table
 ```
+
+Choose exactly one universe per run: `--nifty50` (50), `--niftynext50` (50), `--nifty100` (100), or `--nifty200` (200). `--nifty100` scans exactly the current official Nifty 100. An explicit 1–100 symbol list uses repeated `--symbol`. Nifty 500 is no longer a runtime scan universe.
 
 ```text
 ================================================================================
@@ -77,10 +79,13 @@ Use `--output json` to emit prompt-ready `swing-trade-brief@v1` cards for extern
 * **5 to 10 Stock Basket:** The portfolio targets 5 to 10 validated swing setups.
 * **Nifty 100 Priority #1:** Every validated Nifty 100 stock fills the basket first,
   up to all 10 slots.
-* **Single Nifty 500 Scan:** The tool evaluates each current Nifty 500 member once
+* **Single Nifty 200 Scan:** The tool evaluates each current Nifty 200 member once
   and tags the Nifty 100 subset. Only if fewer than 5 Nifty 100 stocks validate do
-  Nifty 500-only stocks fill the remaining basket slots; they never displace Nifty
+  Nifty 200-only stocks fill the remaining basket slots; they never displace Nifty
   100 candidates.
+* **Exact Nifty 50 / Nifty Next 50 / Nifty 100 Scans:** These evaluate exactly the
+  resolved membership of their universe with no cross-universe gap fill. Nifty 500
+  is no longer a runtime scan universe; its historical evidence remains preserved.
 * **Anti-Manipulation Filter:** Rejects newly listed IPOs ($< 120$ sessions), penny
   stocks ($< \text{INR } 50$), illiquid small-caps
   ($< \text{INR } 25\text{ Cr / day}$ turnover), and circuit-locked stocks

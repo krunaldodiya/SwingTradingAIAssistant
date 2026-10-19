@@ -185,9 +185,9 @@ def test_scan_signal_decisions_v3_invalid_inputs(tmp_path: Path) -> None:
         scan_signal_decisions_v3(tmp_path, symbols=())
 
     with pytest.raises(
-        ValueError, match="cannot supply both explicit symbols and nifty100 flag"
+        ValueError, match="cannot supply both explicit symbols and a universe flag"
     ):
-        scan_signal_decisions_v3(tmp_path, symbols=(_SYMBOL,), nifty100=True)
+        scan_signal_decisions_v3(tmp_path, symbols=(_SYMBOL,), universe="NIFTY_100")
 
     with pytest.raises(ValueError, match="invalid symbol"):
         scan_signal_decisions_v3(tmp_path, symbols=("invalid symbol!",))
@@ -301,7 +301,7 @@ def test_cli_scan_subcommand_json_and_table(
     )
     captured_json = capsys.readouterr()
     assert code_json == 0
-    assert "swing-trade-scan@v1" in captured_json.out
+    assert "swing-trade-scan@v2" in captured_json.out
 
     code_table = cli_main(
         [
@@ -332,6 +332,38 @@ def test_cli_rejects_explicit_bound_plus_one_before_scan(
     assert code == 2
     assert captured.err == "request_invalid\n"
     assert captured.out == ""
+
+
+def test_cli_rejects_conflicting_universe_flags(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    argv = [
+        "scan",
+        "--storage-root",
+        str(tmp_path),
+        "--nifty100",
+        "--nifty200",
+    ]
+
+    code = cli_main(argv)
+    captured = capsys.readouterr()
+
+    assert code == 2
+    assert captured.err == "request_invalid\n"
+    assert captured.out == ""
+
+
+def test_cli_universe_scan_requires_retained_witness(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    code = cli_main(
+        ["scan", "--storage-root", str(tmp_path), "--nifty200", "--output", "json"]
+    )
+    captured = capsys.readouterr()
+
+    assert code == 1
+    assert "swing-trade-scan@v2" in captured.out
+    assert "UNAVAILABLE" in captured.out
 
 
 def test_anti_manipulation_safety_filters() -> None:
@@ -591,7 +623,7 @@ def test_retained_unselected_candidates_expose_explicit_basket_reason() -> None:
     ]
 
     retained = scan_module._retained_unselected_stocks(  # pyright: ignore[reportPrivateUsage]
-        [*selected, *overflow], selected
+        [*selected, *overflow], selected, reason="BASKET_CAPACITY_OR_NIFTY100_PRIORITY"
     )
 
     assert retained == [
@@ -889,7 +921,7 @@ def test_scan_retains_capacity_overflow_and_every_universe_symbol(
     ) -> tuple[tuple[str, ...], str, frozenset[str], dict[str, object] | None]:
         return (
             symbols,
-            "NIFTY_100_PRIORITY_NIFTY_500",
+            "NIFTY_200",
             frozenset(symbols),
             {"source": "test"},
         )
@@ -915,10 +947,10 @@ def test_scan_retains_capacity_overflow_and_every_universe_symbol(
 
     result = scan_signal_decisions_v3(tmp_path, symbols=symbols, clock=lambda: _NOW)
 
-    assert result["universe_type"] == "NIFTY_100_PRIORITY_NIFTY_500"
+    assert result["universe_type"] == "NIFTY_200"
     assert result["total_stocks_scanned"] == 12
-    assert result["nifty100_validated_candidate_count"] == 12
-    assert result["nifty500_fallback_triggered"] is False
+    assert result["priority_validated_candidate_count"] == 12
+    assert result["tier2_fallback_triggered"] is False
     assert result["candidate_count"] == 10
     candidates = cast(list[dict[str, object]], result["candidates"])
     retained = cast(list[dict[str, object]], result["other_stocks"])
