@@ -21,13 +21,13 @@ from swing_trading_ai_assistant.market_data.signal_decisions_scan_v3 import (
 
 def _scan() -> dict[str, object]:
     value: dict[str, object] = {
-        "schema": "swing-trade-scan@v1",
+        "schema": "swing-trade-scan@v2",
         "scan_timestamp": "2026-10-17T00:00:00.000000Z",
         "storage_root_sha256": "a" * 64,
         "universe_type": "EXPLICIT",
         "universe_evidence": None,
-        "nifty100_validated_candidate_count": None,
-        "nifty500_fallback_triggered": False,
+        "priority_validated_candidate_count": None,
+        "tier2_fallback_triggered": False,
         "market_regime": {},
         "benchmark_median_return_20d": "+0.00%",
         "total_stocks_scanned": 1,
@@ -166,3 +166,44 @@ def test_non_ready_observation_reference_refuses_publication(
 
     with pytest.raises(ScanDecisionEvidenceUnavailable):
         _record_scan_decision_evidence_v1(tmp_path, scan, rows)
+
+
+def test_legacy_v1_nifty500_scan_shape_is_admitted(tmp_path: Path) -> None:
+    symbols = [f"L{index:03d}" for index in range(500)]
+    scan: dict[str, object] = {
+        "schema": "swing-trade-scan@v1",
+        "scan_timestamp": "2026-10-17T00:00:00.000000Z",
+        "storage_root_sha256": "a" * 64,
+        "universe_type": "NIFTY_100_PRIORITY_NIFTY_500",
+        "universe_evidence": {"nifty100_source_url": "https://example.invalid"},
+        "nifty100_validated_candidate_count": 0,
+        "nifty500_fallback_triggered": True,
+        "market_regime": {},
+        "benchmark_median_return_20d": "+0.00%",
+        "total_stocks_scanned": 500,
+        "evaluated_symbols": symbols,
+        "candidate_count": 0,
+        "eligible_count": 0,
+        "ineligible_count": 0,
+        "unknown_count": 500,
+        "candidates": [],
+        "other_stocks": [
+            {"symbol": symbol, "decision": "UNKNOWN", "safety_status": "UNKNOWN"}
+            for symbol in symbols
+        ],
+        "runtime_code_identity_sha256": _runtime_identity(),
+    }
+    _reseal(scan)
+    rows: list[dict[str, object]] = [
+        {
+            "symbol": symbol,
+            "decision": "UNKNOWN",
+            "safety_status": "UNKNOWN",
+            "observation_handle": None,
+        }
+        for symbol in symbols
+    ]
+
+    handle = _record_scan_decision_evidence_v1(tmp_path, scan, rows)
+
+    assert read_scan_decision_evidence_v1(tmp_path, handle)["scan"] == scan

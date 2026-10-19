@@ -22,14 +22,15 @@ measurement, or AI-model evaluation.
 ```bash
 signal-decisions scan --storage-root ROOT --symbol SYMBOL [--symbol SYMBOL ...] \
   --retain-decision-evidence --output json
-signal-decisions scan --storage-root ROOT --nifty100 \
+signal-decisions scan --storage-root ROOT --nifty200 \
   --retain-decision-evidence --output table
 signal-decisions read-decision-evidence --storage-root ROOT \
   --decision-evidence SHA256 --output json
 ```
 
 `--retain-decision-evidence` is opt-in. Without it, `scan` retains its exact
-existing `swing-trade-scan@v1` output and behavior. With it, JSON is a closed
+existing `swing-trade-scan@v2` output and behavior (the validator still admits
+historical `swing-trade-scan@v1` records for readback). With it, JSON is a closed
 `scan-decision-evidence-envelope@v1` containing the unchanged scan object and a
 64-hex `decision_evidence_handle`; table output renders the existing table plus
 that handle. The envelope is not a replacement scan schema.
@@ -46,8 +47,9 @@ returns the same closed evidence envelope and exit 0.
 The private namespace is `scan-decision-evidence-v1`. A canonical record has:
 
 - `contract_version: "scan-decision-evidence@v1"`;
-- scanner runtime identity and the complete canonical `swing-trade-scan@v1`
-  object, including its result identity;
+- scanner runtime identity and the complete canonical `swing-trade-scan@v2`
+  object (historical `swing-trade-scan@v1` records remain readable), including
+  its result identity;
 - an ordered row for every requested/evaluated symbol containing its canonical
   symbol, public decision, safety status, and either exactly one retained
   `CURRENT_STRUCTURE` observation handle or a fixed terminal `UNAVAILABLE`
@@ -91,9 +93,9 @@ or reconstructs missing history.
 
 The record is limited to the existing private-record safe size/depth envelope
 and the scan’s existing 1–100 explicit-symbol bound or its retained Nifty
-universe bound. A Nifty 500 scan retains exactly one ordered row for every
-physical evaluation; Nifty 100 priority and conditional fallback remain scan
-policy, not evidence-record policy.
+universe bound. A Nifty 200 scan retains exactly one ordered row for every
+physical evaluation; Nifty 100 priority and conditional Nifty 200 ex-Nifty 100
+tier-2 fallback remain scan policy, not evidence-record policy.
 
 ## Frozen adversarial matrix
 

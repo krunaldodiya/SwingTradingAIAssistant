@@ -145,7 +145,7 @@ the authoritative contract; §4 adds exits, boundaries and prerequisites.
 | Whole-list research for an exact retained selection or an explicit list | `market-data setup-research-selection --selection-request-file FILE --selection-root DIR --storage-root ROOT --output json` (or repeated `--symbol`) | [Plan 62](plans/62-exact-selection-whole-list-research.md) |
 | Latest causal Structure break (`MATCH`/`NO_MATCH`/`UNKNOWN`) for an explicit list | `market-data setup-screen-current --symbol SYM [--symbol SYM ...] --storage-root ROOT --output json` | [causal-setup-screen.md](workflows/causal-setup-screen.md) |
 | Factual close-direction screen of an explicit 2–10 stock watchlist | `market-data watchlist-screen-current --symbol SYM --symbol SYM --close-direction UP\|DOWN\|UNCHANGED --storage-root ROOT --output json` | [watchlist-factual-screen.md](workflows/watchlist-factual-screen.md) |
-| Candidate scan plus prompt-ready briefing cards (Nifty 100/500 or explicit list) | `signal-decisions scan --storage-root ROOT --nifty100 --output json [--retain-decision-evidence]` (or repeated `--symbol A --symbol B`) | [automated-nifty100-scan.md](workflows/automated-nifty100-scan.md) |
+| Candidate scan plus prompt-ready briefing cards (one exact Nifty universe or explicit list) | `signal-decisions scan --storage-root ROOT (--nifty50\|--niftynext50\|--nifty100\|--nifty200) --output json [--retain-decision-evidence]` (or repeated `--symbol A --symbol B`) | [automated-nifty100-scan.md](workflows/automated-nifty100-scan.md) |
 | Record the evidence a decision will consume | `stock-observations observe --symbol SYM --question CURRENT_STRUCTURE --storage-root ROOT [--refresh] --output json` | [retained-stock-observations.md](workflows/retained-stock-observations.md) |
 | V3 safety eligibility (8 gates) for one observation | `signal-decisions check-eligibility-v3 --observation HANDLE --storage-root ROOT --output json` | [supported-signal-decisions.md](workflows/supported-signal-decisions.md) |
 | V3 causal decision from an earlier + later observation | `signal-decisions evaluate-v3 --previous-observation H1 --current-observation H2 --storage-root ROOT --output json` | [supported-signal-decisions.md](workflows/supported-signal-decisions.md) |
@@ -218,8 +218,10 @@ selection.
 - Exits: `0` all rows factual; `1` any row `UNKNOWN`; `2` invalid/internal.
 
 **`signal-decisions scan`** — candidate scan + briefing cards.
-- Use to evaluate the retained Nifty 500 universe once with Nifty 100 priority
-  tagging (`--nifty100`), or 1–100 explicit symbols added with repeated
+- Use to evaluate exactly one current official universe per run —
+  `--nifty50` (50), `--niftynext50` (50), `--nifty100` (100), or `--nifty200`
+  (200; keeps Nifty 100 priority and the conditional N200-ex-N100 tier-2 fill) —
+  or 1–100 explicit symbols added with repeated
   `--symbol` (`--symbol A --symbol B`), and emit prompt-ready
   `swing-trade-brief@v1` cards for the
   external assistant. `--retain-decision-evidence` writes immutable decision
@@ -439,9 +441,11 @@ code disagree, the command output wins.
    [retained-stock-observations.md](workflows/retained-stock-observations.md).
 5. **README "Current implementation status" predates recent sprints.** Use the
    live tracker and the plan documents for status.
-6. **`--nifty100` scans the Nifty 500 with Nifty 100 priority.** It loads the
-   retained Nifty 100/500 universe evidence and tags the Nifty 100 subset; the
-   README heading "Scan Nifty 100" is shorthand for that policy.
+6. **Scan universes are exact and Nifty 500 is retired.** `signal-decisions scan`
+   resolves exactly one current official universe per run (`--nifty50`,
+   `--niftynext50`, `--nifty100`, `--nifty200`); `--nifty100` scans exactly the
+   Nifty 100. The nightly diary uses `--nifty200`. Historical Nifty 500 evidence
+   remains preserved, but no scan path resolves Nifty 500.
 7. **Capture naming.** The installed script is
    `efficient-current-nifty100-adjusted-capture`; its internal program name is
    `current-nifty100-bharatstock-capture`; Plan 33 also records the retired

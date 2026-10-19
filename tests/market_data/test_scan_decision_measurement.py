@@ -109,13 +109,13 @@ def _evidence(
         for item in candidates
     ] + [item["safety_status"] for item in other]
     scan: dict[str, object] = {
-        "schema": "swing-trade-scan@v1",
+        "schema": "swing-trade-scan@v2",
         "scan_timestamp": timestamp,
         "storage_root_sha256": storage_root_sha256,
         "universe_type": "EXPLICIT",
         "universe_evidence": None,
-        "nifty100_validated_candidate_count": None,
-        "nifty500_fallback_triggered": False,
+        "priority_validated_candidate_count": None,
+        "tier2_fallback_triggered": False,
         "market_regime": {},
         "benchmark_median_return_20d": "+0.00%",
         "total_stocks_scanned": len(symbols),

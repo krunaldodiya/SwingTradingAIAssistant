@@ -17,10 +17,12 @@ Any stock that passes preliminary safety and market structure must ALSO pass str
 - **Target Size:** A swing trading basket / portfolio contains **5 to 10 stocks**.
 - **Tier 1 (Nifty 100 - Top Priority):** Every validated Nifty 100 candidate fills
   the basket first, up to all 10 slots.
-- **One-Pass Current Nifty 500 Scan:** Each current Nifty 500 member is evaluated
-  once and its Nifty 100 membership is tagged; no Nifty 100 provider or data work
-  is repeated.
-- **Tier 2 (Nifty 500 Ex-Nifty 100 - Conditional Gap Fill):** Only when fewer than
-  five Nifty 100 candidates validate, Nifty 500-only candidates fill remaining
+- **One-Pass Current Nifty 200 Scan (universe superseded by Issue #339):** Each
+  current Nifty 200 member is evaluated once and its Nifty 100 membership is
+  tagged; no Nifty 100 provider or data work is repeated. Nifty 500 is retired as
+  a runtime scan universe; `--nifty50`, `--niftynext50`, and `--nifty100` scans
+  are exact with no cross-universe gap fill.
+- **Tier 2 (Nifty 200 Ex-Nifty 100 - Conditional Gap Fill):** Only when fewer than
+  five Nifty 100 candidates validate, Nifty 200-only candidates fill remaining
   slots toward the 5–10 target. They never displace a validated Nifty 100 candidate
   and must pass every existing safety and anti-manipulation gate.
