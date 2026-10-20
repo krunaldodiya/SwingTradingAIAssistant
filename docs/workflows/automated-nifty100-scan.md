@@ -105,6 +105,28 @@ out-of-sample/walk-forward evidence, an approved execution cost/slippage
 convention, named AI model/source with immutable prompt/output provenance, and
 return/profitability evidence). It never simulates or invents those results.
 
+Grade exactly one retained decision page against the frozen G09 opportunity
+recipe (owner-accepted 2026-10-19):
+
+```bash
+signal-decisions grade-decision-evidence \
+  --storage-root /absolute/path/to/SwingTradingAIAssistantData \
+  [--decision-evidence HANDLE] \
+  [--output json|table]
+```
+
+Without `--decision-evidence`, the command grades the latest retained page by
+`scan_timestamp` then handle; a second handle in one invocation is refused. It
+re-admits the page and one capture revision per symbol, resolves the decision
+session from the retained official calendar, and evaluates the first ten later
+sessions only. It retains nothing and makes no provider, network, credential,
+clock, or ledger-vault access. Missing bars are never backfilled: they remain
+`PENDING` or `UNAVAILABLE`, and every page row stays in the base-rate
+denominator. Pass-shape ingredients are printed only when the window is
+complete, and no single-page report is a pass/fail, profitability, or advice
+claim. The frozen contract, bounds, and interpretation notes are in
+[Plan 81](../plans/81-g09-decision-opportunity-grading.md).
+
 ### E. Retained pair state and daily progression
 
 The scanner persists at most one new admitted pair transition per symbol per

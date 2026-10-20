@@ -151,6 +151,7 @@ the authoritative contract; §4 adds exits, boundaries and prerequisites.
 | V3 causal decision from an earlier + later observation | `signal-decisions evaluate-v3 --previous-observation H1 --current-observation H2 --storage-root ROOT --output json` | [supported-signal-decisions.md](workflows/supported-signal-decisions.md) |
 | Revisit or compare retained observation records | `stock-observations read --observation HANDLE --storage-root ROOT --output json`; `stock-observations compare --previous H1 --current H2 --storage-root ROOT --output json` | [retained-stock-observations.md](workflows/retained-stock-observations.md) |
 | Read or aggregate retained scan decision evidence | `signal-decisions read-decision-evidence --decision-evidence HANDLE --storage-root ROOT --output json`; `signal-decisions measure-decision-evidence --storage-root ROOT --output json` | [automated-nifty100-scan.md](workflows/automated-nifty100-scan.md), [Plan 76](plans/76-source-bound-scan-decision-evidence.md) |
+| Grade one retained decision page against the frozen G09 opportunity recipe | `signal-decisions grade-decision-evidence --storage-root ROOT [--decision-evidence HANDLE] [--output json\|table]` | [automated-nifty100-scan.md](workflows/automated-nifty100-scan.md), [Plan 81](plans/81-g09-decision-opportunity-grading.md) |
 | Track paper observations from retained scans | `signal-decisions track --storage-root ROOT [--log-scan FILE] --output json` | [Plan 73](plans/73-paper-observation-tracking-registry.md) |
 | Completed-session volume context vs its baseline | `market-data volume-context-current --input-file FILE --storage-root ROOT --output json` | [volume-context.md](volume-context.md) |
 | Relative strength vs an explicit reference stock | `market-data relative-strength-current --input-file FILE --storage-root ROOT --output json` | [relative-strength.md](relative-strength.md) |
@@ -273,6 +274,17 @@ retained scan decision evidence.
 - `read` returns one immutable evidence record by handle; `measure` aggregates
   retained evidence (`--split-at`, `--execution-convention`).
 - Exits: `0`/`1`; `2` invalid.
+
+**`signal-decisions grade-decision-evidence`** — report-only G09 opportunity
+grading.
+- Grades exactly one retained page: decision-day close, the first ten later
+  official sessions, first-touch `+3.00%` gross, the 25 bp round trip, candidate
+  buckets, and the page-denominator base rate.
+- Reads only retained page, calendar, and capture evidence; retains nothing,
+  makes no provider, network, credential, clock, or ledger-vault access, and
+  gives no advice.
+- Exits: `0` complete window with every row hit/no-hit; `1` pending/unavailable
+  window or typed unavailable envelope; `2` invalid request.
 
 **`signal-decisions track`** — paper observation registry.
 - Records and updates paper observations from retained scans; descriptive only.

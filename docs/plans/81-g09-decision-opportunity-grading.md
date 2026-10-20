@@ -28,8 +28,8 @@ No retained grading record or new namespace; no walk-forward/series aggregation;
 ## Read-only sources (all under `--storage-root`)
 
 - Page: `scan-decision-evidence-v1/<handle>.json`, re-admitted with `read_scan_decision_evidence_v1` (`scan-decision-evidence@v1`, `swing-trade-scan@v2`). The page's symbols, decisions, reasons, observation handles, scan timestamp, universe type, and row count are authoritative for its own scope.
-- Official calendar: `calendar-schedules/sha256/<digest>.json`, content-addressed by the SHA-256 of the stored bytes; each record has `sessions` (`trade_date`, `kind`, `open_at`, `close_at`), `closures`, and a covered range. Read under the storage-root read lease; a record whose file name, bytes, canonical re-serialization, or digest disagree fails closed.
-- Capture bars: `bharatstock-capture-v3/revisions/<revision>.json`, enumerated under one borrowed read lease and re-admitted with `read_bharatstock_capture_revision_v2` before any bar is used. No raw-response, network, or provider path is imported or called.
+- Official calendar: `calendar-schedules/sha256/<digest>.json`, content-addressed by the SHA-256 of the stored bytes; each record has `sessions` (`trade_date`, `kind`, `open_at`, `close_at`), `closures`, and a covered range. Read under the storage-root read lease; a record whose file name or raw bytes disagree with its digest fails closed.
+- Capture bars: `bharatstock-capture-v3/revisions/<revision>.json`, enumerated under one borrowed read lease. The index is built from retained revision values; the chosen revision is re-admitted with `read_bharatstock_capture_revision_v2` before any bar is used. No raw-response, network, or provider path is imported or called.
 
 All three stores are immutable and owner-only. Entry files must remain regular, single-link, owner-owned, non-symlink, and size-bounded; the grader refuses rather than skips unsafe entries.
 
@@ -39,9 +39,9 @@ The page stores a `scan_timestamp` but no decision-session field, and the nightl
 
 1. Collect all retained schedule sessions and closures.
 2. `D` = the latest `trade_date` whose session `close_at` is at or before the page's `scan_timestamp`.
-3. Every schedule record that covers `D` must list it as a session; any record listing `D` as a closure is a calendar conflict. No qualifying session, an ambiguous latest session, or a calendar conflict fails closed with `DECISION_SESSION_UNRESOLVED`.
+3. Every schedule record that covers `D` must list it as a session; any record listing `D` as a closure is a calendar conflict. No qualifying session fails closed with `DECISION_SESSION_UNRESOLVED`; conflicting close times or a coverage/session disagreement fails closed with `CALENDAR_CONFLICT`.
 
-The resolved `D` and the exact source records are printed in the report.
+The resolved `D` and the retained calendar counts are printed in the report; raw schedule digests are not.
 
 ## Window rule
 
@@ -55,7 +55,7 @@ The window is the first **10** official sessions strictly after `D`, drawn from 
 
 For each page symbol the grader uses one admitted capture revision for the whole read, so the decision close and every window high share one adjustment basis:
 
-1. Enumerate retained capture revisions once and index, from admitted revision values only, each revision's symbol, `observed_at`, request sessions, and per-session rows. Revisions without a row for the symbol or without `D` are not candidates. Bound the enumeration (see Bounds); unsafe or unreadable entries fail closed.
+1. Enumerate retained capture revisions once and index each revision's symbol, `observed_at`, request sessions, and per-session rows from the retained revision values; the chosen revision is then re-admitted. Revisions without a row for the symbol or without `D` are not candidates. Bound the enumeration (see Bounds); unsafe or unreadable entries fail closed.
 2. Choose the revision containing `D` and the most window sessions for that symbol; ties break on earliest `observed_at`, then revision identity. One revision per symbol is used.
 3. The chosen revision's row for `D` supplies the decision-day close. A window session with no row in the chosen revision is reported `MISSING`; a later revision never backfills it in this slice.
 4. A symbol with no admitted revision containing `D` is `UNAVAILABLE` with `DECISION_BAR_UNAVAILABLE`. Its rows/observation handles remain listed; no price is invented.
@@ -88,7 +88,7 @@ Ratios and thresholds use `Decimal` with at least 64-digit precision and exact c
 
 ## Pass-shape ingredients
 
-The frozen recipe's three-way pass shape is a series judgement and is deferred. This slice prints its per-page ingredients only when the page's window is fully completed; while pending it prints `state = PENDING` and `null` ingredients:
+The frozen recipe's three-way pass shape is a series judgement and is deferred. This slice prints its per-page ingredients only when the page's window is fully completed; while pending it prints `state = PENDING` and `null` ingredients (`named_rule_trace_complete` is a page-level fact and is reported in every state):
 
 - `missed_opportunities`, `opportunities`, `miss_rate`;
 - `candidate_rate`, `base_rate`, `separation_multiple = candidate_rate / base_rate`;
@@ -103,33 +103,35 @@ The run's exit code still distinguishes a complete report (`0`) from pending/par
 Canonical compact JSON + trailing newline, `schema = "g09-decision-opportunity-report@v1"`, with `report_identity_sha256` over the report excluding that field. The report includes:
 
 - `recipe`: frozen-v1 identity, source URL/comment, owner-accepted instant, opportunity bar `300` bp, cost bar `25` bp, window `10`.
-- `page`: evidence handle, scan result identity, scan timestamp, universe type, resolved decision session and its schedule provenance, row count, decision counts, evaluated-symbol count.
-- `window`: ordered sessions, retained sessions, state, missing sessions, 5-session progress marker.
+- `page`: evidence handle, scan result identity, scan timestamp, universe type, row count, decision counts, evaluated-symbol count.
+- `window`: resolved decision session, ordered sessions, retained sessions, state, missing sessions, 5-session progress marker, retained calendar counts.
 - `rows`: symbol, decision, reason (or null), safety status, observation handle (or null), state, decision close and its bar-source revision/observed-at/price basis, first-touch session/index/ratio in bp, certification flag, bucket, exit basis/session, net return in bp, missing sessions, typed unavailability reason, and miss flag.
-- `summary`: counts by state and decision, candidate quality buckets, opportunities, misses, base rate with the fixed denominator, candidate rate, named-rule completeness, pass-shape ingredients, and limitation lines.
+- `summary`: counts by state and decision, candidate quality buckets, opportunities, misses, base rate with the fixed denominator, candidate rate, named-rule completeness, and pass-shape ingredients.
 - `limitations`: at minimum the recipe's missing-bar, no-AI, no-backfill, Nifty-50-context-deferred, and single-page-scope statements.
 
-`--output table` prints only page identity, window state, counts, candidate rows, and the miss list; it is a view of the same computed report. Errors print one typed code to stderr, never a partial report or a private path.
+`--output table` prints only page identity, window state, counts, candidate rows, and the miss list; it is a view of the same computed report. A typed unavailable prints a single JSON envelope on stdout (exit 1); an invalid request prints one redacted line on stderr (exit 2). Neither prints a partial report or a private path.
 
 ## Exit codes
 
 - `0`: valid report, every row `HIT` or `NO_HIT`, window complete.
-- `1`: valid report with at least one `PENDING` or `UNAVAILABLE` row/window.
-- `2`: typed request, evidence, calendar, store, or identity failure; nothing partial on stdout.
+- `1`: valid report with at least one `PENDING` or `UNAVAILABLE` row/window, **or** a typed unavailable envelope (evidence, calendar, store, or identity refusal). No partial numeric report is printed for the latter.
+- `2`: invalid CLI request only (bad handle format, repeated handles, bad output mode, bad root type); no report and one redacted error line.
+
+This matches the existing `read-decision-evidence` / `measure-decision-evidence` convention: an unavailable read returns a typed JSON envelope on stdout and exit 1, while a malformed invocation returns 2.
 
 ## Failure precedence (closed)
 
-1. Invalid CLI request (handle format, output mode, repeated handles, wrong root type) -> exit 2, no report.
-2. Unsafe/unreadable/unretained page, identity mismatch, or store lease failure -> exit 2, no report.
-3. Decision session unresolved or calendar conflict -> exit 2, no report.
-4. Page row count/evaluated symbols inconsistent with `total_stocks_scanned` -> exit 2, no report.
+1. Invalid CLI request (handle format, output mode, repeated handles, wrong root type) -> exit 2, no report and one redacted stderr line.
+2. Unsafe/unreadable/unretained page, identity mismatch, or store lease failure -> typed unavailable envelope, exit 1.
+3. Decision session unresolved or calendar conflict -> typed unavailable envelope, exit 1.
+4. Page row count/evaluated symbols inconsistent with `total_stocks_scanned` -> typed unavailable envelope, exit 1.
 5. Per-symbol bar absence or mixed adjustment -> row `UNAVAILABLE`, report printed, exit 1.
 6. Incomplete window -> row/page `PENDING`, report printed, exit 1.
 7. A complete window with zero misses/opportunities -> valid report, exit 0.
 
 ## Bounds
 
-Page rows: 1..500. Window sessions: exactly 10 when complete, fewer while pending. Schedule records read: at most 256; schedule bytes at most 4 MiB each. Capture revisions enumerated: at most 5000; one revision file at most 8 MiB; index rows at most 1,000,000. Report bytes at most 8 MiB. Canonical depth at most 64. All limits are refusals, never truncation.
+Page rows: 1..500. Window sessions: exactly 10 when complete, fewer while pending. Schedule records read: at most 4096; schedule bytes at most 4 MiB each and 64 MiB in total. Capture revisions enumerated: at most 20,000; one revision file at most 8 MiB; index rows at most 1,000,000. Report bytes at most 8 MiB. Canonical depth at most 64. All limits are refusals, never truncation.
 
 ## Adversarial matrix (frozen before implementation)
 
@@ -145,7 +147,7 @@ Page rows: 1..500. Window sessions: exactly 10 when complete, fewer while pendin
 10. Every non-candidate appears in the miss list when it hits, with its recorded reason; a missing recorded reason becomes `UNRECORDED` and breaks named-rule completeness.
 11. Three observation-less rows still grade from retained capture bars; if their decision bars are absent they are `UNAVAILABLE`, not skipped from the denominator.
 12. Decision-session resolution: after-close evening scan and next-morning post-midnight scan of the same completed session both resolve the same `D`; a holiday run resolves the prior session.
-13. A schedule record that lists `D` as a closure -> exit 2; a second page handle -> exit 2; malformed handle -> exit 2.
+13. A schedule record that lists `D` as a closure -> typed unavailable envelope, exit 1; a second page handle -> exit 2; malformed handle -> exit 2.
 14. Unsafe store entry (symlink, wrong owner/mode/link count, oversize, non-canonical name) -> fail closed, no report.
 15. No network, provider, credential, clock, or ledger access on any path (monkeypatched to fail in tests).
 16. Report re-run on the same retained bytes yields the identical canonical bytes and identity.
