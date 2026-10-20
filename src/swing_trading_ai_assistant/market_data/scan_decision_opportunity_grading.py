@@ -15,7 +15,6 @@ from pathlib import Path
 from typing import Final, cast
 
 from . import capture_forward_adjusted_ohlcv as private_store
-from . import current_stock_research as legacy
 from .bharatstock import BharatStockDailyPrice
 from .bharatstock_capture import (
     CaptureRevisionV2,
@@ -29,7 +28,11 @@ from .scan_decision_evidence import (
 from .scan_decision_opportunity_grading_runtime_identity_manifest import (
     SCAN_DECISION_OPPORTUNITY_GRADING_RUNTIME_SOURCE_SHA256_V1,
 )
-from .storage_root_lease import StorageRootLease, StorageRootLeaseOperation
+from .storage_root_lease import (
+    LeaseOutcome,
+    StorageRootLease,
+    StorageRootLeaseOperation,
+)
 
 SCHEMA: Final = "g09-decision-opportunity-report@v1"
 RECIPE_IDENTITY: Final = "g09-filter-qualification-recipe@v1"
@@ -55,6 +58,8 @@ _MAX_SCHEDULE_BYTES: Final = 4 * 1024 * 1024
 _MAX_SCHEDULE_TOTAL_BYTES: Final = 64 * 1024 * 1024
 _MAX_REVISION_FILES: Final = 20000
 _MAX_REVISION_BYTES: Final = 8 * 1024 * 1024
+_MAX_INDEX_ROWS: Final = 1_000_000
+_MAX_MEMBERS: Final = 100
 _MAX_EVIDENCE_BYTES: Final = 4 * 1024 * 1024
 _MAX_REPORT_BYTES: Final = 8 * 1024 * 1024
 _MAX_DEPTH: Final = 64
@@ -62,10 +67,12 @@ _MAX_DEPTH: Final = 64
 _SOURCES: Final = (
     "src/swing_trading_ai_assistant/market_data/scan_decision_opportunity_grading.py",
     "src/swing_trading_ai_assistant/market_data/scan_decision_evidence.py",
+    "src/swing_trading_ai_assistant/market_data/bharatstock.py",
     "src/swing_trading_ai_assistant/market_data/bharatstock_capture.py",
     "src/swing_trading_ai_assistant/market_data/capture_forward_adjusted_ohlcv.py",
     "src/swing_trading_ai_assistant/market_data/storage_root_lease.py",
     "src/swing_trading_ai_assistant/market_data/runtime_source_verifier.py",
+    "src/swing_trading_ai_assistant/market_data/signal_decisions_v3_cli.py",
 )
 
 _LIMITATIONS: Final = (
@@ -76,7 +83,8 @@ _LIMITATIONS: Final = (
     "The Nifty 50 index context bar is deferred; no index source is admitted "
     "in this slice.",
     "This is a single-page report; no walk-forward or series aggregation is performed.",
-    "No provider, network, credential, clock, ledger-vault, or write path is used.",
+    "No provider, network, credential, clock, ledger-vault, or write path is used; "
+    "the existing read lease never creates a lock or other store state.",
 )
 
 
@@ -155,6 +163,18 @@ class _Outcome:
     exit_session: date | None = None
     exit_basis: str | None = None
     net_return_bp: int | None = None
+    net_return: Decimal | None = None
+
+
+def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    keys = [key for key, _ in pairs]
+    if len(keys) != len(set(keys)):
+        raise ValueError("duplicate json key")
+    return dict(pairs)
+
+
+def _load_json(raw: bytes) -> object:
+    return json.loads(raw, object_pairs_hook=_reject_duplicate_keys)
 
 
 def _canonical_bytes(value: object) -> bytes:
@@ -225,10 +245,19 @@ def _decimal_text(value: Decimal) -> str:
     return format(value, "f")
 
 
+def _acquire_existing_root(root: Path) -> StorageRootLease | None:
+    """Borrow an existing lease without creating a lock or other store state."""
+    identity = StorageRootLease.admit_existing_private_identity(root)
+    if identity is None:
+        return None
+    result = StorageRootLease.try_acquire_existing_identity(root, identity)
+    return result.lease if result.outcome is LeaseOutcome.ACQUIRED else None
+
+
 def _lease(root: object) -> StorageRootLease:
     if not isinstance(root, Path) or not root.is_absolute():
         raise ValueError("invalid grading root")
-    lease = legacy._acquire_root(root)  # pyright: ignore[reportPrivateUsage]
+    lease = _acquire_existing_root(root)
     if lease is None:
         raise DecisionOpportunityUnavailable("OPPORTUNITY_STORAGE_UNAVAILABLE")
     return lease
@@ -292,8 +321,8 @@ def _read_page_bytes(root: Path, handle: str) -> bytes:
 
 def _page_timestamp(raw: bytes) -> str:
     try:
-        saved = json.loads(raw)
-    except json.JSONDecodeError as error:
+        saved = _load_json(raw)
+    except ValueError as error:
         raise DecisionOpportunityUnavailable("DECISION_EVIDENCE_UNAVAILABLE") from error
     if type(saved) is not dict:
         raise DecisionOpportunityUnavailable("DECISION_EVIDENCE_UNAVAILABLE")
@@ -309,8 +338,8 @@ def _page_timestamp(raw: bytes) -> str:
 def _read_page_rows(root: Path, handle: str) -> tuple[dict[str, object], ...]:
     raw = _read_page_bytes(root, handle)
     try:
-        saved = json.loads(raw)
-    except json.JSONDecodeError as error:
+        saved = _load_json(raw)
+    except ValueError as error:
         raise DecisionOpportunityUnavailable("DECISION_EVIDENCE_UNAVAILABLE") from error
     if type(saved) is not dict:
         raise DecisionOpportunityUnavailable("DECISION_EVIDENCE_UNAVAILABLE")
@@ -376,8 +405,8 @@ def _read_calendar(root: Path) -> _Calendar:
             if hashlib.sha256(raw).hexdigest() != digest:
                 raise DecisionOpportunityUnavailable("OPPORTUNITY_STORAGE_UNAVAILABLE")
             try:
-                value = json.loads(raw)
-            except json.JSONDecodeError as error:
+                value = _load_json(raw)
+            except ValueError as error:
                 raise DecisionOpportunityUnavailable(
                     "OPPORTUNITY_STORAGE_UNAVAILABLE"
                 ) from error
@@ -456,12 +485,18 @@ def _admit_schedule_record(value: dict[str, object]) -> _ScheduleCoverage:
         ) from error
     if covered_from > covered_to:
         raise DecisionOpportunityUnavailable("OPPORTUNITY_STORAGE_UNAVAILABLE")
-    return _ScheduleCoverage(
+    record = _ScheduleCoverage(
         covered_from=covered_from,
         covered_to=covered_to,
         session_times=_schedule_sessions(value.get("sessions")),
         closure_reasons=_schedule_closures(value.get("closures")),
     )
+    if any(
+        not covered_from <= session <= covered_to
+        for session in (*record.session_times, *record.closure_reasons)
+    ):
+        raise DecisionOpportunityUnavailable("CALENDAR_CONFLICT")
+    return record
 
 
 def _admit_calendar(records: list[dict[str, object]]) -> _Calendar:
@@ -496,6 +531,13 @@ def _resolve_decision_session(scan_timestamp: str, calendar: _Calendar) -> date:
     if not candidates:
         raise DecisionOpportunityUnavailable("DECISION_SESSION_UNRESOLVED")
     decision = max(candidates)
+    latest_close = calendar.sessions[decision]
+    if any(
+        calendar.sessions[session] == latest_close
+        for session in candidates
+        if session != decision
+    ):
+        raise DecisionOpportunityUnavailable("CALENDAR_CONFLICT")
     for record in calendar.coverage:
         if record.covered_from <= decision <= record.covered_to and (
             decision in record.closure_reasons or decision not in record.session_times
@@ -570,6 +612,9 @@ def _revision_entry(
         or recorded_identity != identity
     ):
         raise DecisionOpportunityUnavailable("OPPORTUNITY_STORAGE_UNAVAILABLE")
+    members = cast(list[object], members)
+    if len(members) > _MAX_MEMBERS:
+        raise DecisionOpportunityUnavailable("OPPORTUNITY_STORAGE_UNAVAILABLE")
     request = cast(dict[str, object], request)
     request_sessions_raw = request.get("sessions")
     if type(request_sessions_raw) is not list:
@@ -612,9 +657,14 @@ def _choose_revision(
 def _bar(row: BharatStockDailyPrice, adjusted: bool) -> _Bar:
     with localcontext(_DECIMAL_CONTEXT):
         if adjusted:
-            if row.adjusted_close is None or row.adjusted_close <= 0:
+            if (
+                row.adjusted_close is None
+                or row.adjusted_close <= 0
+                or row.adjustment_factor is None
+                or row.adjusted_close != row.close * row.adjustment_factor
+            ):
                 raise _SymbolUnavailable("INVALID_RETAINED_BAR")
-            factor = row.adjusted_close / row.close
+            factor = row.adjustment_factor
             return _Bar(
                 high=row.high * factor, close=row.adjusted_close, raw_close=row.close
             )
@@ -642,10 +692,10 @@ def _admit_symbol_bars(
         raise DecisionOpportunityUnavailable("OPPORTUNITY_STORAGE_UNAVAILABLE")
     matching = [member for member in revision.members if member.member.symbol == symbol]
     if len(matching) != 1 or matching[0].history is None:
-        raise DecisionOpportunityUnavailable("OPPORTUNITY_STORAGE_UNAVAILABLE")
+        raise _SymbolUnavailable("DECISION_BAR_UNAVAILABLE")
     rows = {row.session: row for row in matching[0].history.rows}
     if decision not in rows:
-        raise DecisionOpportunityUnavailable("OPPORTUNITY_STORAGE_UNAVAILABLE")
+        raise _SymbolUnavailable("DECISION_BAR_UNAVAILABLE")
     used = (decision,) + tuple(session for session in window if session in rows)
     adjusted_flags = [rows[session].adjusted_close is not None for session in used]
     if all(adjusted_flags):
@@ -688,18 +738,21 @@ def _read_revision_index(
             operation, revisions, name, _MAX_REVISION_BYTES
         )
         try:
-            value = json.loads(raw)
-        except json.JSONDecodeError as error:
+            value = _load_json(raw)
+        except ValueError as error:
             raise DecisionOpportunityUnavailable(
                 "OPPORTUNITY_STORAGE_UNAVAILABLE"
             ) from error
         if type(value) is not dict:
             raise DecisionOpportunityUnavailable("OPPORTUNITY_STORAGE_UNAVAILABLE")
-        index.extend(
+        entries = tuple(
             entry
             for entry in _revision_entry(identity, cast(dict[str, object], value))
             if entry.symbol in wanted
         )
+        if len(index) + len(entries) > _MAX_INDEX_ROWS:
+            raise DecisionOpportunityUnavailable("OPPORTUNITY_STORAGE_UNAVAILABLE")
+        index.extend(entries)
     revisions.ensure_live()
     return index
 
@@ -769,6 +822,7 @@ def _evaluate_bars(
             exit_session=last,
             exit_basis="WINDOW_CLOSE",
             net_return_bp=_basis_points(net),
+            net_return=net,
         )
     return _Outcome(state="PENDING", missing_sessions=missing)
 
@@ -795,7 +849,8 @@ def _row_record(
         exit_session = outcome.first_touch_session
         exit_basis = "OPPORTUNITY_THRESHOLD"
     elif is_candidate and outcome.state == "NO_HIT":
-        bucket = "flat" if cast(int, net_return_bp) >= 0 else "reversed"
+        exact_net = outcome.net_return
+        bucket = "flat" if exact_net is not None and exact_net >= 0 else "reversed"
     bar_source: dict[str, object] | None = None
     decision_close: str | None = None
     decision_close_adjusted: str | None = None
@@ -926,15 +981,16 @@ def _summary(
     if pass_complete:
         separation: str | None = None
         meets_separation: bool | None = None
-        if candidate_rows and opportunities:
-            with localcontext(_DECIMAL_CONTEXT):
-                multiple = (
-                    Decimal(candidate_hits)
-                    * Decimal(len(rows))
-                    / (Decimal(candidate_rows) * Decimal(hits))
-                )
-                separation = format(multiple.quantize(Decimal("0.0001")), "f")
+        if candidate_rows:
             meets_separation = candidate_hits * len(rows) >= 2 * hits * candidate_rows
+            if opportunities:
+                with localcontext(_DECIMAL_CONTEXT):
+                    multiple = (
+                        Decimal(candidate_hits)
+                        * Decimal(len(rows))
+                        / (Decimal(candidate_rows) * Decimal(hits))
+                    )
+                    separation = format(multiple.quantize(Decimal("0.0001")), "f")
         meets_miss = None if opportunities == 0 else missed * 5 <= opportunities
         pass_shape.update(
             {
@@ -1074,7 +1130,6 @@ def grade_scan_decision_evidence_v1(
             "scan_result_identity_sha256": scan["result_identity_sha256"],
             "scan_timestamp": scan_timestamp,
             "universe_type": scan["universe_type"],
-            "storage_root_sha256": scan["storage_root_sha256"],
             "row_count": len(rows),
             "evaluated_symbol_count": len(page.rows),
             "decision_counts": {
@@ -1118,6 +1173,8 @@ def grade_scan_decision_evidence_v1(
     if len(raw) > _MAX_REPORT_BYTES or _depth_exceeded(report):
         raise DecisionOpportunityUnavailable("OPPORTUNITY_REPORT_BOUND_EXCEEDED")
     report["report_identity_sha256"] = hashlib.sha256(raw).hexdigest()
+    if len(_canonical_bytes(report)) > _MAX_REPORT_BYTES:
+        raise DecisionOpportunityUnavailable("OPPORTUNITY_REPORT_BOUND_EXCEEDED")
     return report
 
 
@@ -1143,6 +1200,12 @@ def unavailable_report(code: str) -> dict[str, object]:
         "status": "UNAVAILABLE",
         "code": code,
     }
+
+
+def _safe_text(value: object) -> str:
+    return "".join(
+        character if character.isprintable() else "?" for character in str(value)
+    )
 
 
 def format_opportunity_report_table(report: dict[str, object]) -> str:
@@ -1175,7 +1238,7 @@ def format_opportunity_report_table(report: dict[str, object]) -> str:
     for item in candidate_rows:
         candidate = cast(dict[str, object], item)
         lines.append(
-            f"  {candidate['symbol']}  state={candidate['state']}  "
+            f"  {_safe_text(candidate['symbol'])}  state={candidate['state']}  "
             f"bucket={candidate['bucket']}  net_bp={candidate['net_return_bp']}  "
             f"first_touch={candidate['first_touch_session']}  "
             f"exit={candidate['exit_basis']}"
@@ -1187,10 +1250,10 @@ def format_opportunity_report_table(report: dict[str, object]) -> str:
     for item in misses:
         miss = cast(dict[str, object], item)
         lines.append(
-            f"  {miss['symbol']}  {miss['decision']}  "
+            f"  {_safe_text(miss['symbol'])}  {_safe_text(miss['decision'])}  "
             f"day={miss['first_touch_day_index']}  "
             f"ratio_bp={miss['first_touch_ratio_bp']}  "
-            f"reason={miss['skip_reason']}"
+            f"reason={_safe_text(miss['skip_reason'])}"
         )
     return "\n".join(lines)
 

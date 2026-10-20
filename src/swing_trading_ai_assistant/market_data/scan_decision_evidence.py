@@ -17,7 +17,7 @@ from .signal_decisions_scan_v3 import (
     _runtime_identity as _scanner_runtime_identity,  # pyright: ignore[reportPrivateUsage]
 )
 from .stock_observations import read_stock_observation_v1
-from .storage_root_lease import StorageRootLease
+from .storage_root_lease import LeaseOutcome, StorageRootLease
 
 CONTRACT_VERSION: Final = "scan-decision-evidence@v1"
 ENVELOPE_SCHEMA: Final = "scan-decision-evidence-envelope@v1"
@@ -138,10 +138,23 @@ def _depth(value: object, level: int = 0) -> None:
             _depth(child, level + 1)
 
 
-def _lease(root: object) -> StorageRootLease:
+def _acquire_existing_root(root: Path) -> StorageRootLease | None:
+    """Borrow an existing lease without creating a lock or other store state."""
+    identity = StorageRootLease.admit_existing_private_identity(root)
+    if identity is None:
+        return None
+    result = StorageRootLease.try_acquire_existing_identity(root, identity)
+    return result.lease if result.outcome is LeaseOutcome.ACQUIRED else None
+
+
+def _lease(root: object, *, create: bool = False) -> StorageRootLease:
     if not isinstance(root, Path) or not root.is_absolute():
         raise ValueError("invalid evidence root")
-    lease = legacy._acquire_root(root)  # pyright: ignore[reportPrivateUsage]
+    lease = (
+        legacy._acquire_root(root)  # pyright: ignore[reportPrivateUsage]
+        if create
+        else _acquire_existing_root(root)
+    )
     if lease is None:
         raise ValueError("evidence root unavailable")
     return lease
@@ -324,7 +337,7 @@ def _record_scan_decision_evidence_v1(  # pyright: ignore[reportUnusedFunction]
         _closed(raw)
         handle = hashlib.sha256(raw).hexdigest()
         with (
-            _lease(root) as lease,
+            _lease(root, create=True) as lease,
             lease.root_operation(root) as operation,
             private_store._open_private_directory(  # pyright: ignore[reportPrivateUsage]
                 operation, operation.descriptor, _NAMESPACE, create=True

@@ -10,6 +10,7 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
 
@@ -930,6 +931,7 @@ def test_symbol_bars_adjust_and_refuse_mixed_basis(
             high=Decimal("110"),
             close=Decimal("100"),
             adjusted_close=Decimal("100"),
+            adjustment_factor=Decimal("1"),
         )
     ]
     revision = _FakeRevision(rows)
@@ -953,6 +955,7 @@ def test_symbol_bars_adjust_and_refuse_mixed_basis(
             high=Decimal("101"),
             close=Decimal("100"),
             adjusted_close=None,
+            adjustment_factor=None,
         ),
     ]
     revision = _FakeRevision(mixed)
@@ -995,7 +998,7 @@ def test_revision_bars_read_index_once_and_mark_missing(
 def test_lease_and_directory_refusals_are_typed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(grading.legacy, "_acquire_root", lambda root: None)
+    monkeypatch.setattr(grading, "_acquire_existing_root", lambda root: None)
     with pytest.raises(grading.DecisionOpportunityUnavailable) as raised:
         grading._lease(STORE)
     assert raised.value.code == "OPPORTUNITY_STORAGE_UNAVAILABLE"
@@ -1197,3 +1200,151 @@ def test_table_renders_empty_candidates_and_misses() -> None:
     assert grading.unavailable_report("OPPORTUNITY_STORAGE_UNAVAILABLE")["status"] == (
         "UNAVAILABLE"
     )
+
+
+def test_sub_basis_point_negative_net_is_reversed() -> None:
+    bars = _bars(closes={WINDOW[-1]: "1002.46"}, decision_close="1000")
+    record = grading._row_record(_row(), DECISION, WINDOW, bars, None)
+    assert record["bucket"] == "reversed"
+    assert record["net_return_bp"] == 0
+
+
+def test_calendar_conflict_when_record_session_outside_coverage() -> None:
+    record = _record([DECISION, *WINDOW])
+    record["covered_from"] = WINDOW[0].isoformat()
+    with pytest.raises(grading.DecisionOpportunityUnavailable) as raised:
+        grading._admit_calendar([record])
+    assert raised.value.code == "CALENDAR_CONFLICT"
+
+
+def test_decision_session_rejects_tied_latest_close() -> None:
+    sessions = {DECISION: _at(DECISION), WINDOW[0]: _at(DECISION)}
+    calendar = grading._Calendar(
+        sessions=sessions,
+        closures=frozenset(),
+        coverage=(
+            grading._ScheduleCoverage(
+                covered_from=DECISION,
+                covered_to=WINDOW[0],
+                session_times=dict(sessions),
+                closure_reasons={},
+            ),
+        ),
+    )
+    with pytest.raises(grading.DecisionOpportunityUnavailable) as raised:
+        grading._resolve_decision_session("2026-11-01T00:00:00.000000Z", calendar)
+    assert raised.value.code == "CALENDAR_CONFLICT"
+
+
+def test_adjustment_identity_mismatch_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(grading, "CaptureRevisionV2", _FakeRevision)
+    rows = [
+        SimpleNamespace(
+            session=DECISION,
+            high=Decimal("110"),
+            close=Decimal("100"),
+            adjusted_close=Decimal("50"),
+            adjustment_factor=Decimal("0.6"),
+        )
+    ]
+    revision = _FakeRevision(rows)
+    monkeypatch.setattr(
+        grading,
+        "read_bharatstock_capture_revision_v2",
+        lambda root, identity, *, lease: revision,
+    )
+    with pytest.raises(grading._SymbolUnavailable) as raised:
+        grading._admit_symbol_bars(
+            STORE, object(), _candidate(), DECISION, (), symbol="INDHOTEL"
+        )
+    assert raised.value.code == "INVALID_RETAINED_BAR"
+
+
+def test_revision_without_decision_row_is_symbol_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(grading, "CaptureRevisionV2", _FakeRevision)
+    revision = _FakeRevision(
+        [
+            SimpleNamespace(
+                session=WINDOW[0],
+                high=Decimal("101"),
+                close=Decimal("100"),
+                adjusted_close=Decimal("100"),
+                adjustment_factor=Decimal("1"),
+            )
+        ]
+    )
+    monkeypatch.setattr(
+        grading,
+        "read_bharatstock_capture_revision_v2",
+        lambda root, identity, *, lease: revision,
+    )
+    with pytest.raises(grading._SymbolUnavailable) as raised:
+        grading._admit_symbol_bars(
+            STORE, object(), _candidate(), DECISION, (), symbol="INDHOTEL"
+        )
+    assert raised.value.code == "DECISION_BAR_UNAVAILABLE"
+
+
+def test_revision_member_and_index_bounds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    value = _index_revision_value("c" * 64)
+    value["members"] = [*cast(list[object], value["members"])] * 2
+    monkeypatch.setattr(grading, "_MAX_MEMBERS", 1)
+    with pytest.raises(grading.DecisionOpportunityUnavailable) as raised:
+        grading._revision_entry("c" * 64, value)
+    assert raised.value.code == "OPPORTUNITY_STORAGE_UNAVAILABLE"
+
+    monkeypatch.setattr(grading, "_MAX_MEMBERS", 100)
+    monkeypatch.setattr(grading, "_MAX_INDEX_ROWS", 1)
+    raw = json.dumps(value).encode()
+    name = f"{hashlib.sha256(raw).hexdigest()}.json"
+    _store_context(monkeypatch, names=[name], files={name: raw})
+    with pytest.raises(grading.DecisionOpportunityUnavailable) as raised:
+        grading._read_revision_index(_FakeOperation(), _FakeDirectory(), {"INDHOTEL"})
+    assert raised.value.code == "OPPORTUNITY_STORAGE_UNAVAILABLE"
+
+
+def test_summary_separation_is_defined_when_no_hits() -> None:
+    rows = [
+        _summary_row("RESEARCH_CANDIDATE", "NO_HIT", bucket="reversed"),
+        _summary_row("UNKNOWN", "NO_HIT"),
+    ]
+    summary = grading._summary(
+        rows,
+        Counter({"RESEARCH_CANDIDATE": 1, "UNKNOWN": 1}),
+        window_complete=True,
+        reasons_complete=True,
+    )
+    assert summary["pass_shape"]["separation_multiple"] is None
+    assert summary["pass_shape"]["meets_separation_bar"] is True
+
+
+def test_empty_store_is_read_without_creating_state(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    root.chmod(0o700)
+    with pytest.raises(grading.DecisionOpportunityUnavailable):
+        grading.grade_scan_decision_evidence_v1(root, decision_evidence=HANDLE)
+    assert list(root.iterdir()) == []
+
+
+def test_duplicate_json_keys_are_refused() -> None:
+    raw = (
+        b'{"scan":{"scan_timestamp":"2026-10-19T15:00:14.733927Z",'
+        b'"scan_timestamp":"2026-10-19T15:00:14.733927Z"}}'
+    )
+    with pytest.raises(grading.DecisionOpportunityUnavailable) as raised:
+        grading._page_timestamp(raw)
+    assert raised.value.code == "DECISION_EVIDENCE_UNAVAILABLE"
+
+
+def test_table_sanitizes_control_characters() -> None:
+    stub = _report_stub()
+    stub["rows"][0]["symbol"] = "BAD\nSYMBOL"
+    text = grading.format_opportunity_report_table(stub)
+    assert "BAD?SYMBOL" in text
