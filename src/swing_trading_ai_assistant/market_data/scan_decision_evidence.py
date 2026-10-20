@@ -147,6 +147,21 @@ def _acquire_existing_root(root: Path) -> StorageRootLease | None:
     return result.lease if result.outcome is LeaseOutcome.ACQUIRED else None
 
 
+def _uninitialized_evidence_root(root: object) -> bool:
+    """True only for an admitted private root that has no evidence namespace yet."""
+    if not isinstance(root, Path) or not root.is_absolute():
+        return False
+    try:
+        if StorageRootLease.admit_existing_private_identity(root) is None:
+            return False
+        os.stat(root / _NAMESPACE, follow_symlinks=False)
+    except FileNotFoundError:
+        return True
+    except (OSError, ValueError):
+        return False
+    return False
+
+
 def _lease(root: object, *, create: bool = False) -> StorageRootLease:
     if not isinstance(root, Path) or not root.is_absolute():
         raise ValueError("invalid evidence root")
@@ -400,6 +415,12 @@ def list_scan_decision_evidence_handles_v1(root: Path) -> tuple[str, ...]:
         return tuple(handles)
     except ScanDecisionEvidenceUnavailable:
         raise
+    except ValueError as error:
+        if _uninitialized_evidence_root(root):
+            return ()
+        raise ScanDecisionEvidenceUnavailable(
+            "DECISION_EVIDENCE_UNAVAILABLE"
+        ) from error
     except Exception as error:  # noqa: BLE001 - redacted public read boundary
         raise ScanDecisionEvidenceUnavailable(
             "DECISION_EVIDENCE_UNAVAILABLE"

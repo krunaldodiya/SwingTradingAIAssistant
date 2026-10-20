@@ -209,6 +209,15 @@ def test_touch_boundary_is_inclusive_and_first_touch_is_earliest() -> None:
     assert outcome.first_touch_certified is True
 
 
+def test_first_touch_day_one_and_day_ten_are_inclusive() -> None:
+    for index in (0, len(WINDOW) - 1):
+        bars = _bars(highs={WINDOW[index]: "103"})
+        outcome = grading._evaluate_bars(bars, WINDOW)
+        assert outcome.state == "HIT"
+        assert outcome.first_touch_index == index + 1
+        assert outcome.first_touch_session == WINDOW[index]
+
+
 def test_day_eleven_does_not_count() -> None:
     bars = _bars()
     bars.window[WINDOW[-1] + timedelta(days=1)] = grading._Bar(
@@ -388,6 +397,7 @@ def test_summary_pending_window_keeps_ingredients_null() -> None:
     assert pass_shape["state"] == "PENDING"
     assert pass_shape["opportunities"] is None
     assert pass_shape["base_rate"] is None
+    assert pass_shape["named_rule_trace_complete"] is None
 
 
 def _revision_value(
@@ -1262,6 +1272,33 @@ def test_adjustment_identity_mismatch_is_unavailable(
     assert raised.value.code == "INVALID_RETAINED_BAR"
 
 
+def test_missing_adjustment_factor_uses_implied_factor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(grading, "CaptureRevisionV2", _FakeRevision)
+    rows = [
+        SimpleNamespace(
+            session=DECISION,
+            high=Decimal("110"),
+            close=Decimal("100"),
+            adjusted_close=Decimal("50"),
+            adjustment_factor=None,
+        )
+    ]
+    revision = _FakeRevision(rows)
+    monkeypatch.setattr(
+        grading,
+        "read_bharatstock_capture_revision_v2",
+        lambda root, identity, *, lease: revision,
+    )
+    bars = grading._admit_symbol_bars(
+        STORE, object(), _candidate(), DECISION, (), symbol="INDHOTEL"
+    )
+    assert bars.basis == "ADJUSTED"
+    assert bars.decision.high == Decimal("55.0")
+    assert bars.decision.close == Decimal("50")
+
+
 def test_revision_without_decision_row_is_symbol_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1330,6 +1367,8 @@ def test_empty_store_is_read_without_creating_state(tmp_path: Path) -> None:
     root.chmod(0o700)
     with pytest.raises(grading.DecisionOpportunityUnavailable):
         grading.grade_scan_decision_evidence_v1(root, decision_evidence=HANDLE)
+    with pytest.raises(grading.DecisionOpportunityUnavailable):
+        grading.grade_scan_decision_evidence_v1(root, decision_evidence=None)
     assert list(root.iterdir()) == []
 
 

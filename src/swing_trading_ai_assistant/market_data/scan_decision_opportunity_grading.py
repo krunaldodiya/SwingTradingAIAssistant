@@ -73,6 +73,9 @@ _SOURCES: Final = (
     "src/swing_trading_ai_assistant/market_data/storage_root_lease.py",
     "src/swing_trading_ai_assistant/market_data/runtime_source_verifier.py",
     "src/swing_trading_ai_assistant/market_data/signal_decisions_v3_cli.py",
+    "src/swing_trading_ai_assistant/market_data/stock_observations.py",
+    "src/swing_trading_ai_assistant/market_data/current_stock_research.py",
+    "src/swing_trading_ai_assistant/market_data/signal_decisions_scan_v3.py",
 )
 
 _LIMITATIONS: Final = (
@@ -630,7 +633,7 @@ def _revision_entry(
         raise DecisionOpportunityUnavailable("OPPORTUNITY_STORAGE_UNAVAILABLE")
     return tuple(
         _revision_member(identity, observed_at, request_sessions, item)
-        for item in cast(list[object], members)
+        for item in members
     )
 
 
@@ -657,14 +660,14 @@ def _choose_revision(
 def _bar(row: BharatStockDailyPrice, adjusted: bool) -> _Bar:
     with localcontext(_DECIMAL_CONTEXT):
         if adjusted:
+            if row.adjusted_close is None or row.adjusted_close <= 0:
+                raise _SymbolUnavailable("INVALID_RETAINED_BAR")
             if (
-                row.adjusted_close is None
-                or row.adjusted_close <= 0
-                or row.adjustment_factor is None
-                or row.adjusted_close != row.close * row.adjustment_factor
+                row.adjustment_factor is not None
+                and row.adjusted_close != row.close * row.adjustment_factor
             ):
                 raise _SymbolUnavailable("INVALID_RETAINED_BAR")
-            factor = row.adjustment_factor
+            factor = row.adjusted_close / row.close
             return _Bar(
                 high=row.high * factor, close=row.adjusted_close, raw_close=row.close
             )
@@ -976,9 +979,10 @@ def _summary(
         "separation_multiple": None,
         "meets_miss_bar": None,
         "meets_separation_bar": None,
-        "named_rule_trace_complete": reasons_complete,
+        "named_rule_trace_complete": None,
     }
     if pass_complete:
+        pass_shape["named_rule_trace_complete"] = reasons_complete
         separation: str | None = None
         meets_separation: bool | None = None
         if candidate_rows:
