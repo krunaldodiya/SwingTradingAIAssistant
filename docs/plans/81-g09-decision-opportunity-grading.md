@@ -217,3 +217,23 @@ unchanged.
    an evidence namespace** as an uninitialized store and reports zero coverage;
    any lock or namespace present is leased read-only, and unsafe, busy, or
    unavailable namespace states fail closed.
+
+## Amendment 2 (implementation clarifications, 2026-10-21)
+
+These clarify the implementation without changing the frozen recipe, arithmetic,
+window, denominator, or single-page scope.
+
+1. **Calendar schemas.** Only exact integer `schema_version` values `1`, `2`, and
+   `3` are admitted. Schema v1 records omit the `closures` key; v2/v3 records
+   must contain it. Sessions must bind to their local trade date and minute
+   boundary. This preserves compatibility with retained v1 evidence while
+   rejecting malformed or unsupported calendar records.
+2. **Additive report fields.** `window` carries `decision_close_at` and
+   `calendar_sources` (raw-byte digest, covered range, session/closure counts)
+   for auditability. Every completed row carries the exact `net_return` decimal
+   string alongside `net_return_bp`; a touch exit and its exact net return are
+   printed for candidate and non-candidate hits alike.
+3. **Measurement identity.** Binding `storage_root_lease.py` in the measurement
+   runtime inventory changes the identity field only; measurement numbers and
+   semantics are unchanged. This identity closure is required by the read-only
+   lease correction and is exempt from the Plan's measurement-output non-goal.

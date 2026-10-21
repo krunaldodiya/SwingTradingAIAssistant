@@ -18,12 +18,33 @@ import pytest
 
 import swing_trading_ai_assistant.market_data.scan_decision_opportunity_grading as grading
 import swing_trading_ai_assistant.market_data.signal_decisions_v3_cli as cli
-from swing_trading_ai_assistant.market_data.bharatstock import BharatStockDailyPrice
+from swing_trading_ai_assistant.market_data.bharatstock import (
+    BharatStockDailyPrice,
+    BharatStockHistory,
+    BharatStockInstrument,
+)
+from swing_trading_ai_assistant.market_data.bharatstock_capture import (
+    CaptureRequestV2,
+    capture_bharatstock_v2,
+    schedule_identity_v2,
+    selection_identity_v2,
+)
 from swing_trading_ai_assistant.market_data.scan_decision_evidence import (
     _record_scan_decision_evidence_v1,
 )
+from swing_trading_ai_assistant.market_data.schedule_evidence import (
+    ExpectedSessionSchedule,
+    ScheduleEvidenceStore,
+    ScheduleOutcome,
+    ScheduleSession,
+    schedule_digest,
+)
 from swing_trading_ai_assistant.market_data.signal_decisions_scan_v3 import (
     _runtime_identity as _scanner_runtime_identity,
+)
+from swing_trading_ai_assistant.market_data.storage_root_lease import (
+    LeaseOutcome,
+    StorageRootLease,
 )
 
 HANDLE = "a" * 64
@@ -66,6 +87,7 @@ def _record(
     close_suffix: str = "10:00:00.000000Z",
 ) -> dict[str, object]:
     return {
+        "schema_version": 3,
         "covered_from": min(sessions).isoformat(),
         "covered_to": max(sessions).isoformat(),
         "sessions": [
@@ -179,7 +201,7 @@ def test_calendar_conflict_when_session_is_also_closure() -> None:
 def test_calendar_conflict_on_differing_close() -> None:
     records = [
         _record([DECISION], close_suffix="10:00:00.000000Z"),
-        _record([DECISION], close_suffix="10:00:01.000000Z"),
+        _record([DECISION], close_suffix="10:01:00.000000Z"),
     ]
     with pytest.raises(grading.DecisionOpportunityUnavailable) as error:
         grading._admit_calendar(records)
@@ -290,6 +312,7 @@ def test_candidate_buckets_at_cost_boundaries() -> None:
         row, DECISION, WINDOW, _bars({WINDOW[0]: "103"}), "RULE"
     )
     assert profit["bucket"] == "profit"
+    assert profit["net_return"] == "0.0275"
     assert profit["net_return_bp"] == 275
     assert profit["exit_basis"] == "OPPORTUNITY_THRESHOLD"
     assert profit["exit_session"] == WINDOW[0].isoformat()
@@ -302,6 +325,7 @@ def test_candidate_buckets_at_cost_boundaries() -> None:
         "RULE",
     )
     assert flat["bucket"] == "flat"
+    assert flat["net_return"] == "0.0000"
     assert flat["net_return_bp"] == 0
 
     reversed_row = grading._row_record(
@@ -312,6 +336,7 @@ def test_candidate_buckets_at_cost_boundaries() -> None:
         "RULE",
     )
     assert reversed_row["bucket"] == "reversed"
+    assert reversed_row["net_return"] == "-0.0001"
     assert reversed_row["net_return_bp"] == -1
 
 
@@ -672,6 +697,7 @@ def _report_stub() -> dict[str, object]:
                 "decision": "RESEARCH_CANDIDATE",
                 "state": "HIT",
                 "bucket": "profit",
+                "net_return": "0.0275",
                 "net_return_bp": 275,
                 "first_touch_session": WINDOW[0].isoformat(),
                 "exit_basis": "OPPORTUNITY_THRESHOLD",
@@ -767,6 +793,8 @@ def test_cli_supports_json_and_table_views(
     assert "G09 OPPORTUNITY GRADING" in table
     assert "candidate rows:" in table
     assert "INDHOTEL" in table
+    assert "net=0.0275" in table
+    assert "net_bp=275" in table
 
 
 class _FakeDirectory:
@@ -1237,6 +1265,75 @@ def test_schema_v1_calendar_without_closures_is_admitted() -> None:
     assert calendar.closures == frozenset()
 
 
+@pytest.mark.parametrize("version", [None, 0, 4, True, 1.0, "1"])
+def test_calendar_rejects_unsupported_schema_versions(version: object) -> None:
+    record = _record([DECISION, *WINDOW])
+    record["schema_version"] = version
+    with pytest.raises(grading.DecisionOpportunityUnavailable):
+        grading._admit_calendar([record])
+
+
+def test_calendar_v1_rejects_a_closures_key() -> None:
+    record = _record([DECISION, *WINDOW])
+    record["schema_version"] = 1
+    record["closures"] = []
+    with pytest.raises(grading.DecisionOpportunityUnavailable):
+        grading._admit_calendar([record])
+
+
+def test_calendar_v2_and_v3_require_closures() -> None:
+    for version in (2, 3):
+        record = _record([DECISION, *WINDOW])
+        record["schema_version"] = version
+        record.pop("closures")
+        with pytest.raises(grading.DecisionOpportunityUnavailable):
+            grading._admit_calendar([record])
+
+
+def test_calendar_session_dates_bind_to_their_local_trade_date() -> None:
+    record = _record([DECISION])
+    session = cast(dict[str, object], cast(list[object], record["sessions"])[0])
+    next_day = DECISION + timedelta(days=1)
+    session["open_at"] = f"{next_day.isoformat()}T03:45:00.000000Z"
+    session["close_at"] = f"{next_day.isoformat()}T10:00:00.000000Z"
+    with pytest.raises(grading.DecisionOpportunityUnavailable):
+        grading._admit_calendar([record])
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("kind", "RÉGULIER"),
+        ("open_at", f"{DECISION.isoformat()}T03:45:01.000000Z"),
+        ("close_at", f"{DECISION.isoformat()}T10:00:30.000000Z"),
+    ],
+)
+def test_calendar_session_requires_ascii_kind_and_minute_boundaries(
+    field: str, value: str
+) -> None:
+    record = _record([DECISION])
+    session = cast(dict[str, object], cast(list[object], record["sessions"])[0])
+    session[field] = value
+    with pytest.raises(grading.DecisionOpportunityUnavailable):
+        grading._admit_calendar([record])
+
+
+def test_non_candidate_hit_prints_touch_exit_and_exact_net() -> None:
+    record = grading._row_record(
+        _row("MISS", "UNKNOWN", "ELIGIBLE"),
+        DECISION,
+        WINDOW,
+        _bars({WINDOW[0]: "104"}),
+        "RULE",
+    )
+    assert record["state"] == "HIT"
+    assert record["bucket"] is None
+    assert record["exit_session"] == WINDOW[0].isoformat()
+    assert record["net_return"] == "0.0275"
+    assert record["net_return_bp"] == 275
+    assert record["missed_opportunity"] is True
+
+
 def test_calendar_sources_identify_exact_overlapping_records() -> None:
     coverage = grading._ScheduleCoverage(
         covered_from=DECISION,
@@ -1418,9 +1515,73 @@ def test_empty_store_is_read_without_creating_state(tmp_path: Path) -> None:
     assert list(root.iterdir()) == []
 
 
+def _grade_schedule() -> ExpectedSessionSchedule:
+    sessions = tuple(
+        ScheduleSession(
+            trade_date=session,
+            open_at=_at(session) - timedelta(hours=6, minutes=15),
+            close_at=_at(session),
+            kind="REGULAR",
+        )
+        for session in (DECISION, *WINDOW)
+    )
+    return ExpectedSessionSchedule(
+        schema_version=3,
+        source="nse-upstox-composed-calendar",
+        source_release=f"composed-calendar@v1={'3' * 64}",
+        as_of=datetime(2026, 10, 30, 0, 0, tzinfo=UTC),
+        timezone="Asia/Kolkata",
+        covered_from=DECISION,
+        covered_to=WINDOW[-1],
+        sessions=sessions,
+        closures=(),
+    )
+
+
+class _GradeCaptureClient:
+    def history(
+        self,
+        instrument: BharatStockInstrument,
+        start: date,
+        end: date,
+        *,
+        effect_guard: object = None,
+    ) -> BharatStockHistory:
+        rows = tuple(
+            BharatStockDailyPrice(
+                session=session,
+                open=Decimal("100"),
+                high=Decimal("101"),
+                low=Decimal("99"),
+                close=Decimal("100"),
+                volume=1000,
+                adjusted_close=Decimal("100"),
+                adjustment_factor=Decimal("1"),
+            )
+            for session in (DECISION, *WINDOW)
+        )
+        return BharatStockHistory(
+            instrument=instrument,
+            rows=rows,
+            retrieved_at=datetime(2026, 10, 30, 0, 0, tzinfo=UTC),
+            response_sha256s=("5" * 64, "6" * 64),
+            request_count=2,
+        )
+
+
 def _populated_store(root: Path) -> str:
     root.mkdir()
     root.chmod(0o700)
+    schedule = _grade_schedule()
+    lease_result = StorageRootLease.try_acquire_private_empty(root)
+    assert lease_result.outcome is LeaseOutcome.ACQUIRED
+    assert lease_result.lease is not None
+    try:
+        retained = ScheduleEvidenceStore(root, lease_result.lease).retain(schedule)
+    finally:
+        lease_result.lease.close()
+    assert retained.outcome is ScheduleOutcome.RETAINED
+
     scan: dict[str, object] = {
         "schema": "swing-trade-scan@v2",
         "scan_timestamp": "2026-10-19T15:00:00.000000Z",
@@ -1464,23 +1625,27 @@ def _populated_store(root: Path) -> str:
     ]
     handle = _record_scan_decision_evidence_v1(root, scan, rows)
 
-    record = _record([DECISION, *WINDOW])
-    raw = json.dumps(
-        record,
-        ensure_ascii=True,
-        sort_keys=True,
-        separators=(",", ":"),
-        allow_nan=False,
-    ).encode()
-    calendar = root / "calendar-schedules"
-    digest = calendar / "sha256"
-    calendar.mkdir(mode=0o700)
-    digest.mkdir(mode=0o700)
-    calendar.chmod(0o700)
-    digest.chmod(0o700)
-    entry = digest / f"{hashlib.sha256(raw).hexdigest()}.json"
-    entry.write_bytes(raw)
-    entry.chmod(0o600)
+    member = BharatStockInstrument(isin="INE000000001", exchange="NSE", symbol="DEMO")
+    cutoff = datetime(2026, 10, 30, 0, 0, tzinfo=UTC)
+    request = CaptureRequestV2(
+        members=(member,),
+        sessions=(DECISION, *WINDOW),
+        decision_cutoff=cutoff,
+        schedule_evidence_sha256=schedule_digest(schedule),
+        schedule_source=schedule.source,
+        schedule_source_release=schedule.source_release,
+        selection_identity_sha256=selection_identity_v2((member,)),
+        schedule_identity_sha256=schedule_identity_v2(schedule),
+    )
+    captured = capture_bharatstock_v2(
+        request,
+        root,
+        root,
+        client=_GradeCaptureClient(),
+        clock=lambda: cutoff,
+    )
+    assert captured.code == "CAPTURED"
+    assert captured.revision is not None
     return handle
 
 
@@ -1532,20 +1697,15 @@ def test_populated_read_has_no_network_clock_provider_or_write_effect(
         return real_open(path, flags, *args, **kwargs)
 
     monkeypatch.setattr(grading, "datetime", _NoClock)
-    monkeypatch.setattr(grading, "BharatStockDailyPrice", fail)
-    monkeypatch.setattr(grading, "read_bharatstock_capture_revision_v2", fail)
     monkeypatch.setattr(socket.socket, "connect", fail)
     monkeypatch.setattr(socket, "create_connection", fail)
     monkeypatch.setattr(os, "open", guarded_open)
     monkeypatch.setattr(os, "mkdir", fail)
     monkeypatch.setattr(os, "rename", fail)
+    monkeypatch.setattr(os, "replace", fail)
     monkeypatch.setattr(os, "unlink", fail)
     monkeypatch.setattr(os, "chmod", fail)
-    monkeypatch.setattr(
-        grading,
-        "_read_revision_bars",
-        lambda root, symbols, decision, window: {"DEMO": _bars()},
-    )
+    monkeypatch.setattr(os, "utime", fail)
 
     report = grading.grade_scan_decision_evidence_v1(root, decision_evidence=handle)
 

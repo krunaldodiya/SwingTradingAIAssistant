@@ -408,16 +408,12 @@ def list_scan_decision_evidence_handles_v1(root: Path) -> tuple[str, ...]:
     """
     try:
         lease = _lease(root)
-    except ValueError as error:
+    except ValueError:
         if _uninitialized_evidence_root(root):
             return ()
-        raise ScanDecisionEvidenceUnavailable(
-            "DECISION_EVIDENCE_UNAVAILABLE"
-        ) from error
-    except Exception as error:  # noqa: BLE001 - redacted public read boundary
-        raise ScanDecisionEvidenceUnavailable(
-            "DECISION_EVIDENCE_UNAVAILABLE"
-        ) from error
+        raise ScanDecisionEvidenceUnavailable("DECISION_EVIDENCE_UNAVAILABLE") from None
+    except Exception:  # noqa: BLE001 - redacted public read boundary
+        raise ScanDecisionEvidenceUnavailable("DECISION_EVIDENCE_UNAVAILABLE") from None
     try:
         with lease, ExitStack() as stack:
             operation = stack.enter_context(lease.read_operation(root))
@@ -437,10 +433,8 @@ def list_scan_decision_evidence_handles_v1(root: Path) -> tuple[str, ...]:
         return tuple(handles)
     except ScanDecisionEvidenceUnavailable:
         raise
-    except Exception as error:  # noqa: BLE001 - redacted public read boundary
-        raise ScanDecisionEvidenceUnavailable(
-            "DECISION_EVIDENCE_UNAVAILABLE"
-        ) from error
+    except Exception:  # noqa: BLE001 - redacted public read boundary
+        raise ScanDecisionEvidenceUnavailable("DECISION_EVIDENCE_UNAVAILABLE") from None
 
 
 def read_scan_decision_evidence_v1(root: Path, handle: str) -> dict[str, object]:
@@ -481,7 +475,5 @@ def read_scan_decision_evidence_v1(root: Path, handle: str) -> dict[str, object]
             "decision_evidence_handle": handle,
             "scan": scan,
         }
-    except Exception as error:  # noqa: BLE001 - redacted public read boundary
-        raise ScanDecisionEvidenceUnavailable(
-            "DECISION_EVIDENCE_UNAVAILABLE"
-        ) from error
+    except Exception:  # noqa: BLE001 - redacted public read boundary
+        raise ScanDecisionEvidenceUnavailable("DECISION_EVIDENCE_UNAVAILABLE") from None

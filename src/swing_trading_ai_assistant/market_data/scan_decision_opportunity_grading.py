@@ -9,7 +9,7 @@ import re
 from collections import Counter
 from contextlib import ExitStack
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from decimal import ROUND_HALF_EVEN, Context, Decimal, localcontext
 from pathlib import Path
 from typing import Final, cast
@@ -63,12 +63,14 @@ _MAX_MEMBERS: Final = 100
 _MAX_EVIDENCE_BYTES: Final = 4 * 1024 * 1024
 _MAX_REPORT_BYTES: Final = 8 * 1024 * 1024
 _MAX_DEPTH: Final = 64
+_IST: Final = timezone(timedelta(hours=5, minutes=30))
 
 _SOURCES: Final = (
     "src/swing_trading_ai_assistant/market_data/scan_decision_opportunity_grading.py",
     "src/swing_trading_ai_assistant/market_data/scan_decision_evidence.py",
     "src/swing_trading_ai_assistant/market_data/bharatstock.py",
     "src/swing_trading_ai_assistant/market_data/bharatstock_capture.py",
+    "src/swing_trading_ai_assistant/market_data/bharatstock_capture_runtime_identity_manifest.py",
     "src/swing_trading_ai_assistant/market_data/capture_forward_adjusted_ohlcv.py",
     "src/swing_trading_ai_assistant/market_data/schedule_evidence.py",
     "src/swing_trading_ai_assistant/market_data/storage_root_lease.py",
@@ -77,6 +79,7 @@ _SOURCES: Final = (
     "src/swing_trading_ai_assistant/market_data/stock_observations.py",
     "src/swing_trading_ai_assistant/market_data/current_stock_research.py",
     "src/swing_trading_ai_assistant/market_data/signal_decisions_scan_v3.py",
+    "src/swing_trading_ai_assistant/market_data/signal_decisions_scan_v3_runtime_identity_manifest.py",
 )
 
 _LIMITATIONS: Final = (
@@ -452,11 +455,19 @@ def _schedule_sessions(raw: object) -> dict[date, datetime]:
             raise DecisionOpportunityUnavailable(
                 "OPPORTUNITY_STORAGE_UNAVAILABLE"
             ) from error
+        kind = entry["kind"]
         if (
-            type(entry["kind"]) is not str
-            or not entry["kind"]
+            type(kind) is not str
+            or not kind
+            or not kind.isascii()
             or session in result
             or close_at <= open_at
+            or open_at.second != 0
+            or open_at.microsecond != 0
+            or close_at.second != 0
+            or close_at.microsecond != 0
+            or open_at.astimezone(_IST).date() != session
+            or close_at.astimezone(_IST).date() != session
         ):
             raise DecisionOpportunityUnavailable("OPPORTUNITY_STORAGE_UNAVAILABLE")
         result[session] = close_at
@@ -498,14 +509,17 @@ def _admit_schedule_record(
         ) from error
     if covered_from > covered_to:
         raise DecisionOpportunityUnavailable("OPPORTUNITY_STORAGE_UNAVAILABLE")
-    closures = value.get("closures")
-    closure_reasons = (
-        {}
-        if closures is None
-        and type(value.get("schema_version")) is int
-        and value.get("schema_version") == 1
-        else _schedule_closures(closures)
-    )
+    schema_version = value.get("schema_version")
+    if type(schema_version) is not int or schema_version not in {1, 2, 3}:
+        raise DecisionOpportunityUnavailable("OPPORTUNITY_STORAGE_UNAVAILABLE")
+    if schema_version == 1:
+        if "closures" in value:
+            raise DecisionOpportunityUnavailable("OPPORTUNITY_STORAGE_UNAVAILABLE")
+        closure_reasons: dict[date, str] = {}
+    else:
+        if "closures" not in value:
+            raise DecisionOpportunityUnavailable("OPPORTUNITY_STORAGE_UNAVAILABLE")
+        closure_reasons = _schedule_closures(value.get("closures"))
     record = _ScheduleCoverage(
         covered_from=covered_from,
         covered_to=covered_to,
@@ -513,6 +527,8 @@ def _admit_schedule_record(
         closure_reasons=closure_reasons,
         digest=digest,
     )
+    if not record.session_times and not record.closure_reasons:
+        raise DecisionOpportunityUnavailable("OPPORTUNITY_STORAGE_UNAVAILABLE")
     if any(
         not covered_from <= session <= covered_to
         for session in (*record.session_times, *record.closure_reasons)
@@ -891,12 +907,13 @@ def _row_record(
     exact_net = outcome.net_return
     exit_session = outcome.exit_session
     exit_basis = outcome.exit_basis
-    if is_candidate and outcome.state == "HIT":
-        bucket = "profit"
+    if outcome.state == "HIT":
         net_return_bp = OPPORTUNITY_BAR_BASIS_POINTS - ROUND_TRIP_COST_BASIS_POINTS
         exact_net = _OPPORTUNITY_RATIO - Decimal(1) - _COST_RATE
         exit_session = outcome.first_touch_session
         exit_basis = "OPPORTUNITY_THRESHOLD"
+        if is_candidate:
+            bucket = "profit"
     elif is_candidate and outcome.state == "NO_HIT":
         bucket = "flat" if exact_net is not None and exact_net >= 0 else "reversed"
     bar_source: dict[str, object] | None = None
