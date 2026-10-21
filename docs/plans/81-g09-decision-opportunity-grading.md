@@ -218,10 +218,11 @@ unchanged.
    any lock or namespace present is leased read-only, and unsafe, busy, or
    unavailable namespace states fail closed.
 
-## Amendment 2 (implementation clarifications, 2026-10-21)
+## Amendment 2 (owner-approved implementation clarifications, 2026-10-21)
 
-These clarify the implementation without changing the frozen recipe, arithmetic,
-window, denominator, or single-page scope.
+Owner approved this amendment on 2026-10-21. It clarifies the implementation
+without changing the frozen recipe, arithmetic, window, denominator, or
+single-page scope.
 
 1. **Calendar schemas.** Only exact integer `schema_version` values `1`, `2`, and
    `3` are admitted. Schema v1 records omit the `closures` key; v2/v3 records
