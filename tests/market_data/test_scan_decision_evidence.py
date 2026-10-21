@@ -249,3 +249,18 @@ def test_lister_treats_only_a_fully_uninitialized_root_as_empty(
     lock.mkdir()
     with pytest.raises(ScanDecisionEvidenceUnavailable):
         list_scan_decision_evidence_handles_v1(root)
+
+
+def test_lister_redacts_unexpected_lease_failures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    root.chmod(0o700)
+
+    def fail(_root: object) -> object:
+        raise OSError("unexpected lease failure")
+
+    monkeypatch.setattr(evidence_module, "_lease", fail)
+    with pytest.raises(ScanDecisionEvidenceUnavailable):
+        list_scan_decision_evidence_handles_v1(root)

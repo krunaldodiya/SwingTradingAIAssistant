@@ -414,6 +414,10 @@ def list_scan_decision_evidence_handles_v1(root: Path) -> tuple[str, ...]:
         raise ScanDecisionEvidenceUnavailable(
             "DECISION_EVIDENCE_UNAVAILABLE"
         ) from error
+    except Exception as error:  # noqa: BLE001 - redacted public read boundary
+        raise ScanDecisionEvidenceUnavailable(
+            "DECISION_EVIDENCE_UNAVAILABLE"
+        ) from error
     try:
         with lease, ExitStack() as stack:
             operation = stack.enter_context(lease.read_operation(root))

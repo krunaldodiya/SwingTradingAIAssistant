@@ -70,6 +70,7 @@ _SOURCES: Final = (
     "src/swing_trading_ai_assistant/market_data/bharatstock.py",
     "src/swing_trading_ai_assistant/market_data/bharatstock_capture.py",
     "src/swing_trading_ai_assistant/market_data/capture_forward_adjusted_ohlcv.py",
+    "src/swing_trading_ai_assistant/market_data/schedule_evidence.py",
     "src/swing_trading_ai_assistant/market_data/storage_root_lease.py",
     "src/swing_trading_ai_assistant/market_data/runtime_source_verifier.py",
     "src/swing_trading_ai_assistant/market_data/signal_decisions_v3_cli.py",
@@ -113,6 +114,7 @@ class _ScheduleCoverage:
     covered_to: date
     session_times: dict[date, datetime]
     closure_reasons: dict[date, str]
+    digest: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -380,7 +382,7 @@ def _read_page(root: Path, handle: str) -> _Page:
 
 
 def _read_calendar(root: Path) -> _Calendar:
-    records: list[dict[str, object]] = []
+    records: list[tuple[str | None, dict[str, object]]] = []
     total_bytes = 0
     with _lease(root) as lease, ExitStack() as stack:
         operation = stack.enter_context(lease.read_operation(root))
@@ -415,9 +417,9 @@ def _read_calendar(root: Path) -> _Calendar:
                 ) from error
             if type(value) is not dict:
                 raise DecisionOpportunityUnavailable("OPPORTUNITY_STORAGE_UNAVAILABLE")
-            records.append(cast(dict[str, object], value))
+            records.append((digest, cast(dict[str, object], value)))
         digest_directory.ensure_live()
-    return _admit_calendar(records)
+    return _admit_calendar_records(records)
 
 
 def _entry_digest(name: str) -> str:
@@ -444,12 +446,18 @@ def _schedule_sessions(raw: object) -> dict[date, datetime]:
             raise DecisionOpportunityUnavailable("OPPORTUNITY_STORAGE_UNAVAILABLE")
         try:
             session = _day(entry["trade_date"])
+            open_at = _instant(entry["open_at"])
             close_at = _instant(entry["close_at"])
         except (KeyError, TypeError, ValueError) as error:
             raise DecisionOpportunityUnavailable(
                 "OPPORTUNITY_STORAGE_UNAVAILABLE"
             ) from error
-        if type(entry["kind"]) is not str or session in result:
+        if (
+            type(entry["kind"]) is not str
+            or not entry["kind"]
+            or session in result
+            or close_at <= open_at
+        ):
             raise DecisionOpportunityUnavailable("OPPORTUNITY_STORAGE_UNAVAILABLE")
         result[session] = close_at
     return result
@@ -478,7 +486,9 @@ def _schedule_closures(raw: object) -> dict[date, str]:
     return result
 
 
-def _admit_schedule_record(value: dict[str, object]) -> _ScheduleCoverage:
+def _admit_schedule_record(
+    value: dict[str, object], digest: str | None = None
+) -> _ScheduleCoverage:
     try:
         covered_from = _day(value["covered_from"])
         covered_to = _day(value["covered_to"])
@@ -488,11 +498,20 @@ def _admit_schedule_record(value: dict[str, object]) -> _ScheduleCoverage:
         ) from error
     if covered_from > covered_to:
         raise DecisionOpportunityUnavailable("OPPORTUNITY_STORAGE_UNAVAILABLE")
+    closures = value.get("closures")
+    closure_reasons = (
+        {}
+        if closures is None
+        and type(value.get("schema_version")) is int
+        and value.get("schema_version") == 1
+        else _schedule_closures(closures)
+    )
     record = _ScheduleCoverage(
         covered_from=covered_from,
         covered_to=covered_to,
         session_times=_schedule_sessions(value.get("sessions")),
-        closure_reasons=_schedule_closures(value.get("closures")),
+        closure_reasons=closure_reasons,
+        digest=digest,
     )
     if any(
         not covered_from <= session <= covered_to
@@ -502,12 +521,20 @@ def _admit_schedule_record(value: dict[str, object]) -> _ScheduleCoverage:
     return record
 
 
-def _admit_calendar(records: list[dict[str, object]]) -> _Calendar:
+def _admit_calendar(  # pyright: ignore[reportUnusedFunction]
+    records: list[dict[str, object]],
+) -> _Calendar:
+    return _admit_calendar_records([(None, record) for record in records])
+
+
+def _admit_calendar_records(
+    records: list[tuple[str | None, dict[str, object]]],
+) -> _Calendar:
     sessions: dict[date, datetime] = {}
     closures: dict[date, str] = {}
     coverage: list[_ScheduleCoverage] = []
-    for value in records:
-        record = _admit_schedule_record(value)
+    for digest, value in records:
+        record = _admit_schedule_record(value, digest)
         for session, close_at in record.session_times.items():
             if session in sessions and sessions[session] != close_at:
                 raise DecisionOpportunityUnavailable("CALENDAR_CONFLICT")
@@ -553,6 +580,23 @@ def _window_sessions(calendar: _Calendar, decision: date) -> tuple[date, ...]:
     return tuple(
         session for session in sorted(calendar.sessions) if session > decision
     )[:WINDOW_SESSIONS]
+
+
+def _calendar_sources(
+    calendar: _Calendar, decision: date, window: tuple[date, ...]
+) -> list[dict[str, object]]:
+    last = window[-1] if window else decision
+    return [
+        {
+            "digest": record.digest,
+            "covered_from": record.covered_from.isoformat(),
+            "covered_to": record.covered_to.isoformat(),
+            "session_count": len(record.session_times),
+            "closure_count": len(record.closure_reasons),
+        }
+        for record in calendar.coverage
+        if record.covered_from <= last and record.covered_to >= decision
+    ]
 
 
 def _revision_member(
@@ -844,15 +888,16 @@ def _row_record(
     is_candidate = decision_value == "RESEARCH_CANDIDATE"
     bucket: str | None = None
     net_return_bp = outcome.net_return_bp
+    exact_net = outcome.net_return
     exit_session = outcome.exit_session
     exit_basis = outcome.exit_basis
     if is_candidate and outcome.state == "HIT":
         bucket = "profit"
         net_return_bp = OPPORTUNITY_BAR_BASIS_POINTS - ROUND_TRIP_COST_BASIS_POINTS
+        exact_net = _OPPORTUNITY_RATIO - Decimal(1) - _COST_RATE
         exit_session = outcome.first_touch_session
         exit_basis = "OPPORTUNITY_THRESHOLD"
     elif is_candidate and outcome.state == "NO_HIT":
-        exact_net = outcome.net_return
         bucket = "flat" if exact_net is not None and exact_net >= 0 else "reversed"
     bar_source: dict[str, object] | None = None
     decision_close: str | None = None
@@ -894,6 +939,7 @@ def _row_record(
         "bucket": bucket,
         "exit_session": (None if exit_session is None else exit_session.isoformat()),
         "exit_basis": exit_basis,
+        "net_return": None if exact_net is None else _decimal_text(exact_net),
         "net_return_bp": net_return_bp,
         "unavailable_reason": (
             getattr(bars, "code", "OPPORTUNITY_STORAGE_UNAVAILABLE")
@@ -1142,6 +1188,9 @@ def grade_scan_decision_evidence_v1(
         },
         "window": {
             "decision_session": decision.isoformat(),
+            "decision_close_at": calendar.sessions[decision]
+            .isoformat(timespec="microseconds")
+            .replace("+00:00", "Z"),
             "sessions": [session.isoformat() for session in window],
             "retained_count": len(window),
             "state": "COMPLETE" if window_complete else "PENDING",
@@ -1155,6 +1204,7 @@ def grade_scan_decision_evidence_v1(
                 1 for session in calendar.sessions if session > decision
             ),
             "calendar_record_count": len(calendar.coverage),
+            "calendar_sources": _calendar_sources(calendar, decision, window),
         },
         "rows": rows,
         "misses": _misses(rows),
@@ -1243,9 +1293,10 @@ def format_opportunity_report_table(report: dict[str, object]) -> str:
         candidate = cast(dict[str, object], item)
         lines.append(
             f"  {_safe_text(candidate['symbol'])}  state={candidate['state']}  "
-            f"bucket={candidate['bucket']}  net_bp={candidate['net_return_bp']}  "
-            f"first_touch={candidate['first_touch_session']}  "
-            f"exit={candidate['exit_basis']}"
+            f"bucket={candidate.get('bucket')}  net={candidate.get('net_return')}  "
+            f"net_bp={candidate.get('net_return_bp')}  "
+            f"first_touch={candidate.get('first_touch_session')}  "
+            f"exit={candidate.get('exit_session') or candidate.get('exit_basis')}"
         )
     lines.append("misses:")
     misses = cast(list[object], report["misses"])

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import socket
 from collections import Counter
 from contextlib import nullcontext
 from datetime import UTC, date, datetime, timedelta
@@ -17,6 +19,12 @@ import pytest
 import swing_trading_ai_assistant.market_data.scan_decision_opportunity_grading as grading
 import swing_trading_ai_assistant.market_data.signal_decisions_v3_cli as cli
 from swing_trading_ai_assistant.market_data.bharatstock import BharatStockDailyPrice
+from swing_trading_ai_assistant.market_data.scan_decision_evidence import (
+    _record_scan_decision_evidence_v1,
+)
+from swing_trading_ai_assistant.market_data.signal_decisions_scan_v3 import (
+    _runtime_identity as _scanner_runtime_identity,
+)
 
 HANDLE = "a" * 64
 STORE = Path("/srv/swing-trading-ai-assistant")
@@ -1216,7 +1224,45 @@ def test_sub_basis_point_negative_net_is_reversed() -> None:
     bars = _bars(closes={WINDOW[-1]: "1002.46"}, decision_close="1000")
     record = grading._row_record(_row(), DECISION, WINDOW, bars, None)
     assert record["bucket"] == "reversed"
+    assert record["net_return"] == "-0.00004"
     assert record["net_return_bp"] == 0
+
+
+def test_schema_v1_calendar_without_closures_is_admitted() -> None:
+    record = _record([DECISION, *WINDOW])
+    record["schema_version"] = 1
+    record.pop("closures")
+    calendar = grading._admit_calendar([record])
+    assert calendar.sessions[DECISION] == _at(DECISION)
+    assert calendar.closures == frozenset()
+
+
+def test_calendar_sources_identify_exact_overlapping_records() -> None:
+    coverage = grading._ScheduleCoverage(
+        covered_from=DECISION,
+        covered_to=WINDOW[-1],
+        session_times={session: _at(session) for session in (DECISION, *WINDOW)},
+        closure_reasons={},
+        digest="a" * 64,
+    )
+    sources = grading._calendar_sources(
+        grading._Calendar(
+            sessions=dict(coverage.session_times),
+            closures=frozenset(),
+            coverage=(coverage,),
+        ),
+        DECISION,
+        WINDOW,
+    )
+    assert sources == [
+        {
+            "digest": "a" * 64,
+            "covered_from": DECISION.isoformat(),
+            "covered_to": WINDOW[-1].isoformat(),
+            "session_count": 11,
+            "closure_count": 0,
+        }
+    ]
 
 
 def test_calendar_conflict_when_record_session_outside_coverage() -> None:
@@ -1370,6 +1416,141 @@ def test_empty_store_is_read_without_creating_state(tmp_path: Path) -> None:
     with pytest.raises(grading.DecisionOpportunityUnavailable):
         grading.grade_scan_decision_evidence_v1(root, decision_evidence=None)
     assert list(root.iterdir()) == []
+
+
+def _populated_store(root: Path) -> str:
+    root.mkdir()
+    root.chmod(0o700)
+    scan: dict[str, object] = {
+        "schema": "swing-trade-scan@v2",
+        "scan_timestamp": "2026-10-19T15:00:00.000000Z",
+        "storage_root_sha256": "a" * 64,
+        "universe_type": "EXPLICIT",
+        "universe_evidence": None,
+        "priority_validated_candidate_count": None,
+        "tier2_fallback_triggered": False,
+        "market_regime": {},
+        "benchmark_median_return_20d": "+0.00%",
+        "total_stocks_scanned": 1,
+        "evaluated_symbols": ["DEMO"],
+        "candidate_count": 0,
+        "eligible_count": 0,
+        "ineligible_count": 0,
+        "unknown_count": 1,
+        "candidates": [],
+        "other_stocks": [
+            {"symbol": "DEMO", "decision": "UNKNOWN", "safety_status": "UNKNOWN"}
+        ],
+        "runtime_code_identity_sha256": _scanner_runtime_identity(),
+    }
+    unsigned = (
+        json.dumps(
+            scan,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode()
+        + b"\n"
+    )
+    scan["result_identity_sha256"] = hashlib.sha256(unsigned).hexdigest()
+    rows = [
+        {
+            "symbol": "DEMO",
+            "decision": "UNKNOWN",
+            "safety_status": "UNKNOWN",
+            "observation_handle": None,
+        }
+    ]
+    handle = _record_scan_decision_evidence_v1(root, scan, rows)
+
+    record = _record([DECISION, *WINDOW])
+    raw = json.dumps(
+        record,
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode()
+    calendar = root / "calendar-schedules"
+    digest = calendar / "sha256"
+    calendar.mkdir(mode=0o700)
+    digest.mkdir(mode=0o700)
+    calendar.chmod(0o700)
+    digest.chmod(0o700)
+    entry = digest / f"{hashlib.sha256(raw).hexdigest()}.json"
+    entry.write_bytes(raw)
+    entry.chmod(0o600)
+    return handle
+
+
+def _store_snapshot(root: Path) -> dict[str, tuple[str, int, str | None]]:
+    snapshot: dict[str, tuple[str, int, str | None]] = {}
+    for path in (root, *root.rglob("*")):
+        info = path.stat()
+        if path.is_file():
+            snapshot[path.relative_to(root).as_posix()] = (
+                "file",
+                info.st_mode,
+                hashlib.sha256(path.read_bytes()).hexdigest(),
+            )
+        else:
+            snapshot[path.relative_to(root).as_posix()] = (
+                "dir",
+                info.st_mode,
+                None,
+            )
+    return snapshot
+
+
+def test_populated_read_has_no_network_clock_provider_or_write_effect(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "root"
+    handle = _populated_store(root)
+    before = _store_snapshot(root)
+
+    class _NoClock(datetime):
+        @classmethod
+        def now(cls, tz: object = None) -> object:
+            raise AssertionError("clock accessed")
+
+        @classmethod
+        def utcnow(cls) -> object:
+            raise AssertionError("clock accessed")
+
+    def fail(*args: object, **kwargs: object) -> object:
+        raise AssertionError("forbidden effect")
+
+    real_open = os.open
+
+    def guarded_open(path: object, flags: int, *args: object, **kwargs: object) -> int:
+        blocked = bool(flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC))
+        lock_read = path == ".ingestion.lock" and not flags & (os.O_WRONLY | os.O_TRUNC)
+        if blocked and not lock_read:
+            raise AssertionError("write attempted")
+        return real_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(grading, "datetime", _NoClock)
+    monkeypatch.setattr(grading, "BharatStockDailyPrice", fail)
+    monkeypatch.setattr(grading, "read_bharatstock_capture_revision_v2", fail)
+    monkeypatch.setattr(socket.socket, "connect", fail)
+    monkeypatch.setattr(socket, "create_connection", fail)
+    monkeypatch.setattr(os, "open", guarded_open)
+    monkeypatch.setattr(os, "mkdir", fail)
+    monkeypatch.setattr(os, "rename", fail)
+    monkeypatch.setattr(os, "unlink", fail)
+    monkeypatch.setattr(os, "chmod", fail)
+    monkeypatch.setattr(
+        grading,
+        "_read_revision_bars",
+        lambda root, symbols, decision, window: {"DEMO": _bars()},
+    )
+
+    report = grading.grade_scan_decision_evidence_v1(root, decision_evidence=handle)
+
+    assert report["report_state"] == "COMPLETE"
+    assert _store_snapshot(root) == before
 
 
 def test_duplicate_json_keys_are_refused() -> None:
