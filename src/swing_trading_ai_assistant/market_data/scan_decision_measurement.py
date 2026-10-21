@@ -30,6 +30,7 @@ _MAX_CONVENTION_CHARS: Final = 200
 _SOURCES: Final = (
     "src/swing_trading_ai_assistant/market_data/scan_decision_measurement.py",
     "src/swing_trading_ai_assistant/market_data/scan_decision_evidence.py",
+    "src/swing_trading_ai_assistant/market_data/storage_root_lease.py",
     "src/swing_trading_ai_assistant/market_data/runtime_source_verifier.py",
 )
 

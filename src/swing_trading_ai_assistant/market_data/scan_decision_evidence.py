@@ -148,13 +148,21 @@ def _acquire_existing_root(root: Path) -> StorageRootLease | None:
 
 
 def _uninitialized_evidence_root(root: object) -> bool:
-    """True only for an admitted private root that has no evidence namespace yet."""
+    """True only when an admitted private root has neither a lock nor a namespace."""
     if not isinstance(root, Path) or not root.is_absolute():
         return False
     try:
         if StorageRootLease.admit_existing_private_identity(root) is None:
             return False
         os.stat(root / _NAMESPACE, follow_symlinks=False)
+    except FileNotFoundError:
+        pass
+    except (OSError, ValueError):
+        return False
+    else:
+        return False
+    try:
+        os.stat(root / ".ingestion.lock", follow_symlinks=False)
     except FileNotFoundError:
         return True
     except (OSError, ValueError):
@@ -393,11 +401,21 @@ def _admitted_handle(
 def list_scan_decision_evidence_handles_v1(root: Path) -> tuple[str, ...]:
     """List retained immutable decision-evidence handles in deterministic order.
 
-    A missing namespace means no retained evidence. Any foreign, unsafe, or
-    oversized entry fails closed instead of being silently skipped.
+    An admitted private root with neither a lock nor a namespace means no
+    retained evidence and is read without creating anything. Any lock or
+    namespace present is leased read-only; unsafe, busy, or oversized stores
+    fail closed instead of being silently reported empty.
     """
     try:
-        with _lease(root) as lease, ExitStack() as stack:
+        lease = _lease(root)
+    except ValueError as error:
+        if _uninitialized_evidence_root(root):
+            return ()
+        raise ScanDecisionEvidenceUnavailable(
+            "DECISION_EVIDENCE_UNAVAILABLE"
+        ) from error
+    try:
+        with lease, ExitStack() as stack:
             operation = stack.enter_context(lease.read_operation(root))
             try:
                 directory = stack.enter_context(
@@ -405,8 +423,8 @@ def list_scan_decision_evidence_handles_v1(root: Path) -> tuple[str, ...]:
                         operation, operation.descriptor, _NAMESPACE, create=False
                     )
                 )
-            except FileNotFoundError:
-                return ()
+            except FileNotFoundError as error:
+                raise ValueError("decision evidence namespace unavailable") from error
             names = os.listdir(directory.descriptor)
             if len(names) > _MAX_LISTED_RECORDS:
                 raise ValueError("decision evidence store exceeded")
@@ -415,12 +433,6 @@ def list_scan_decision_evidence_handles_v1(root: Path) -> tuple[str, ...]:
         return tuple(handles)
     except ScanDecisionEvidenceUnavailable:
         raise
-    except ValueError as error:
-        if _uninitialized_evidence_root(root):
-            return ()
-        raise ScanDecisionEvidenceUnavailable(
-            "DECISION_EVIDENCE_UNAVAILABLE"
-        ) from error
     except Exception as error:  # noqa: BLE001 - redacted public read boundary
         raise ScanDecisionEvidenceUnavailable(
             "DECISION_EVIDENCE_UNAVAILABLE"

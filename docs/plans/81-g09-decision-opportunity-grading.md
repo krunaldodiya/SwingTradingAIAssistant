@@ -212,5 +212,8 @@ unchanged.
    `scan_timestamp` and fully re-admits only the chosen page, keeping the
    no-handle mode usable as pages accumulate.
 8. **Read-only lease.** The grader and the evidence reader borrow an existing
-   storage-root lease and never create `.ingestion.lock` or other store state;
-   an empty or unlocked root fails closed.
+   storage-root lease and never create `.ingestion.lock` or other store state.
+   The lister alone treats an admitted private root with **neither a lock nor
+   an evidence namespace** as an uninitialized store and reports zero coverage;
+   any lock or namespace present is leased read-only, and unsafe, busy, or
+   unavailable namespace states fail closed.
