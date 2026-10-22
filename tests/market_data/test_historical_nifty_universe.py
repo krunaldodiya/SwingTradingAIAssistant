@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import base64
 import json
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import cast
 
@@ -49,7 +50,11 @@ def _members() -> dict[str, tuple[str, ...]]:
 
 def _build(
     members: dict[str, tuple[str, ...]],
+    *,
+    retrieved_at: datetime = datetime(2026, 10, 16, tzinfo=UTC),
+    url_overrides: dict[str, str] | None = None,
 ) -> HistoricNiftyUniverse:
+    urls = {**_URLS, **(url_overrides or {})}
     return build_historic_nifty_universe(
         _csv(members["nifty50"]),
         _csv(members["niftynext50"]),
@@ -57,11 +62,11 @@ def _build(
         _csv(members["nifty200"]),
         window_start=date(2026, 9, 9),
         window_end=date(2026, 10, 15),
-        nifty50_source_url=_URLS["nifty50"],
-        niftynext50_source_url=_URLS["niftynext50"],
-        nifty100_source_url=_URLS["nifty100"],
-        nifty200_source_url=_URLS["nifty200"],
-        retrieved_at=datetime(2026, 10, 16, tzinfo=UTC),
+        nifty50_source_url=urls["nifty50"],
+        niftynext50_source_url=urls["niftynext50"],
+        nifty100_source_url=urls["nifty100"],
+        nifty200_source_url=urls["nifty200"],
+        retrieved_at=retrieved_at,
     )
 
 
@@ -213,3 +218,61 @@ def test_tampered_retained_membership_is_rejected(tmp_path: Path) -> None:
 def test_scan_requires_verified_official_universe(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="retained official Nifty universe evidence"):
         scan._resolve_target_symbols(tmp_path, None, "NIFTY_200")
+
+
+def test_overlapping_nifty50_and_niftynext50_memberships_are_rejected() -> None:
+    members = _members()
+    members["niftynext50"] = (members["nifty50"][0],) + members["niftynext50"][1:]
+
+    with pytest.raises(ValueError, match="memberships are inconsistent"):
+        _build(members)
+
+
+def test_nifty100_must_equal_the_nifty50_next50_union() -> None:
+    members = _members()
+    members["nifty100"] = members["nifty100"][:-1] + ("X999",)
+
+    with pytest.raises(ValueError, match="memberships are inconsistent"):
+        _build(members)
+
+
+@pytest.mark.parametrize(
+    "url",
+    (
+        "http://nsearchives.nseindia.com/content/indices/ind_nifty50list.csv",
+        "https://example.invalid/content/indices/ind_nifty50list.csv",
+        "https://nsearchives.nseindia.com/content/indices/ind_niftynext50list.csv",
+    ),
+    ids=("http-scheme", "foreign-host", "non-exact-path"),
+)
+def test_non_official_constituent_source_url_is_rejected(url: str) -> None:
+    with pytest.raises(ValueError, match="official constituent source URL is invalid"):
+        _build(_members(), url_overrides={"nifty50": url})
+
+
+@pytest.mark.parametrize(
+    "retrieved_at",
+    (
+        datetime(2026, 10, 16),
+        datetime(2026, 10, 16, tzinfo=timezone(timedelta(hours=5, minutes=30))),
+    ),
+    ids=("naive", "non-utc"),
+)
+def test_universe_retrieval_time_must_be_utc_aware(
+    retrieved_at: datetime,
+) -> None:
+    with pytest.raises(ValueError, match="universe evidence time is invalid"):
+        _build(_members(), retrieved_at=retrieved_at)
+
+
+def test_retained_source_byte_substitution_fails_closed(tmp_path: Path) -> None:
+    members = _members()
+    retain_historic_nifty_universe(tmp_path, _build(members))
+    path = tmp_path / "universe_snapshots" / "nifty-universe-v3.json"
+    payload = json.loads(path.read_text())
+    substituted = _csv(tuple(reversed(members["nifty50"])))
+    payload["nifty50_source_csv_base64"] = base64.b64encode(substituted).decode()
+    path.write_text(json.dumps(payload))
+
+    with pytest.raises(ValueError, match="retained official Nifty universe evidence"):
+        read_historic_nifty_universe(tmp_path)

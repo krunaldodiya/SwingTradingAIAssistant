@@ -28,6 +28,9 @@ import swing_trading_ai_assistant.market_data.stock_eligibility_v3 as stock_elig
 from swing_trading_ai_assistant.market_data.current_stock_research_v2 import (
     CurrentStockResearchResultV2,
 )
+from swing_trading_ai_assistant.market_data.scan_decision_evidence import (
+    _SCAN_KEYS_V2,
+)
 from swing_trading_ai_assistant.market_data.scanner_observation_pair_state_v1 import (
     read_scanner_pair_state_v1,
 )
@@ -175,6 +178,35 @@ def test_scan_signal_decisions_v3_returns_valid_schema(
     assert result["ineligible_count"] == 0
     assert result["unknown_count"] == 0
     assert "result_identity_sha256" in result
+
+
+def test_produced_scan_keys_equal_retained_evidence_schema(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    observation = cast(CurrentStockResearchResultV2, _structure_observation(tmp_path))
+    record_stock_observation_v1(tmp_path, observation)
+    source = observation.packet.source("MARKET_STRUCTURE")
+    assert source is not None
+    latest_session = source.admitted_sessions[-1]
+
+    providers = _Providers(
+        _quote(latest_session),
+        _history(observation, volume=3_000_000),
+        _actions(observation),
+    )
+    monkeypatch.setattr(
+        stock_eligibility_v3_module,
+        "_LiveProviders",
+        lambda *, clock: providers,
+    )
+
+    result = scan_signal_decisions_v3(
+        tmp_path,
+        symbols=(_SYMBOL,),
+        clock=lambda: _NOW,
+    )
+
+    assert set(result) == _SCAN_KEYS_V2
 
 
 def test_scan_signal_decisions_v3_invalid_inputs(tmp_path: Path) -> None:

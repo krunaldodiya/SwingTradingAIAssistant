@@ -92,6 +92,21 @@ def _row(
     }
 
 
+def _seal(scan: dict[str, object]) -> dict[str, object]:
+    raw = (
+        json.dumps(
+            scan,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+        + b"\n"
+    )
+    scan["result_identity_sha256"] = hashlib.sha256(raw).hexdigest()
+    return scan
+
+
 def _evidence(
     root: Path,
     *,
@@ -128,17 +143,47 @@ def _evidence(
         "other_stocks": other,
         "runtime_code_identity_sha256": _runtime_identity(),
     }
-    raw = (
-        json.dumps(
-            scan,
-            ensure_ascii=True,
-            sort_keys=True,
-            separators=(",", ":"),
-            allow_nan=False,
-        ).encode("utf-8")
-        + b"\n"
-    )
-    scan["result_identity_sha256"] = hashlib.sha256(raw).hexdigest()
+    _seal(scan)
+    return _record_scan_decision_evidence_v1(root, scan, rows)
+
+
+def _legacy_v1_evidence(
+    root: Path, *, timestamp: str, storage_root_sha256: str = "c" * 64
+) -> str:
+    symbols = [f"L{index:03d}" for index in range(500)]
+    scan: dict[str, object] = {
+        "schema": "swing-trade-scan@v1",
+        "scan_timestamp": timestamp,
+        "storage_root_sha256": storage_root_sha256,
+        "universe_type": "NIFTY_100_PRIORITY_NIFTY_500",
+        "universe_evidence": {"nifty100_source_url": "https://example.invalid"},
+        "nifty100_validated_candidate_count": 0,
+        "nifty500_fallback_triggered": True,
+        "market_regime": {},
+        "benchmark_median_return_20d": "+0.00%",
+        "total_stocks_scanned": len(symbols),
+        "evaluated_symbols": symbols,
+        "candidate_count": 0,
+        "eligible_count": 0,
+        "ineligible_count": 0,
+        "unknown_count": len(symbols),
+        "candidates": [],
+        "other_stocks": [
+            {"symbol": symbol, "decision": "UNKNOWN", "safety_status": "UNKNOWN"}
+            for symbol in symbols
+        ],
+        "runtime_code_identity_sha256": _runtime_identity(),
+    }
+    _seal(scan)
+    rows: list[dict[str, object]] = [
+        {
+            "symbol": symbol,
+            "decision": "UNKNOWN",
+            "safety_status": "UNKNOWN",
+            "observation_handle": None,
+        }
+        for symbol in symbols
+    ]
     return _record_scan_decision_evidence_v1(root, scan, rows)
 
 
@@ -304,6 +349,33 @@ def test_measurement_time_split_never_leaks_later_records(tmp_path: Path) -> Non
     assert evidence["scan_timestamp_first"] == "2026-10-01T00:00:00.000000Z"
     assert evidence["scan_timestamp_last"] == "2026-10-10T00:00:00.000000Z"
     assert evidence["storage_root_sha256"] == ["a" * 64, "b" * 64]
+
+
+def test_measurement_reads_legacy_v1_and_v2_records_together(tmp_path: Path) -> None:
+    _legacy_v1_evidence(tmp_path, timestamp="2026-10-01T00:00:00.000000Z")
+    _evidence(
+        tmp_path,
+        timestamp="2026-10-17T00:00:00.000000Z",
+        candidates=[],
+        other=[_other("ZULU")],
+        rows=[_row("ZULU", "UNKNOWN", "UNKNOWN", None)],
+        storage_root_sha256="b" * 64,
+    )
+
+    report = measure_scan_decision_evidence_v1(tmp_path)
+
+    totals = cast(dict[str, object], report["totals"])
+    assert totals["coverage"] == {
+        "scan_count": 2,
+        "symbol_observations": 501,
+        "distinct_symbols": 501,
+        "mean_symbol_observations_per_scan": "250.50",
+        "universe_types": {"EXPLICIT": 1, "NIFTY_100_PRIORITY_NIFTY_500": 1},
+    }
+    assert totals["decision_counts"] == {"UNKNOWN": 501}
+    evidence = cast(dict[str, object], report["evidence"])
+    assert evidence["record_count"] == 2
+    assert evidence["storage_root_sha256"] == ["b" * 64, "c" * 64]
 
 
 def test_measurement_fails_closed_on_tampered_entry(tmp_path: Path) -> None:

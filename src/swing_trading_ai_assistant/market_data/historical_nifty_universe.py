@@ -31,12 +31,6 @@ _NIFTY100_URL: Final = (
 _NIFTY200_URL: Final = (
     "https://nsearchives.nseindia.com/content/indices/ind_nifty200list.csv"
 )
-_LIST_SOURCE_URLS: Final = {
-    "nifty50": _NIFTY50_URL,
-    "niftynext50": _NIFTYNEXT50_URL,
-    "nifty100": _NIFTY100_URL,
-    "nifty200": _NIFTY200_URL,
-}
 _LIST_COUNTS: Final = {
     "nifty50": 50,
     "niftynext50": 50,

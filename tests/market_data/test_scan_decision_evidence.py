@@ -210,6 +210,18 @@ def test_legacy_v1_nifty500_scan_shape_is_admitted(tmp_path: Path) -> None:
     assert read_scan_decision_evidence_v1(tmp_path, handle)["scan"] == scan
 
 
+@pytest.mark.parametrize("universe_type", ("NIFTY_500", "NIFTY_100_PRIORITY_NIFTY_500"))
+def test_v2_scan_with_retired_or_legacy_universe_type_is_rejected(
+    tmp_path: Path, universe_type: str
+) -> None:
+    scan = _scan()
+    scan["universe_type"] = universe_type
+    _reseal(scan)
+
+    with pytest.raises(ScanDecisionEvidenceUnavailable):
+        _record_scan_decision_evidence_v1(tmp_path, scan, _rows())
+
+
 def test_lister_treats_only_a_fully_uninitialized_root_as_empty(
     tmp_path: Path,
 ) -> None:

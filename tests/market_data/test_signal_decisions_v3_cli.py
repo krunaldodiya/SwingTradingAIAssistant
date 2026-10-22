@@ -197,3 +197,19 @@ def test_installed_signal_decisions_command_hides_v3_missing_record_root(
     }
     assert str(root).encode() not in completed.stdout
     assert not root.exists()
+
+
+def test_retired_nifty500_scan_flag_is_rejected_before_root_access(
+    tmp_path: Path, capsys
+) -> None:
+    root = tmp_path / "private-root"
+
+    code = cli_module.main(
+        ["scan", "--storage-root", str(root), "--nifty500", "--output", "json"]
+    )
+
+    assert code == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == "request_invalid\n"
+    assert not root.exists()
