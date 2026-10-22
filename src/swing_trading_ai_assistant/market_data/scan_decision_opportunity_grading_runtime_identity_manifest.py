@@ -16,5 +16,5 @@ SCAN_DECISION_OPPORTUNITY_GRADING_RUNTIME_SOURCE_SHA256_V1: Final[dict[str, str]
     "src/swing_trading_ai_assistant/market_data/stock_observations.py": "01e59ddaa39d3d0020c5e7ee51dfa5a88a0ffee6d5f950f88f2a3ceabe0d585e",
     "src/swing_trading_ai_assistant/market_data/current_stock_research.py": "1cb067767faa60dd6a35ff44e434b2cc2e071f3cfbb71cd371c6b8a781ba590e",
     "src/swing_trading_ai_assistant/market_data/signal_decisions_scan_v3.py": "4e1825ebb49ee504f54d7fae0bac596bc55ae4b48b353e94d1faa98113e266fc",
-    "src/swing_trading_ai_assistant/market_data/signal_decisions_scan_v3_runtime_identity_manifest.py": "7327fe2fe49b11124349d4659fdcc8edb19d05ae365bc22de956bdf41e86b6ab",
+    "src/swing_trading_ai_assistant/market_data/signal_decisions_scan_v3_runtime_identity_manifest.py": "5a5de65f534bd8ef2fe9136de111165d70e22c07d2e8d9a9ad9db74b0f206885",
 }

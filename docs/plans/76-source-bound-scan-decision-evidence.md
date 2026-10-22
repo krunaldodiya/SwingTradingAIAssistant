@@ -122,3 +122,19 @@ source, time, policy, and measurement contract.
 Issue #316 and Plan 73 delivered G11’s paper-observation workflow. The live
 ledger after this slice remains G09 and G12; this document changes neither
 outcome’s closure predicate.
+
+## Amendment 1 — 2026-10-22 (#342): retained-evidence compatibility wording
+
+The earlier sentence in “Evidence record and admission” that historical
+`swing-trade-scan@v1` records “remain readable” overstates the retained-evidence
+guarantee. This dated amendment supersedes that compatibility claim only; the
+original plan text remains historical evidence.
+
+Retained `scan-decision-evidence@v1` records are bound to the scanner runtime
+identity that produced them. What remains admissible is the historical
+`swing-trade-scan@v1` **shape** — its closed key set, universe types, and
+required universe totals — and
+only when every current runtime-identity, result-identity, selection-binding,
+and observation-admission check still matches. This amendment promises no
+universal readability for arbitrary historical v1 records, performs no
+migration, and changes no executable behavior.
