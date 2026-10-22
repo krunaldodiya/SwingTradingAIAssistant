@@ -73,6 +73,46 @@ def _rows() -> list[dict[str, object]]:
     ]
 
 
+def _retired_v2_scan(
+    universe_type: str,
+) -> tuple[dict[str, object], list[dict[str, object]]]:
+    symbols = [f"L{index:03d}" for index in range(500)]
+    scan: dict[str, object] = {
+        "schema": "swing-trade-scan@v2",
+        "scan_timestamp": "2026-10-17T00:00:00.000000Z",
+        "storage_root_sha256": "a" * 64,
+        "universe_type": universe_type,
+        "universe_evidence": {"nifty100_source_url": "https://example.invalid"},
+        "priority_validated_candidate_count": 0,
+        "tier2_fallback_triggered": True,
+        "market_regime": {},
+        "benchmark_median_return_20d": "+0.00%",
+        "total_stocks_scanned": len(symbols),
+        "evaluated_symbols": symbols,
+        "candidate_count": 0,
+        "eligible_count": 0,
+        "ineligible_count": 0,
+        "unknown_count": len(symbols),
+        "candidates": [],
+        "other_stocks": [
+            {"symbol": symbol, "decision": "UNKNOWN", "safety_status": "UNKNOWN"}
+            for symbol in symbols
+        ],
+        "runtime_code_identity_sha256": _runtime_identity(),
+    }
+    _reseal(scan)
+    rows: list[dict[str, object]] = [
+        {
+            "symbol": symbol,
+            "decision": "UNKNOWN",
+            "safety_status": "UNKNOWN",
+            "observation_handle": None,
+        }
+        for symbol in symbols
+    ]
+    return scan, rows
+
+
 def test_stale_scanner_runtime_refuses_publication(tmp_path: Path) -> None:
     scan = _scan()
     scan["runtime_code_identity_sha256"] = "b" * 64
@@ -214,12 +254,12 @@ def test_legacy_v1_nifty500_scan_shape_is_admitted(tmp_path: Path) -> None:
 def test_v2_scan_with_retired_or_legacy_universe_type_is_rejected(
     tmp_path: Path, universe_type: str
 ) -> None:
-    scan = _scan()
-    scan["universe_type"] = universe_type
-    _reseal(scan)
+    scan, rows = _retired_v2_scan(universe_type)
 
-    with pytest.raises(ScanDecisionEvidenceUnavailable):
-        _record_scan_decision_evidence_v1(tmp_path, scan, _rows())
+    with pytest.raises(ScanDecisionEvidenceUnavailable) as unavailable:
+        _record_scan_decision_evidence_v1(tmp_path, scan, rows)
+
+    assert str(unavailable.value.__cause__) == "invalid universe type"
 
 
 def test_lister_treats_only_a_fully_uninitialized_root_as_empty(

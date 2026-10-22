@@ -132,7 +132,8 @@ original plan text remains historical evidence.
 
 Retained `scan-decision-evidence@v1` records are bound to the scanner runtime
 identity that produced them. What remains admissible is the historical
-`swing-trade-scan@v1` **shape** — its closed key set and universe types — and
+`swing-trade-scan@v1` **shape** — its closed key set, universe types, and
+required universe totals — and
 only when every current runtime-identity, result-identity, selection-binding,
 and observation-admission check still matches. This amendment promises no
 universal readability for arbitrary historical v1 records, performs no
