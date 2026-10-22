@@ -12,6 +12,7 @@ import swing_trading_ai_assistant.market_data.scan_decision_evidence as evidence
 from swing_trading_ai_assistant.market_data.scan_decision_evidence import (
     ScanDecisionEvidenceUnavailable,
     _record_scan_decision_evidence_v1,
+    list_scan_decision_evidence_handles_v1,
     read_scan_decision_evidence_v1,
 )
 from swing_trading_ai_assistant.market_data.signal_decisions_scan_v3 import (
@@ -207,3 +208,59 @@ def test_legacy_v1_nifty500_scan_shape_is_admitted(tmp_path: Path) -> None:
     handle = _record_scan_decision_evidence_v1(tmp_path, scan, rows)
 
     assert read_scan_decision_evidence_v1(tmp_path, handle)["scan"] == scan
+
+
+def test_lister_treats_only_a_fully_uninitialized_root_as_empty(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    root.chmod(0o700)
+
+    assert list_scan_decision_evidence_handles_v1(root) == ()
+    assert list(root.iterdir()) == []
+
+    lock = root / ".ingestion.lock"
+    lock.write_text("")
+    lock.chmod(0o600)
+    with pytest.raises(ScanDecisionEvidenceUnavailable):
+        list_scan_decision_evidence_handles_v1(root)
+
+    lock.unlink()
+    namespace = root / "scan-decision-evidence-v1"
+    namespace.mkdir()
+    with pytest.raises(ScanDecisionEvidenceUnavailable):
+        list_scan_decision_evidence_handles_v1(root)
+    namespace.rmdir()
+
+    target = tmp_path / "target"
+    target.write_text("")
+    lock.symlink_to(target)
+    with pytest.raises(ScanDecisionEvidenceUnavailable):
+        list_scan_decision_evidence_handles_v1(root)
+    lock.unlink()
+
+    lock.write_text("")
+    lock.chmod(0o644)
+    with pytest.raises(ScanDecisionEvidenceUnavailable):
+        list_scan_decision_evidence_handles_v1(root)
+    lock.unlink()
+
+    lock.mkdir()
+    with pytest.raises(ScanDecisionEvidenceUnavailable):
+        list_scan_decision_evidence_handles_v1(root)
+
+
+def test_lister_redacts_unexpected_lease_failures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    root.chmod(0o700)
+
+    def fail(_root: object) -> object:
+        raise OSError("unexpected lease failure")
+
+    monkeypatch.setattr(evidence_module, "_lease", fail)
+    with pytest.raises(ScanDecisionEvidenceUnavailable):
+        list_scan_decision_evidence_handles_v1(root)

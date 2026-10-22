@@ -34,6 +34,14 @@ from .scan_decision_measurement import (
 from .scan_decision_measurement import (
     measure_scan_decision_evidence_v1,
 )
+from .scan_decision_opportunity_grading import (
+    DecisionOpportunityUnavailable,
+    format_opportunity_report_table,
+    grade_scan_decision_evidence_v1,
+)
+from .scan_decision_opportunity_grading import (
+    unavailable_report as opportunity_unavailable_report,
+)
 from .signal_decisions import SCHEMA as V2_SCHEMA
 from .signal_decisions import evaluate_signal_decision_from_records_v2
 from .signal_decisions_scan_v3 import (
@@ -95,6 +103,13 @@ class _MeasureDecisionEvidenceRequest:
 
 
 @dataclass(frozen=True)
+class _GradeDecisionEvidenceRequest:
+    storage_root: Path
+    decision_evidence: str | None
+    output: Literal["json", "table"]
+
+
+@dataclass(frozen=True)
 class _TrackRequest:
     storage_root: Path
     log_scan: Path | None
@@ -133,6 +148,12 @@ def _parser() -> argparse.ArgumentParser:
     measure_evidence.add_argument("--split-at", default=None)
     measure_evidence.add_argument("--execution-convention", default=None)
     measure_evidence.add_argument("--output", choices=("json",), required=True)
+    grade_evidence = commands.add_parser("grade-decision-evidence")
+    grade_evidence.add_argument("--storage-root", type=Path, required=True)
+    grade_evidence.add_argument(
+        "--decision-evidence", action="append", dest="decision_evidence", default=None
+    )
+    grade_evidence.add_argument("--output", choices=("json", "table"), default="json")
     track = commands.add_parser("track")
     track.add_argument("--storage-root", type=Path, required=True)
     track.add_argument("--log-scan", type=Path, default=None)
@@ -152,6 +173,7 @@ def _valid_request(  # noqa: C901 - command-specific closed request validation
     | _TrackRequest
     | _ReadDecisionEvidenceRequest
     | _MeasureDecisionEvidenceRequest
+    | _GradeDecisionEvidenceRequest
 ):
     storage_root: object = getattr(args, "storage_root", None)
     command: object = getattr(args, "command", None)
@@ -233,6 +255,26 @@ def _valid_request(  # noqa: C901 - command-specific closed request validation
         ):
             raise ValueError("invalid execution convention")
         return _MeasureDecisionEvidenceRequest(storage_root, split_at, convention)
+    if command == "grade-decision-evidence":
+        handles_raw: object = getattr(args, "decision_evidence", None)
+        if handles_raw is not None and type(handles_raw) is not list:
+            raise ValueError("invalid evidence handle")
+        handles = [] if handles_raw is None else cast(list[object], handles_raw)
+        if len(handles) > 1:
+            raise ValueError("repeated evidence handle")
+        handle: object = handles[0] if handles else None
+        if handle is not None and (
+            type(handle) is not str or _DIGEST.fullmatch(handle) is None
+        ):
+            raise ValueError("invalid evidence handle")
+        output_format = str(getattr(args, "output", "json"))
+        if output_format not in {"json", "table"}:
+            raise ValueError("invalid output format")
+        return _GradeDecisionEvidenceRequest(
+            storage_root,
+            handle,
+            cast(Literal["json", "table"], output_format),
+        )
     if command not in {"evaluate", "evaluate-v3"}:
         raise ValueError("invalid command")
     previous: object = getattr(args, "previous_observation", None)
@@ -337,6 +379,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_read_decision_evidence(request)
     if isinstance(request, _MeasureDecisionEvidenceRequest):
         return _run_measure_decision_evidence(request)
+    if isinstance(request, _GradeDecisionEvidenceRequest):
+        return _run_grade_decision_evidence(request)
     if isinstance(request, _ScanRequest):
         return _run_scan(request)
     if request.version == "v2":
@@ -448,6 +492,24 @@ def _run_measure_decision_evidence(
     except Exception:  # noqa: BLE001 - closed CLI error boundary
         _write(_measurement_unavailable())
         return 1
+
+
+def _run_grade_decision_evidence(request: _GradeDecisionEvidenceRequest) -> int:
+    try:
+        report = grade_scan_decision_evidence_v1(
+            request.storage_root, decision_evidence=request.decision_evidence
+        )
+    except DecisionOpportunityUnavailable as error:
+        _write(opportunity_unavailable_report(error.code))
+        return 1
+    except Exception:  # noqa: BLE001 - closed CLI error boundary
+        _write(opportunity_unavailable_report("OPPORTUNITY_UNAVAILABLE"))
+        return 1
+    if request.output == "table":
+        sys.stdout.write(format_opportunity_report_table(report) + "\n")
+    else:
+        _write(report)
+    return 0 if report.get("report_state") == "COMPLETE" else 1
 
 
 if __name__ == "__main__":

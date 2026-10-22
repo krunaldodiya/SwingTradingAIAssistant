@@ -106,7 +106,10 @@ swing-research screen.
 
 Open question: G09 must freeze the measured baseline, acceptable coverage-loss
 rule, and out-of-sample comparison before any optional analytical fact becomes
-a decision gate.
+a decision gate. The opportunity-side recipe is now frozen and its first
+report-only single-page grader is recorded in
+[Plan 81](81-g09-decision-opportunity-grading.md); series-level pass shape and
+out-of-sample qualification remain deferred.
 
 ## Current delivery status
 
