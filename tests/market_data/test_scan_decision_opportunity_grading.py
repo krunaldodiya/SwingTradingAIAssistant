@@ -106,6 +106,13 @@ def _record(
     }
 
 
+def _over_deep_json_value(levels: int = 70) -> object:
+    value: object = "leaf"
+    for _ in range(levels):
+        value = {"nested": value}
+    return value
+
+
 def _bars(
     highs: dict[date, str] | None = None,
     closes: dict[date, str] | None = None,
@@ -1127,6 +1134,53 @@ def test_revision_index_rejects_malformed_records(
 ) -> None:
     raw = b"["
     name = f"{hashlib.sha256(raw).hexdigest()}.json"
+    _store_context(monkeypatch, names=[name], files={name: raw})
+    with pytest.raises(grading.DecisionOpportunityUnavailable) as raised:
+        grading._read_revision_index(_FakeOperation(), _FakeDirectory(), {"INDHOTEL"})
+    assert raised.value.code == "OPPORTUNITY_STORAGE_UNAVAILABLE"
+
+
+def test_page_timestamp_rejects_over_deep_values() -> None:
+    raw = json.dumps(
+        {
+            "scan": {
+                "scan_timestamp": "2026-10-19T15:00:14.733927Z",
+                "extra": _over_deep_json_value(),
+            }
+        }
+    ).encode()
+    with pytest.raises(grading.DecisionOpportunityUnavailable) as raised:
+        grading._page_timestamp(raw)
+    assert raised.value.code == "DECISION_EVIDENCE_UNAVAILABLE"
+
+
+def test_load_json_refuses_recursion_depth() -> None:
+    raw = b"[" * 2000 + b"0" + b"]" * 2000
+    with pytest.raises(ValueError):
+        grading._load_json(raw)
+
+
+def test_calendar_read_rejects_over_deep_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    record = _record([DECISION, *WINDOW])
+    record["extra"] = _over_deep_json_value()
+    raw = json.dumps(record).encode()
+    name = f"{hashlib.sha256(raw).hexdigest()}.json"
+    _store_context(monkeypatch, names=[name], files={name: raw})
+    with pytest.raises(grading.DecisionOpportunityUnavailable) as raised:
+        grading._read_calendar(STORE)
+    assert raised.value.code == "OPPORTUNITY_STORAGE_UNAVAILABLE"
+
+
+def test_revision_index_rejects_over_deep_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    identity = "c" * 64
+    record = _index_revision_value(identity)
+    record["extra"] = _over_deep_json_value()
+    raw = json.dumps(record).encode()
+    name = f"{identity}.json"
     _store_context(monkeypatch, names=[name], files={name: raw})
     with pytest.raises(grading.DecisionOpportunityUnavailable) as raised:
         grading._read_revision_index(_FakeOperation(), _FakeDirectory(), {"INDHOTEL"})

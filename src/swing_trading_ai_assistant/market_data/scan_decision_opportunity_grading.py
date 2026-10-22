@@ -182,7 +182,17 @@ def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]
 
 
 def _load_json(raw: bytes) -> object:
-    return json.loads(raw, object_pairs_hook=_reject_duplicate_keys)
+    try:
+        value = json.loads(raw, object_pairs_hook=_reject_duplicate_keys)
+    except RecursionError as error:
+        raise ValueError("json depth exceeded") from error
+    try:
+        too_deep = _depth_exceeded(value)
+    except RecursionError as error:
+        raise ValueError("json depth exceeded") from error
+    if too_deep:
+        raise ValueError("json depth exceeded")
+    return value
 
 
 def _canonical_bytes(value: object) -> bytes:
