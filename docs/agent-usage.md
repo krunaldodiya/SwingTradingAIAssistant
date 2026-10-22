@@ -131,6 +131,13 @@ outcome, not a trade instruction), recommendations, target prices, expected
 returns, win rates, rankings, portfolio fit, and manipulation claims beyond the
 filter result actually returned.
 
+### 2.6 Research/analysis request protocol
+
+Follow the canonical protocol in
+[`docs/mandatory-agent-instructions.md`](mandatory-agent-instructions.md) for
+scope, depth, completed-session, and ledger rules. Use §4.1 below to select the
+command; a scan is not a per-stock dossier.
+
 ## 3. Pick your question, then run the command
 
 Synopses are the installed console-script forms (repeatable options are shown

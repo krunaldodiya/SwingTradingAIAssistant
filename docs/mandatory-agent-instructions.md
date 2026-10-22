@@ -246,6 +246,29 @@ A terminal acknowledgement alone is not a saved decision.
   from discussion records and memory. This procedure authorises no new service,
   upload destination, background hook, or guarantee of automatic retention.
 
+### Research/analysis request protocol
+
+Before any owner-requested research/analysis of stocks, resolve the exact scope
+and depth. The integrated scan (`signal-decisions scan`; see
+`docs/workflows/automated-nifty100-scan.md` and Plan 74) is a screening layer over
+every member and is not a per-stock dossier. Default depth is the full integrated
+scan for the exact scope, then `market-data research-run-current` for validated
+candidates only, unless the owner explicitly requests another depth. Every
+applicable stage in the chosen depth must run; name any stage that did not run
+and why.
+
+Use the latest completed official session and never mix sessions. The owner's
+recorded current-day capture rule (at or after 20:00 IST; see
+`docs/notes/2026-09-22-next-sprint-and-linux-handoff.md`) governs when to attempt
+today's current-session capture; the scheduled after-close run is the diary's
+current-session pass. Before a pass, check the owner's private research ledger;
+if it already holds a pass on the same question, scope, and data cutoff with
+unchanged material inputs, report the prior outcome and ask before rerunning.
+After a real pass, ask before storing an entry (default store; full detail;
+append-only; private, never in the public repository; if the owner is unreachable
+at completion, write it flagged `unconfirmed`). The claim boundaries in "Product
+mission and scope" and "Research integrity" apply unchanged.
+
 ### Tracker and lifecycle
 
 - GitHub is the sole active tracker. Create work through repository Issue forms and manage it in the private SwingTradingAIAssistant Delivery Project.
