@@ -133,23 +133,10 @@ filter result actually returned.
 
 ### 2.6 Research/analysis request protocol
 
-The canonical rules are in
-[`docs/mandatory-agent-instructions.md`](mandatory-agent-instructions.md) under
-"Research/analysis request protocol". In short:
-
-| Request | Default command | What it is |
-| --- | --- | --- |
-| Universe scan (`--nifty50`, `--niftynext50`, `--nifty100`, `--nifty200`) | `signal-decisions scan` | Integrated screen: every member passes identity binding, pair policy, the 8 safety/anti-manipulation gates, structure, price action/SMC, volume, sector participation, relative strength, regime, and basket selection. Not a per-stock dossier. |
-| Deeper per-stock dossier | `market-data research-run-current --symbol SYM` | Agent packet for a validated candidate (V1–V6; V3–V6 private-context limits). |
-| Whole-list research | `market-data setup-research-selection ...` | Factual research for an exact selection or 1–100 explicit symbols. |
-
-Before a pass: use the latest completed official session (do not run a provider
-refresh before the publication boundary; the scheduled after-close run is
-authoritative), check the owner's private research ledger for a duplicate, and
-state which layers ran. After a real pass: ask before storing a ledger entry
-(default store; full detail; private; append-only). Never present a scan as a
-completed dossier, and never turn a candidate into advice, targets, or position
-sizes.
+Follow the canonical protocol in
+[`docs/mandatory-agent-instructions.md`](mandatory-agent-instructions.md) for
+scope, depth, completed-session, and ledger rules. Use §4.1 below to select the
+command; a scan is not a per-stock dossier.
 
 ## 3. Pick your question, then run the command
 

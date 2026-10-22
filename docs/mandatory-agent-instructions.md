@@ -248,39 +248,22 @@ A terminal acknowledgement alone is not a saved decision.
 
 ### Research/analysis request protocol
 
-When the owner asks for research or analysis of one or more stocks — including
-"run the scan", a named universe, a portfolio, a custom list, or a single stock —
-the coordinator MUST resolve the scope and depth before running anything, and
-MUST NOT present a screening result as deeper research than it is.
+Before any owner-requested research/analysis of stocks, resolve the exact scope
+and depth. The integrated scan (`signal-decisions scan`; see
+`docs/workflows/automated-nifty100-scan.md` and Plan 74) is a screening layer over
+every member and is not a per-stock dossier. Default depth is the full integrated
+scan for the exact scope, then `market-data research-run-current` for validated
+candidates only, unless the owner explicitly requests another depth. Every
+applicable stage in the chosen depth must run; name any stage that did not run
+and why.
 
-- **Scope and depth.** State the exact universe or symbol list and the intended
-  depth: integrated scan (all members through every applicable scan stage), or
-  per-stock dossier (the deeper agent packet). Default: run the integrated
-  `signal-decisions scan` over the exact scope so every member passes identity
-  binding, pair policy, the safety/anti-manipulation gates, market structure,
-  price action/SMC, volume, sector participation, relative strength, and market
-  regime; then run `market-data research-run-current` only for validated
-  candidates, unless the owner explicitly requests another depth. Report which
-  layers ran and which did not.
-- **Completed session.** Use the latest completed official session. Do not run a
-  provider refresh before the provider's publication boundary (currently 20:00
-  IST); the scheduled after-close run is the authoritative current-session pass.
-  If the latest session is not final, say so and use the prior completed session
-  explicitly; never mix sessions.
-- **No skipped stage.** Every stock in the requested scope must pass every
-  applicable stage/filter, or the result must name the stage that did not run
-  and why. A scan row is a screening outcome, not a completed dossier.
-- **Private ledger.** Before the pass, check the owner's private research ledger
-  for a recent pass on the same question, scope, and data cutoff; if material
-  inputs are unchanged, report the prior outcome and ask before rerunning. After
-  a real pass, ask before storing an entry — the ask is never skipped and the
-  default is store. Entries are full-detail, append-only, private, and never in
-  the public repository. If the owner is unreachable at completion, write the
-  entry flagged `unconfirmed`.
-- **Claim boundary.** Report research candidates and named skips with exact
-  evidence. Never present a candidate as a recommendation, guarantee a return,
-  set targets, size positions, or call a screen a validated edge. Zero
-  candidates/opportunities is a valid, honest outcome.
+Use the latest completed official session and never mix sessions. Respect the
+provider publication boundary documented in the scan workflow; the scheduled
+after-close run is the authoritative current-session pass. Before a pass, check
+the owner's private research ledger for a duplicate; after a real pass, ask before
+storing an entry (default store; full detail; append-only; private). The claim
+boundaries in "Product mission and scope" and "Research integrity" apply
+unchanged.
 
 ### Tracker and lifecycle
 
