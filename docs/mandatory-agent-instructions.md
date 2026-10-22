@@ -257,13 +257,17 @@ candidates only, unless the owner explicitly requests another depth. Every
 applicable stage in the chosen depth must run; name any stage that did not run
 and why.
 
-Use the latest completed official session and never mix sessions. Respect the
-provider publication boundary documented in the scan workflow; the scheduled
-after-close run is the authoritative current-session pass. Before a pass, check
-the owner's private research ledger for a duplicate; after a real pass, ask before
-storing an entry (default store; full detail; append-only; private). The claim
-boundaries in "Product mission and scope" and "Research integrity" apply
-unchanged.
+Use the latest completed official session and never mix sessions. The owner's
+recorded current-day capture rule (at or after 20:00 IST; see
+`docs/notes/2026-09-22-next-sprint-and-linux-handoff.md`) governs when today's
+data is complete; the scheduled after-close run is the authoritative
+current-session pass. Before a pass, check the owner's private research ledger;
+if it already holds a pass on the same question, scope, and data cutoff with
+unchanged material inputs, report the prior outcome and ask before rerunning.
+After a real pass, ask before storing an entry (default store; full detail;
+append-only; private, never in the public repository; if the owner is unreachable
+at completion, write it flagged `unconfirmed`). The claim boundaries in "Product
+mission and scope" and "Research integrity" apply unchanged.
 
 ### Tracker and lifecycle
 
