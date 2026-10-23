@@ -1076,19 +1076,44 @@ def scan_signal_decisions_v3(  # noqa: C901 - lifecycle orchestration
     seeded_symbols: list[str] = []
     bound_symbols: list[str] = []
     selected_back = 0 if sessions_back is None else sessions_back
+    bootstrap_pair = False
+    available = False
     if sessions_back is None and refresh and target_symbols:
-        try:
-            probe = research_current_stock_v2(
-                target_symbols[0],
-                storage_root,
-                question="CURRENT_STRUCTURE",
-                refresh=True,
-            )
-            selected_back = (
-                1 if probe.status != "READY" and _latest_session_missing(probe) else 0
-            )
-        except Exception:  # noqa: BLE001 - the per-symbol boundary reports this
-            selected_back = 0
+        for candidate_back in range(0, 11):
+            try:
+                probe = research_current_stock_v2(
+                    target_symbols[0],
+                    storage_root,
+                    question="CURRENT_STRUCTURE",
+                    refresh=True,
+                    sessions_back=candidate_back,
+                )
+            except Exception:  # noqa: BLE001 - the per-symbol boundary reports this
+                break
+            if probe.status == "READY":
+                selected_back = candidate_back
+                available = True
+                break
+            if not _latest_session_missing(probe):
+                break
+        if available and selected_back < 10:
+            missing = [
+                symbol
+                for symbol in target_symbols
+                if read_scanner_pair_state_v1(storage_root, symbol) is None
+            ]
+            if missing:
+                bootstrap_pair = True
+                for symbol in missing:
+                    _scan_stock(
+                        symbol,
+                        storage_root,
+                        refresh,
+                        industry_map.get(symbol, "Unknown"),
+                        benchmark_median,
+                        None,
+                        sessions_back=selected_back + 1,
+                    )
 
     for symbol in target_symbols:
         ind = industry_map.get(symbol, "Unknown")
@@ -1209,6 +1234,11 @@ def scan_signal_decisions_v3(  # noqa: C901 - lifecycle orchestration
 
     market_regime = _calculate_market_regime(trends)
 
+    if bootstrap_pair and warnings is not None:
+        warnings.append(
+            "BOOTSTRAP_PAIR: seeded the prior completed session for symbols "
+            "without pair state so this request evaluates the newest available pair."
+        )
     if bound_symbols and warnings is not None:
         label = "LATEST_AVAILABLE" if sessions_back is None else "SESSIONS_BACK"
         warnings.append(
