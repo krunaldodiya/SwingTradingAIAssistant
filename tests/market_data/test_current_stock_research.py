@@ -84,6 +84,9 @@ from swing_trading_ai_assistant.market_data.instruments import (
 from swing_trading_ai_assistant.market_data.schedule_evidence import (
     ScheduleEvidenceStore,
 )
+from swing_trading_ai_assistant.market_data.signal_decisions_scan_v3 import (
+    _latest_session_missing,
+)
 from swing_trading_ai_assistant.market_data.storage_root_lease import (
     LeaseOutcome,
     StorageRootLease,
@@ -1164,6 +1167,8 @@ def test_current_structure_names_a_missing_latest_provider_session(
     assert structure.availability == "INSUFFICIENT_EVIDENCE"
     assert structure.reason == "LATEST_SESSION_MISSING"
     assert structure.fact is None
+
+    assert _latest_session_missing(result)
 
 
 def test_v2_current_structure_finds_21_sessions_across_holiday_margin(

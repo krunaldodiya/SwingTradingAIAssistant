@@ -29,7 +29,7 @@ VOLUME_RUNTIME_SOURCE_SHA256_V1: Final[dict[str, str]] = {
     "src/swing_trading_ai_assistant/market_data/current_research_binding_v2.py": "977e48cc06e5cfccb27fc6576d4f27a93fac7e6e6f815aceb9d07e028625a442",
     "src/swing_trading_ai_assistant/market_data/current_same_pass_daily_v4.py": "1a423896676eb4b983c58ca5035bf29f29156fefd3b982462168c5e6232ec402",
     "src/swing_trading_ai_assistant/market_data/current_stock_research.py": "1cb067767faa60dd6a35ff44e434b2cc2e071f3cfbb71cd371c6b8a781ba590e",
-    "src/swing_trading_ai_assistant/market_data/current_stock_research_v2.py": "5fefdd72b70496d4526b50d447e7720cca703525b3c24c006051d8f13dea42e7",
+    "src/swing_trading_ai_assistant/market_data/current_stock_research_v2.py": "0465ec4576b9a0466cc79d292b0a6ae92d9817f485ef2e9fc494b2ee4bef7475",
     "src/swing_trading_ai_assistant/market_data/daily_ohlcv.py": "dd0dab2e0b1cc0f1fa1365593475e492e1bd7fcfed58ed3e9aa02352fa52301c",
     "src/swing_trading_ai_assistant/market_data/download_preparation.py": "ddbd15438a7428997245b43d332f356f18a0c00c2e0a0f6b09a4572a67ec2bbf",
     "src/swing_trading_ai_assistant/market_data/equity_admission.py": "e644285c325613344e63bc76465b64311e2338729af228746b409f234c1af54e",
@@ -90,5 +90,5 @@ VOLUME_RUNTIME_SOURCE_SHA256_V1: Final[dict[str, str]] = {
     "src/swing_trading_ai_assistant/volume_analysis/request.py": "241fa165aa3e684037499a187d18779f835997ce9c064a6a32a2c542dc6ecc97",
     "src/swing_trading_ai_assistant/volume_analysis/service.py": "3c23777c5825f2b4c46c6b5ff9de184826c25910688ef2ec432dfc86da096893",
     "src/swing_trading_ai_assistant/market_data/setup_screen.py": "448e32684c5dc3bd82511bcee224d347aadb9b9211f0cf215493050e194b7b38",
-    "src/swing_trading_ai_assistant/market_data/setup_screen_runtime_identity_manifest.py": "fdb5e3cfd1f15e14555330d62cb9f20c5699b6ae7f28ee05d6bf6a2ff85e699c",
+    "src/swing_trading_ai_assistant/market_data/setup_screen_runtime_identity_manifest.py": "3f60e910c3334ed299529501dffc66aabd67442810f944eeaaf274b9d64e4e85",
 }

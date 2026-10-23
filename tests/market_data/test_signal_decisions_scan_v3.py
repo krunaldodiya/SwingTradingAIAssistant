@@ -1208,3 +1208,186 @@ def test_scan_bootstrap_warning_survives_eligibility_exception(
     state = read_scanner_pair_state_v1(tmp_path, _SYMBOL)
     assert state is not None
     assert state.sequence == 1
+
+
+def test_scan_uses_latest_available_session_when_today_unpublished(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    symbols = ("RELIANCE",)
+    seen: list[int] = []
+
+    def fake_resolve(
+        *_args: object, **_kwargs: object
+    ) -> tuple[tuple[str, ...], str, frozenset[str], dict[str, object] | None]:
+        return (symbols, "NIFTY_200", frozenset(symbols), {"source": "test"})
+
+    feature = type(
+        "Feature",
+        (),
+        {"feature": "MARKET_STRUCTURE", "reason": "LATEST_SESSION_MISSING"},
+    )()
+    member = type("Member", (), {"features": (feature,)})()
+    packet = type(
+        "Packet",
+        (),
+        {"execution_state": "COMPLETED", "feature_slots": (), "members": (member,)},
+    )()
+    probe = type("Probe", (), {"status": "NOT_READY", "packet": packet})()
+
+    monkeypatch.setattr(scan_module, "_resolve_target_symbols", fake_resolve)
+    monkeypatch.setattr(
+        scan_module, "research_current_stock_v2", lambda *_args, **_kwargs: probe
+    )
+
+    def fake_scan(symbol: str, *_args: object, **kwargs: object) -> tuple[object, ...]:
+        seen.append(cast(int, kwargs["sessions_back"]))
+        bound = kwargs.get("bound_symbols")
+        if type(bound) is list:
+            bound.append(symbol)
+        return scan_module._unavailable_result(  # pyright: ignore[reportPrivateUsage]
+            symbol, "OBSERVATION_STRUCTURE_NOT_READY"
+        )
+
+    monkeypatch.setattr(scan_module, "_scan_stock", fake_scan)
+
+    warnings: list[str] = []
+    scan_signal_decisions_v3(
+        tmp_path, symbols=symbols, refresh=True, clock=lambda: _NOW, warnings=warnings
+    )
+
+    assert seen == [1]
+    assert warnings == [
+        "LATEST_AVAILABLE: 1 symbol(s) bound a completed session 1 before the "
+        "newest official close."
+    ]
+
+
+def test_scan_does_not_fall_back_for_unrelated_not_ready(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    symbols = ("RELIANCE",)
+    seen: list[int] = []
+
+    def fake_resolve(
+        *_args: object, **_kwargs: object
+    ) -> tuple[tuple[str, ...], str, frozenset[str], dict[str, object] | None]:
+        return (symbols, "NIFTY_200", frozenset(symbols), {"source": "test"})
+
+    feature = type(
+        "Feature",
+        (),
+        {"feature": "MARKET_STRUCTURE", "reason": "HISTORY_INCOMPLETE"},
+    )()
+    member = type("Member", (), {"features": (feature,)})()
+    packet = type(
+        "Packet",
+        (),
+        {"execution_state": "COMPLETED", "feature_slots": (), "members": (member,)},
+    )()
+    probe = type("Probe", (), {"status": "NOT_READY", "packet": packet})()
+
+    monkeypatch.setattr(scan_module, "_resolve_target_symbols", fake_resolve)
+    monkeypatch.setattr(
+        scan_module, "research_current_stock_v2", lambda *_args, **_kwargs: probe
+    )
+
+    def fake_scan(symbol: str, *_args: object, **kwargs: object) -> tuple[object, ...]:
+        seen.append(cast(int, kwargs["sessions_back"]))
+        return scan_module._unavailable_result(  # pyright: ignore[reportPrivateUsage]
+            symbol, "OBSERVATION_STRUCTURE_NOT_READY"
+        )
+
+    monkeypatch.setattr(scan_module, "_scan_stock", fake_scan)
+
+    warnings: list[str] = []
+    scan_signal_decisions_v3(
+        tmp_path, symbols=symbols, refresh=True, clock=lambda: _NOW, warnings=warnings
+    )
+
+    assert seen == [0]
+    assert warnings == []
+
+
+def test_scan_rejects_invalid_sessions_back(tmp_path: Path) -> None:
+    with pytest.raises(ValueError):
+        scan_signal_decisions_v3(
+            tmp_path, symbols=("RELIANCE",), refresh=True, sessions_back=-1
+        )
+    with pytest.raises(ValueError):
+        scan_signal_decisions_v3(
+            tmp_path, symbols=("RELIANCE",), refresh=False, sessions_back=1
+        )
+
+
+def test_latest_session_missing_reads_member_reason() -> None:
+    feature = type(
+        "Feature",
+        (),
+        {"feature": "MARKET_STRUCTURE", "reason": "LATEST_SESSION_MISSING"},
+    )()
+    packet = type(
+        "Packet",
+        (),
+        {
+            "execution_state": "COMPLETED",
+            "members": (type("Member", (), {"features": (feature,)})(),),
+        },
+    )()
+    assert scan_module._latest_session_missing(  # pyright: ignore[reportPrivateUsage]
+        type("Result", (), {"packet": packet})()
+    )
+
+
+def test_latest_session_missing_false_on_shared_stop() -> None:
+    feature = type(
+        "Feature",
+        (),
+        {"feature": "MARKET_STRUCTURE", "reason": "LATEST_SESSION_MISSING"},
+    )()
+    packet = type(
+        "Packet",
+        (),
+        {
+            "execution_state": "STOPPED",
+            "members": (type("Member", (), {"features": (feature,)})(),),
+        },
+    )()
+    assert not scan_module._latest_session_missing(  # pyright: ignore[reportPrivateUsage]
+        type("Result", (), {"packet": packet})()
+    )
+
+
+def test_structure_session_reads_requested_sessions() -> None:
+    slot = type(
+        "Slot",
+        (),
+        {
+            "feature": "MARKET_STRUCTURE",
+            "requested_sessions": (date(2026, 10, 21), date(2026, 10, 22)),
+        },
+    )()
+    packet = type("Packet", (), {"feature_slots": (slot,)})()
+    assert scan_module._structure_session(packet) == date(  # pyright: ignore[reportPrivateUsage]
+        2026, 10, 22
+    )
+
+
+def test_cli_rejects_sessions_back_without_refresh(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    code = cli_main(
+        [
+            "scan",
+            "--storage-root",
+            str(tmp_path),
+            "--symbol",
+            "RELIANCE",
+            "--sessions-back",
+            "1",
+            "--output",
+            "json",
+        ]
+    )
+    captured = capsys.readouterr()
+    assert code == 2
+    assert "request_invalid" in captured.err
