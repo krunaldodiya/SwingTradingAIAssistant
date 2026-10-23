@@ -22,6 +22,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
+import swing_trading_ai_assistant.market_data.current_stock_research_v2 as current_stock_research_v2
 from swing_trading_ai_assistant.market_data import agent_research_run as agent_api
 from swing_trading_ai_assistant.market_data import bharatstock_capture as capture_api
 from swing_trading_ai_assistant.market_data import (
@@ -57,9 +58,15 @@ from swing_trading_ai_assistant.market_data.current_stock_research import (
     CurrentStockResearchResultV1,
     research_current_stock_v1,
 )
+from swing_trading_ai_assistant.market_data.current_stock_research_runtime_identity_manifest import (
+    CURRENT_STOCK_RESEARCH_RUNTIME_SOURCE_SHA256_V1,
+)
 from swing_trading_ai_assistant.market_data.current_stock_research_v2 import (
     CurrentStockResearchResultV2,
     research_current_stock_v2,
+)
+from swing_trading_ai_assistant.market_data.current_stock_research_v2_runtime_identity_manifest import (
+    CURRENT_STOCK_RESEARCH_RUNTIME_SOURCE_SHA256_V2,
 )
 from swing_trading_ai_assistant.market_data.http import (
     HttpResponse,
@@ -4184,14 +4191,6 @@ def test_agent_research_run_terminal_mapping_failure_has_typed_missing_facts(
 
 
 def test_producer_identity_excludes_decision_projection(monkeypatch):
-    import swing_trading_ai_assistant.market_data.current_stock_research_v2 as producer
-    from swing_trading_ai_assistant.market_data.current_stock_research_runtime_identity_manifest import (
-        CURRENT_STOCK_RESEARCH_RUNTIME_SOURCE_SHA256_V1,
-    )
-    from swing_trading_ai_assistant.market_data.current_stock_research_v2_runtime_identity_manifest import (
-        CURRENT_STOCK_RESEARCH_RUNTIME_SOURCE_SHA256_V2,
-    )
-
     paths = {
         **CURRENT_STOCK_RESEARCH_RUNTIME_SOURCE_SHA256_V1,
         **CURRENT_STOCK_RESEARCH_RUNTIME_SOURCE_SHA256_V2,
@@ -4199,14 +4198,14 @@ def test_producer_identity_excludes_decision_projection(monkeypatch):
     assert not any("setup_screen" in path for path in paths)
 
     seen = []
-    original = producer.runtime_source_sha256
+    original = current_stock_research_v2.runtime_source_sha256
 
     def spy(module_name, root, relative):
         seen.append(relative)
         return original(module_name, root, relative)
 
-    monkeypatch.setattr(producer, "runtime_source_sha256", spy)
-    producer._runtime_identity()
+    monkeypatch.setattr(current_stock_research_v2, "runtime_source_sha256", spy)
+    current_stock_research_v2._runtime_identity()
 
     assert seen
     assert not any("setup_screen" in path for path in seen)
