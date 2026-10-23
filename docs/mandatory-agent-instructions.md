@@ -214,6 +214,25 @@ These active owner instructions exist beyond the six execution controls.
 - Keep session context scoped to the active sprint or bounded task. At a new sprint, use a fresh session or equivalent explicit context reset; preserve an evidence-bearing handoff before compaction, session changes, or switching harnesses. No slash command or proprietary session format is required.
 - Use available repository tools, direct GitHub integration, and coordination facilities that satisfy the controls above. Tool availability does not authorize unrelated work or changes to another active agent.
 
+### Plain-language default and `baby_explaination`
+
+Default to plain language for explanations: lead with the answer, use short
+sentences, and translate any necessary term immediately. Do not use jargon as
+shorthand for the owner.
+
+When the owner writes `baby_explaination` (any spelling), answer at a
+five-year-old level:
+
+- short sentences and everyday words;
+- one concrete analogy, not a list of mechanisms;
+- say what happened, why it matters, and what happens next;
+- no code, file paths, hashes, handles, or acronyms unless the owner asks;
+- never hide a material risk, uncertainty, or missing evidence to make it simpler.
+
+These are communication rules only. They do not change evidence, scope, review,
+authorization, or safety requirements, and the detailed technical record remains
+available on request.
+
 ### Durable discussion closeout
 
 When the owner confirms a material direction or asks to retain a proposal, the
