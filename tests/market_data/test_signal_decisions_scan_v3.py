@@ -1241,8 +1241,8 @@ def test_scan_uses_latest_available_session_when_today_unpublished(
         tmp_path, symbols=symbols, refresh=True, clock=lambda: _NOW, warnings=warnings
     )
 
-    assert seen == [True]
+    assert seen == [1]
     assert warnings == [
-        "LATEST_AVAILABLE: today's completed session is not published; "
-        "this page binds the latest available completed session."
+        "LATEST_AVAILABLE: bound 1 completed session(s) before the newest "
+        "official close; this page uses the latest available data."
     ]

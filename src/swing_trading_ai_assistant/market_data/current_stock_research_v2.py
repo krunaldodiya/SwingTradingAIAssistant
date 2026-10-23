@@ -532,12 +532,12 @@ def research_current_stock_v2(
     snapshot_transport: HttpTransport | None = None,
     price_client: BharatStockClient | None = None,
     terminal_missing_diagnostic: bool = False,
-    previous_session: bool = False,
+    sessions_back: int = 0,
 ) -> CurrentStockResearchResultV2:
     """Acquire independent price windows and compose a truthful V5 result.
 
-    ``previous_session`` binds the latest available completed session when the
-    newest officially closed session has not been published yet.
+    ``sessions_back`` binds an older completed session when the newest ones are
+    not published yet; the selection time and evidence-known time stay current.
     """
     if question not in _REQUIRED:
         raise legacy.CurrentStockResearchInputError("unsupported research question")
@@ -551,7 +551,7 @@ def research_current_stock_v2(
             calendar_transport=calendar_transport,
             snapshot_transport=snapshot_transport,
             price_client=price_client,
-            previous_session=previous_session,
+            sessions_back=sessions_back,
             terminal_missing_diagnostic=terminal_missing_diagnostic,
             selection_override=None,
             deadline_override=None,
@@ -589,7 +589,7 @@ def research_previous_completed_stock_v2(
             calendar_transport=calendar_transport,
             snapshot_transport=snapshot_transport,
             price_client=price_client,
-            previous_session=True,
+            sessions_back=1,
             terminal_missing_diagnostic=False,
             selection_override=initial.data_selection_time,
             deadline_override=initial.acquisition_deadline,
@@ -622,7 +622,7 @@ def confirm_latest_completed_stock_v2(
             calendar_transport=calendar_transport,
             snapshot_transport=snapshot_transport,
             price_client=price_client,
-            previous_session=False,
+            sessions_back=0,
             terminal_missing_diagnostic=True,
             selection_override=initial.data_selection_time,
             deadline_override=initial.acquisition_deadline,
@@ -641,7 +641,7 @@ def _research_current_stock_v2(  # noqa: C901 - explicit stage boundaries are in
     calendar_transport: HttpTransport | None,
     snapshot_transport: HttpTransport | None,
     price_client: BharatStockClient | None,
-    previous_session: bool,
+    sessions_back: int,
     terminal_missing_diagnostic: bool,
     selection_override: datetime | None,
     deadline_override: datetime | None,
@@ -707,11 +707,11 @@ def _research_current_stock_v2(  # noqa: C901 - explicit stage boundaries are in
                 for item in calendar.schedule.sessions
                 if item.close_at <= selection
             )
-            completed_sessions = (
-                official_completed_sessions[:-1]
-                if previous_session
-                else official_completed_sessions
-            )
+            if sessions_back < 0:
+                raise ValueError("invalid sessions back")
+            completed_sessions = official_completed_sessions[
+                : -sessions_back or None
+            ]
             # Calendar insufficiency is local to the wider requirement.  Do not
             # suppress a valid one- or two-session capture merely because the
             # schedule cannot yet support the 21-session Structure claim.

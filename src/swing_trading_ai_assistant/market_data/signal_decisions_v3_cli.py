@@ -87,6 +87,7 @@ class _ScanRequest:
     output: Literal["json", "table"]
     refresh: bool
     retain_decision_evidence: bool
+    sessions_back: int | None = None
 
 
 @dataclass(frozen=True)
@@ -139,6 +140,7 @@ def _parser() -> argparse.ArgumentParser:
     scan.add_argument("--output", choices=("json", "table"), default="json")
     scan.add_argument("--refresh", action="store_true")
     scan.add_argument("--retain-decision-evidence", action="store_true")
+    scan.add_argument("--sessions-back", type=int, default=None)
     read_evidence = commands.add_parser("read-decision-evidence")
     read_evidence.add_argument("--storage-root", type=Path, required=True)
     read_evidence.add_argument("--decision-evidence", required=True)
@@ -202,6 +204,9 @@ def _valid_request(  # noqa: C901 - command-specific closed request validation
         retain_decision_evidence = bool(
             getattr(args, "retain_decision_evidence", False)
         )
+        sessions_back = getattr(args, "sessions_back", None)
+        if sessions_back is not None and not 0 <= sessions_back <= 10:
+            raise ValueError("invalid sessions back")
         symbols = tuple(symbols_raw) if symbols_raw else None
         if (
             output_format not in {"json", "table"}
@@ -226,6 +231,7 @@ def _valid_request(  # noqa: C901 - command-specific closed request validation
             cast(Literal["json", "table"], output_format),
             refresh,
             retain_decision_evidence,
+            sessions_back,
         )
     if command == "track":
         log_scan_raw: object = getattr(args, "log_scan", None)
@@ -436,6 +442,7 @@ def _run_scan(request: _ScanRequest) -> int:
             refresh=request.refresh,
             evidence_rows=rows,
             warnings=warnings,
+            sessions_back=request.sessions_back,
         )
         for warning in warnings:
             sys.stderr.write(warning + "\n")
