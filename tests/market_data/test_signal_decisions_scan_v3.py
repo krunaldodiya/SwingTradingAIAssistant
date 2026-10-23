@@ -1215,6 +1215,7 @@ def test_scan_uses_latest_available_session_when_today_unpublished(
 ) -> None:
     symbols = ("RELIANCE",)
     seen: list[int] = []
+    probes: list[int] = []
 
     def fake_resolve(
         *_args: object, **_kwargs: object
@@ -1227,23 +1228,35 @@ def test_scan_uses_latest_available_session_when_today_unpublished(
         {"feature": "MARKET_STRUCTURE", "reason": "LATEST_SESSION_MISSING"},
     )()
     member = type("Member", (), {"features": (feature,)})()
-    packet = type(
+    missing_packet = type(
         "Packet",
         (),
         {"execution_state": "COMPLETED", "feature_slots": (), "members": (member,)},
     )()
-    probe = type("Probe", (), {"status": "NOT_READY", "packet": packet})()
+    missing = type("Probe", (), {"status": "NOT_READY", "packet": missing_packet})()
+    ready = type("Probe", (), {"status": "READY", "packet": None})()
+
+    def fake_probe(*_args: object, **kwargs: object) -> object:
+        n = cast(int, kwargs["sessions_back"])
+        probes.append(n)
+        return missing if n == 0 else ready
 
     monkeypatch.setattr(scan_module, "_resolve_target_symbols", fake_resolve)
-    monkeypatch.setattr(
-        scan_module, "research_current_stock_v2", lambda *_args, **_kwargs: probe
-    )
+    monkeypatch.setattr(scan_module, "research_current_stock_v2", fake_probe)
 
     def fake_scan(symbol: str, *_args: object, **kwargs: object) -> tuple[object, ...]:
-        seen.append(cast(int, kwargs["sessions_back"]))
+        back = cast(int, kwargs["sessions_back"])
+        seen.append(back)
         bound = kwargs.get("bound_symbols")
-        if type(bound) is list:
+        if back and type(bound) is list:
             bound.append(symbol)
+        seeded = kwargs.get("seeded_symbols")
+        if back == 2:
+            if type(seeded) is list:
+                seeded.append(symbol)
+            return scan_module._unavailable_result(  # pyright: ignore[reportPrivateUsage]
+                symbol, "LOW_PRICE_AND_CIRCUIT_DISTANCE"
+            )
         return scan_module._unavailable_result(  # pyright: ignore[reportPrivateUsage]
             symbol, "OBSERVATION_STRUCTURE_NOT_READY"
         )
@@ -1255,10 +1268,13 @@ def test_scan_uses_latest_available_session_when_today_unpublished(
         tmp_path, symbols=symbols, refresh=True, clock=lambda: _NOW, warnings=warnings
     )
 
-    assert seen == [1]
+    assert probes == [0, 1]
+    assert seen == [2, 1]
     assert warnings == [
-        "LATEST_AVAILABLE: 1 symbol(s) bound a completed session 1 before the "
-        "newest official close."
+        "BOOTSTRAP_PAIR: seeded the prior completed session for symbols "
+        "without pair state so this request evaluates the newest available pair.",
+        "LATEST_AVAILABLE: this page binds a completed session 1 before the "
+        "newest official close (1 symbol(s) newly bound).",
     ]
 
 
@@ -1292,7 +1308,11 @@ def test_scan_does_not_fall_back_for_unrelated_not_ready(
     )
 
     def fake_scan(symbol: str, *_args: object, **kwargs: object) -> tuple[object, ...]:
-        seen.append(cast(int, kwargs["sessions_back"]))
+        back = cast(int, kwargs["sessions_back"])
+        seen.append(back)
+        bound = kwargs.get("bound_symbols")
+        if back and type(bound) is list:
+            bound.append(symbol)
         return scan_module._unavailable_result(  # pyright: ignore[reportPrivateUsage]
             symbol, "OBSERVATION_STRUCTURE_NOT_READY"
         )
@@ -1391,3 +1411,40 @@ def test_cli_rejects_sessions_back_without_refresh(
     captured = capsys.readouterr()
     assert code == 2
     assert "request_invalid" in captured.err
+
+
+def test_scan_probe_skips_unreadable_pair_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    symbols = ("RELIANCE",)
+
+    def fake_resolve(
+        *_args: object, **_kwargs: object
+    ) -> tuple[tuple[str, ...], str, frozenset[str], dict[str, object] | None]:
+        return (symbols, "NIFTY_200", frozenset(symbols), {"source": "test"})
+
+    ready = type("Probe", (), {"status": "READY", "packet": None})()
+
+    def raising_state(*_args: object, **_kwargs: object) -> object:
+        raise scan_module.ScannerPairStateUnavailableV1("corrupt")
+
+    monkeypatch.setattr(scan_module, "_resolve_target_symbols", fake_resolve)
+    monkeypatch.setattr(
+        scan_module, "research_current_stock_v2", lambda *_args, **_kwargs: ready
+    )
+    monkeypatch.setattr(scan_module, "read_scanner_pair_state_v1", raising_state)
+
+    def fake_scan(symbol: str, *_args: object, **_kwargs: object) -> tuple[object, ...]:
+        return scan_module._unavailable_result(  # pyright: ignore[reportPrivateUsage]
+            symbol, "OBSERVATION_PAIR_STATE_UNAVAILABLE"
+        )
+
+    monkeypatch.setattr(scan_module, "_scan_stock", fake_scan)
+
+    result = scan_signal_decisions_v3(
+        tmp_path, symbols=symbols, refresh=True, clock=lambda: _NOW
+    )
+
+    assert result["unknown_count"] == 1
+    rows = cast(list[dict[str, object]], result["other_stocks"])
+    assert rows[0]["failed_rule"] == "OBSERVATION_PAIR_STATE_UNAVAILABLE"
