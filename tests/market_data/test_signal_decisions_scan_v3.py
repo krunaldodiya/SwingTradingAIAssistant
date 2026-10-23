@@ -1221,18 +1221,16 @@ def test_scan_uses_latest_available_session_when_today_unpublished(
     ) -> tuple[tuple[str, ...], str, frozenset[str], dict[str, object] | None]:
         return (symbols, "NIFTY_200", frozenset(symbols), {"source": "test"})
 
-    slot = type(
-        "Slot",
+    feature = type(
+        "Feature",
         (),
-        {
-            "feature": "MARKET_STRUCTURE",
-            "requested_sessions": (date(2026, 10, 22),),
-            "failure_reason": "LATEST_SESSION_MISSING",
-            "failure_code": "INSUFFICIENT_EVIDENCE",
-        },
+        {"feature": "MARKET_STRUCTURE", "reason": "LATEST_SESSION_MISSING"},
     )()
+    member = type("Member", (), {"features": (feature,)})()
     packet = type(
-        "Packet", (), {"execution_state": "COMPLETED", "feature_slots": (slot,)}
+        "Packet",
+        (),
+        {"execution_state": "COMPLETED", "feature_slots": (), "members": (member,)},
     )()
     probe = type("Probe", (), {"status": "NOT_READY", "packet": packet})()
 
@@ -1275,18 +1273,16 @@ def test_scan_does_not_fall_back_for_unrelated_not_ready(
     ) -> tuple[tuple[str, ...], str, frozenset[str], dict[str, object] | None]:
         return (symbols, "NIFTY_200", frozenset(symbols), {"source": "test"})
 
-    slot = type(
-        "Slot",
+    feature = type(
+        "Feature",
         (),
-        {
-            "feature": "MARKET_STRUCTURE",
-            "requested_sessions": (),
-            "failure_reason": "HISTORY_INCOMPLETE",
-            "failure_code": "INSUFFICIENT_EVIDENCE",
-        },
+        {"feature": "MARKET_STRUCTURE", "reason": "HISTORY_INCOMPLETE"},
     )()
+    member = type("Member", (), {"features": (feature,)})()
     packet = type(
-        "Packet", (), {"execution_state": "COMPLETED", "feature_slots": (slot,)}
+        "Packet",
+        (),
+        {"execution_state": "COMPLETED", "feature_slots": (), "members": (member,)},
     )()
     probe = type("Probe", (), {"status": "NOT_READY", "packet": packet})()
 
@@ -1310,3 +1306,67 @@ def test_scan_does_not_fall_back_for_unrelated_not_ready(
 
     assert seen == [0]
     assert warnings == []
+
+
+def test_scan_rejects_invalid_sessions_back(tmp_path: Path) -> None:
+    with pytest.raises(ValueError):
+        scan_signal_decisions_v3(
+            tmp_path, symbols=("RELIANCE",), refresh=True, sessions_back=-1
+        )
+    with pytest.raises(ValueError):
+        scan_signal_decisions_v3(
+            tmp_path, symbols=("RELIANCE",), refresh=False, sessions_back=1
+        )
+
+
+def test_latest_session_missing_reads_member_reason() -> None:
+    feature = type(
+        "Feature",
+        (),
+        {"feature": "MARKET_STRUCTURE", "reason": "LATEST_SESSION_MISSING"},
+    )()
+    packet = type(
+        "Packet",
+        (),
+        {
+            "execution_state": "COMPLETED",
+            "members": (type("Member", (), {"features": (feature,)})(),),
+        },
+    )()
+    assert scan_module._latest_session_missing(  # pyright: ignore[reportPrivateUsage]
+        type("Result", (), {"packet": packet})()
+    )
+
+
+def test_latest_session_missing_false_on_shared_stop() -> None:
+    feature = type(
+        "Feature",
+        (),
+        {"feature": "MARKET_STRUCTURE", "reason": "LATEST_SESSION_MISSING"},
+    )()
+    packet = type(
+        "Packet",
+        (),
+        {
+            "execution_state": "STOPPED",
+            "members": (type("Member", (), {"features": (feature,)})(),),
+        },
+    )()
+    assert not scan_module._latest_session_missing(  # pyright: ignore[reportPrivateUsage]
+        type("Result", (), {"packet": packet})()
+    )
+
+
+def test_structure_session_reads_requested_sessions() -> None:
+    slot = type(
+        "Slot",
+        (),
+        {
+            "feature": "MARKET_STRUCTURE",
+            "requested_sessions": (date(2026, 10, 21), date(2026, 10, 22)),
+        },
+    )()
+    packet = type("Packet", (), {"feature_slots": (slot,)})()
+    assert scan_module._structure_session(packet) == date(  # pyright: ignore[reportPrivateUsage]
+        2026, 10, 22
+    )

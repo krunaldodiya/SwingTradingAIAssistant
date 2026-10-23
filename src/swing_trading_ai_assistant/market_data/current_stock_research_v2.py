@@ -709,9 +709,7 @@ def _research_current_stock_v2(  # noqa: C901 - explicit stage boundaries are in
             )
             if sessions_back < 0:
                 raise ValueError("invalid sessions back")
-            completed_sessions = official_completed_sessions[
-                : -sessions_back or None
-            ]
+            completed_sessions = official_completed_sessions[: -sessions_back or None]
             # Calendar insufficiency is local to the wider requirement.  Do not
             # suppress a valid one- or two-session capture merely because the
             # schedule cannot yet support the 21-session Structure claim.

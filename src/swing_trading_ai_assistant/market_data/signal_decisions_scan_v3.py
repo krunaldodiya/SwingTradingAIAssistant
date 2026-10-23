@@ -675,13 +675,17 @@ def _retained_unselected_stocks(
 
 
 def _structure_session(packet: object) -> date | None:
-    slots = getattr(packet, "feature_slots", None)
-    if type(slots) is not tuple:
+    slots_raw = getattr(packet, "feature_slots", None)
+    if type(slots_raw) is not tuple:
         return None
-    for slot in slots:
-        if getattr(slot, "feature", None) == "MARKET_STRUCTURE":
-            sessions = getattr(slot, "requested_sessions", ())
-            return sessions[-1] if sessions else None
+    for slot in cast(tuple[object, ...], slots_raw):
+        if getattr(slot, "feature", None) != "MARKET_STRUCTURE":
+            continue
+        sessions_raw = getattr(slot, "requested_sessions", None)
+        if type(sessions_raw) is not tuple or not sessions_raw:
+            return None
+        last = cast(tuple[object, ...], sessions_raw)[-1]
+        return last if type(last) is date else None
     return None
 
 
@@ -689,12 +693,20 @@ def _latest_session_missing(result: object) -> bool:
     packet = getattr(result, "packet", None)
     if packet is None or getattr(packet, "execution_state", None) != "COMPLETED":
         return False
-    slots = getattr(packet, "feature_slots", ())
-    return any(
-        getattr(slot, "feature", None) == "MARKET_STRUCTURE"
-        and getattr(slot, "failure_reason", None) == "LATEST_SESSION_MISSING"
-        for slot in slots
-    )
+    members_raw = getattr(packet, "members", ())
+    if type(members_raw) is not tuple:
+        return False
+    for member in cast(tuple[object, ...], members_raw):
+        features_raw = getattr(member, "features", ())
+        if type(features_raw) is not tuple:
+            continue
+        for feature in cast(tuple[object, ...], features_raw):
+            if (
+                getattr(feature, "feature", None) == "MARKET_STRUCTURE"
+                and getattr(feature, "reason", None) == "LATEST_SESSION_MISSING"
+            ):
+                return True
+    return False
 
 
 def _scan_stock(  # noqa: C901 - multi-family screening and anti-manipulation gate
@@ -765,6 +777,8 @@ def _scan_stock(  # noqa: C901 - multi-family screening and anti-manipulation ga
             )
             if seeded_symbols is not None:
                 seeded_symbols.append(symbol)
+            if sessions_back and bound_symbols is not None:
+                bound_symbols.append(symbol)
             failure_reason = "OBSERVATION_PAIR_SEEDED_BOOTSTRAP"
         elif handle == state.current_observation_identity_sha256:
             policy_result = evaluate_signal_decision_from_records_v3(
@@ -787,8 +801,6 @@ def _scan_stock(  # noqa: C901 - multi-family screening and anti-manipulation ga
                 return _unavailable_result(
                     symbol, "OBSERVATION_PAIR_AWAITING_NEXT_SESSION"
                 )
-            if sessions_back and bound_symbols is not None:
-                bound_symbols.append(symbol)
             policy_result = evaluate_signal_decision_from_records_v3(
                 storage_root,
                 state.current_observation_identity_sha256,
@@ -802,6 +814,8 @@ def _scan_stock(  # noqa: C901 - multi-family screening and anti-manipulation ga
                 ),
                 new_current_observation_identity_sha256=handle,
             )
+            if sessions_back and bound_symbols is not None:
+                bound_symbols.append(symbol)
     except ScannerPairStateUnavailableV1:
         return _unavailable_result(symbol, "OBSERVATION_PAIR_STATE_UNAVAILABLE")
     except Exception:
@@ -1034,6 +1048,8 @@ def scan_signal_decisions_v3(  # noqa: C901 - lifecycle orchestration
         type(sessions_back) is not int or not 0 <= sessions_back <= 10
     ):
         raise ValueError("invalid sessions back")
+    if sessions_back and not refresh:
+        raise ValueError("sessions back requires refresh")
     if not storage_root.is_absolute():
         raise ValueError("invalid storage root")
 
