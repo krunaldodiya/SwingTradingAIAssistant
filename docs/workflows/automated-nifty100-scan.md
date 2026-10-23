@@ -307,3 +307,9 @@ content hash. The first lookup parses and validates the snapshot; later lookups
 removes the repeated multi-second parse that previously dominated a 200-symbol
 run.
 
+BharatStock history is also assembled from a persisted per-session cache under
+`bharatstock-session-cache-v1`. Each record carries the session row, provider,
+price/volume basis, response digests, and retrieval time. A window uses cached
+sessions when valid and fetches only genuinely missing sessions; a corrupt or
+mismatched record falls back to the provider instead of entering a decision.
+

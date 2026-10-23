@@ -338,3 +338,97 @@ def test_one_client_does_not_rotate_accounts_when_environment_changes(
     )
     client.history(_MEMBER, _START, _END)
     assert keys == ["first-synthetic-key", "first-synthetic-key"]
+
+
+def test_session_cache_reuses_complete_and_fetches_only_missing(tmp_path) -> None:
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    first = _Transport(_identity(), _page([_row("2026-08-28"), _row("2026-08-27")]))
+    client = BharatStockClient(
+        api_key="test-key", transport=first, session_cache_root=cache
+    )
+    initial = client.history(_MEMBER, _START, _END, expected_sessions=(_START, _END))
+    assert len(first.urls) == 2
+    assert tuple(row.session for row in initial.rows) == (_START, _END)
+
+    empty = _Transport()
+    cached_client = BharatStockClient(
+        api_key="test-key", transport=empty, session_cache_root=cache
+    )
+    reused = cached_client.history(
+        _MEMBER, _START, _END, expected_sessions=(_START, _END)
+    )
+    assert empty.urls == []
+    assert tuple(row.session for row in reused.rows) == (_START, _END)
+    assert reused.request_count == len(reused.response_sha256s) <= 41
+
+    third = date(2026, 8, 31)
+    partial_transport = _Transport(_identity(), _page([_row("2026-08-31")]))
+    partial_client = BharatStockClient(
+        api_key="test-key", transport=partial_transport, session_cache_root=cache
+    )
+    partial = partial_client.history(
+        _MEMBER, _START, third, expected_sessions=(_END, third)
+    )
+    assert tuple(row.session for row in partial.rows) == (_END, third)
+    assert len(partial_transport.urls) == 2
+    assert "from=2026-08-31" in partial_transport.urls[1]
+
+
+def test_session_cache_refetches_corrupt_or_mismatched_records(tmp_path) -> None:
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    client = BharatStockClient(
+        api_key="test-key",
+        transport=_Transport(
+            _identity(), _page([_row("2026-08-28"), _row("2026-08-27")])
+        ),
+        session_cache_root=cache,
+    )
+    client.history(_MEMBER, _START, _END)
+    cached = next(cache.rglob("session=2026-08-28.json"))
+    payload = json.loads(cached.read_text())
+    payload["close"] = "999"
+    cached.write_text(json.dumps(payload))
+
+    repair = _Transport(_identity(), _page([_row("2026-08-28")]))
+    repaired = BharatStockClient(
+        api_key="test-key", transport=repair, session_cache_root=cache
+    ).history(_MEMBER, _START, _END, expected_sessions=(_START, _END))
+    assert len(repair.urls) == 2
+    assert repaired.rows[-1].close == Decimal("102")
+
+    cached = next(cache.rglob("session=2026-08-28.json"))
+    payload = json.loads(cached.read_text())
+    payload["symbol"] = "OTHER"
+    cached.write_text(json.dumps(payload))
+    mismatch = _Transport(_identity(), _page([_row("2026-08-28")]))
+    BharatStockClient(
+        api_key="test-key", transport=mismatch, session_cache_root=cache
+    ).history(_MEMBER, _START, _END, expected_sessions=(_START, _END))
+    assert len(mismatch.urls) == 2
+
+
+def test_session_cache_returns_available_rows_when_terminal_is_missing(
+    tmp_path,
+) -> None:
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    client = BharatStockClient(
+        api_key="test-key",
+        transport=_Transport(_identity(), _page([_row("2026-08-27")])),
+        session_cache_root=cache,
+    )
+    client.history(_MEMBER, _START, _START)
+
+    terminal = date(2026, 9, 1)
+    empty = _Transport(_identity(), _page([]))
+    partial = BharatStockClient(
+        api_key="test-key", transport=empty, session_cache_root=cache
+    ).history(
+        _MEMBER,
+        _START,
+        terminal,
+        expected_sessions=(_START, terminal),
+    )
+    assert tuple(row.session for row in partial.rows) == (_START,)

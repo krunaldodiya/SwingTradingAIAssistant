@@ -8,9 +8,11 @@ import os
 import re
 import sys
 from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
+from pathlib import Path
 from typing import Final, Literal, NoReturn, TypeAlias, cast
 from urllib.parse import urlencode
 from urllib.request import HTTPRedirectHandler, Request, build_opener
@@ -343,12 +345,16 @@ class BharatStockClient:
         api_key: str | None = None,
         transport: HttpTransport | None = None,
         max_requests: int = 2000,
+        session_cache_root: Path | None = None,
     ) -> None:
         if type(max_requests) is not int or not 1 <= max_requests <= 2000:
             raise ValueError("invalid BharatStock request budget")
+        if session_cache_root is not None and not session_cache_root.is_absolute():
+            raise ValueError("invalid session cache root")
         self._api_key = api_key
         self._transport = _transport() if transport is None else transport
         self._max_requests = max_requests
+        self._session_cache_root = session_cache_root
         self._requests_used = 0
         self._shared_failure: str | None = None
 
@@ -426,8 +432,32 @@ class BharatStockClient:
         end: date,
         *,
         effect_guard: Callable[[], None] | None = None,
+        expected_sessions: tuple[date, ...] | None = None,
     ) -> BharatStockHistory:
         _validate_history_request(instrument, start, end)
+        if self._session_cache_root is not None and expected_sessions is not None:
+            return self._cached_history(
+                instrument,
+                start,
+                end,
+                expected_sessions,
+                effect_guard=effect_guard,
+            )
+        history = self._network_history(
+            instrument, start, end, effect_guard=effect_guard
+        )
+        if self._session_cache_root is not None:
+            self._write_cached_sessions(instrument, history)
+        return history
+
+    def _network_history(
+        self,
+        instrument: BharatStockInstrument,
+        start: date,
+        end: date,
+        *,
+        effect_guard: Callable[[], None] | None = None,
+    ) -> BharatStockHistory:
         base = _BASE + instrument.isin
         identity, identity_digest = self._get(
             base + "?" + urlencode({"exchange": instrument.exchange}),
@@ -479,6 +509,206 @@ class BharatStockClient:
             instrument,
             tuple(reversed(rows)),
             datetime.now(UTC),
+            tuple(digests),
+            len(digests),
+        )
+
+    def _session_cache_path(
+        self, instrument: BharatStockInstrument, session: date
+    ) -> Path:
+        root = self._session_cache_root
+        if root is None:
+            raise ValueError("missing session cache root")
+        return (
+            root
+            / "bharatstock-session-cache-v1"
+            / f"isin={instrument.isin}"
+            / f"exchange={instrument.exchange}"
+            / f"session={session.isoformat()}.json"
+        )
+
+    def _read_cached_session(
+        self, instrument: BharatStockInstrument, session: date
+    ) -> tuple[BharatStockDailyPrice, tuple[str, ...], int, datetime] | None:
+        path = self._session_cache_path(instrument, session)
+        try:
+            payload = json.loads(path.read_bytes())
+        except (OSError, ValueError):
+            return None
+        if type(payload) is not dict:
+            return None
+        value = cast(dict[str, object], payload)
+        if (
+            value.get("schema") != "bharatstock-session-cache@v1"
+            or value.get("provider") != PROVIDER_SOURCE
+            or value.get("price_basis") != PRICE_BASIS
+            or value.get("volume_basis") != VOLUME_BASIS
+            or value.get("session") != session.isoformat()
+            or value.get("isin") != instrument.isin
+            or value.get("exchange") != instrument.exchange
+            or value.get("symbol") != instrument.symbol
+        ):
+            return None
+        try:
+            row = BharatStockDailyPrice(
+                session,
+                Decimal(str(value["open"])),
+                Decimal(str(value["high"])),
+                Decimal(str(value["low"])),
+                Decimal(str(value["close"])),
+                int(cast(int, value["volume"])),
+                Decimal(str(value["adjusted_close"]))
+                if value.get("adjusted_close") is not None
+                else None,
+                Decimal(str(value["adjustment_factor"]))
+                if value.get("adjustment_factor") is not None
+                else None,
+            )
+            raw_digests = cast(list[object], value["response_sha256s"])
+            digests = tuple(cast(list[str], raw_digests))
+            request_count = int(cast(int, value["request_count"]))
+            retrieved_at = datetime.fromisoformat(cast(str, value["retrieved_at"]))
+        except (KeyError, TypeError, ValueError, ArithmeticError):
+            return None
+        if (
+            any(
+                type(item) is not str or _DIGEST.fullmatch(item) is None
+                for item in digests
+            )
+            or request_count != len(digests)
+            or not 2 <= request_count <= _MAX_PAGES + 1
+            or retrieved_at.tzinfo is None
+            or retrieved_at.utcoffset() != UTC.utcoffset(None)
+        ):
+            return None
+        return row, digests, request_count, retrieved_at
+
+    def _write_cached_sessions(
+        self,
+        instrument: BharatStockInstrument,
+        history: BharatStockHistory,
+    ) -> None:
+        if self._session_cache_root is None:
+            return
+        for row in history.rows:
+            path = self._session_cache_path(instrument, row.session)
+            payload = {
+                "schema": "bharatstock-session-cache@v1",
+                "provider": PROVIDER_SOURCE,
+                "price_basis": PRICE_BASIS,
+                "volume_basis": VOLUME_BASIS,
+                "isin": instrument.isin,
+                "exchange": instrument.exchange,
+                "symbol": instrument.symbol,
+                "session": row.session.isoformat(),
+                "open": str(row.open),
+                "high": str(row.high),
+                "low": str(row.low),
+                "close": str(row.close),
+                "volume": row.volume,
+                "adjusted_close": (
+                    None if row.adjusted_close is None else str(row.adjusted_close)
+                ),
+                "adjustment_factor": (
+                    None
+                    if row.adjustment_factor is None
+                    else str(row.adjustment_factor)
+                ),
+                "response_sha256s": list(history.response_sha256s),
+                "request_count": history.request_count,
+                "retrieved_at": history.retrieved_at.isoformat(),
+            }
+            temporary = path.with_name(path.name + ".tmp")
+            try:
+                path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                descriptor = os.open(
+                    temporary,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW,
+                    0o600,
+                )
+                try:
+                    data = json.dumps(
+                        payload,
+                        ensure_ascii=True,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode()
+                    os.write(descriptor, data)
+                    os.fsync(descriptor)
+                finally:
+                    os.close(descriptor)
+                os.replace(temporary, path)
+            except OSError:
+                with suppress(OSError):
+                    os.unlink(temporary)
+                continue
+
+    def _cached_history(  # noqa: C901 - explicit cache/compose boundary
+        self,
+        instrument: BharatStockInstrument,
+        start: date,
+        end: date,
+        expected_sessions: tuple[date, ...],
+        *,
+        effect_guard: Callable[[], None] | None = None,
+    ) -> BharatStockHistory:
+        sessions = tuple(expected_sessions)
+        if (
+            not sessions
+            or sessions != tuple(sorted(set(sessions)))
+            or sessions[0] < start
+            or sessions[-1] > end
+        ):
+            raise ValueError("invalid expected sessions")
+        records: list[tuple[BharatStockDailyPrice, tuple[str, ...], int, datetime]] = []
+        missing: list[date] = []
+        for session in sessions:
+            record = self._read_cached_session(instrument, session)
+            if record is None:
+                missing.append(session)
+            else:
+                records.append(record)
+        if missing:
+            try:
+                fetched = self._network_history(
+                    instrument,
+                    missing[0],
+                    missing[-1],
+                    effect_guard=effect_guard,
+                )
+            except BharatStockError as error:
+                if not (error.member_local and error.category == "EMPTY_HISTORY"):
+                    raise
+                fetched = None
+            if fetched is not None:
+                self._write_cached_sessions(instrument, fetched)
+                fetched_rows = {row.session: row for row in fetched.rows}
+                records.extend(
+                    (
+                        fetched_rows[session],
+                        fetched.response_sha256s,
+                        fetched.request_count,
+                        fetched.retrieved_at,
+                    )
+                    for session in missing
+                    if session in fetched_rows
+                )
+        rows = tuple(
+            sorted((record[0] for record in records), key=lambda item: item.session)
+        )
+        if not rows:
+            raise BharatStockError("EMPTY_HISTORY", member_local=True)
+        seen: set[str] = set()
+        digests: list[str] = []
+        for record in records:
+            for digest in record[1]:
+                if digest not in seen:
+                    seen.add(digest)
+                    digests.append(digest)
+        return BharatStockHistory(
+            instrument,
+            rows,
+            max(record[3] for record in records),
             tuple(digests),
             len(digests),
         )
