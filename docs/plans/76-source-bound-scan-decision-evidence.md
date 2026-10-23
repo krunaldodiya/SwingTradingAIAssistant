@@ -170,4 +170,5 @@ generation. This identity change itself starts one deliberate fresh generation.
 - The forward diary starts a new segment at the first page produced after this
   change. No completed 10-session window exists across the boundary.
 - The first scan of the new generation must use `--refresh`; a no-refresh first
-  scan reports `OBSERVATION_PAIR_BOOTSTRAP_REQUIRES_REFRESH`.
+  scan with an unreadable/stale retained handle reports
+  `OBSERVATION_PAIR_BOOTSTRAP_REQUIRES_REFRESH`.

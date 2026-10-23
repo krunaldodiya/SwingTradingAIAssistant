@@ -150,8 +150,10 @@ scan under the private `scanner-pair-state-v1/` namespace:
    an explicit non-candidate (`OBSERVATION_PAIR_SEEDED_BOOTSTRAP`); no predecessor is
    fabricated. A runtime-identity change starts a new generation: its first
    `--refresh` scan is a bootstrap of this kind for every symbol and is not a
-   no-candidate market result; its rows use `OBSERVATION_PAIR_SEEDED_BOOTSTRAP`,
-   which a normal zero-candidate day never uses. A no-refresh first scan reports
+   no-candidate market result; eligible seed rows use
+   `OBSERVATION_PAIR_SEEDED_BOOTSTRAP`, and the CLI writes a `BOOTSTRAP:` warning
+   to stderr whenever any symbol seeded, independent of safety precedence. A
+   no-refresh first scan with an unreadable/stale retained handle reports
    `OBSERVATION_PAIR_BOOTSTRAP_REQUIRES_REFRESH`.
 2. A later distinct admitted observation forms the exact previous/current pair,
    is evaluated by the canonical policy, and only then advances the state.

@@ -428,13 +428,17 @@ def _run_scan(request: _ScanRequest) -> int:
         rows: list[dict[str, object]] | None = (
             [] if request.retain_decision_evidence else None
         )
+        warnings: list[str] = []
         scan_result = scan_signal_decisions_v3(
             request.storage_root,
             symbols=request.symbols,
             universe=request.universe,
             refresh=request.refresh,
             evidence_rows=rows,
+            warnings=warnings,
         )
+        for warning in warnings:
+            sys.stderr.write(warning + "\n")
         if request.retain_decision_evidence:
             if rows is None:
                 raise ValueError("missing scanner evidence rows")

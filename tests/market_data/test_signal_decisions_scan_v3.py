@@ -688,10 +688,17 @@ def test_scan_stock_anti_manipulation_rejection_agrees_with_brief_and_ledger(
         scan_module, "research_current_stock_v2", lambda *_args, **_kwargs: observation
     )
 
-    brief, is_candidate, safety_status, _price, failed_rule, _trend, handle = (
-        scan_module._scan_stock(  # pyright: ignore[reportPrivateUsage]
-            _SYMBOL, tmp_path, False, "Testing", Decimal("0")
-        )
+    (
+        brief,
+        is_candidate,
+        safety_status,
+        _price,
+        failed_rule,
+        _trend,
+        handle,
+        _seeded,
+    ) = scan_module._scan_stock(  # pyright: ignore[reportPrivateUsage]
+        _SYMBOL, tmp_path, False, "Testing", Decimal("0")
     )
 
     assert is_candidate is False
@@ -892,10 +899,17 @@ def test_scan_stock_safety_override_drops_stale_policy_candidacy(
         scan_module, "evaluate_signal_decision_from_records_v3", spying_policy
     )
 
-    brief, is_candidate, safety_status, _price, failed_rule, _trend, handle = (
-        scan_module._scan_stock(  # pyright: ignore[reportPrivateUsage]
-            _SYMBOL, tmp_path, True, "Testing", Decimal("0")
-        )
+    (
+        brief,
+        is_candidate,
+        safety_status,
+        _price,
+        failed_rule,
+        _trend,
+        handle,
+        _seeded,
+    ) = scan_module._scan_stock(  # pyright: ignore[reportPrivateUsage]
+        _SYMBOL, tmp_path, True, "Testing", Decimal("0")
     )
 
     assert recorded
@@ -960,7 +974,7 @@ def test_scan_retains_capacity_overflow_and_every_universe_symbol(
 
     def fake_scan(
         symbol: str, *_args: object, **_kwargs: object
-    ) -> tuple[dict[str, object], bool, str, str, None, str, None]:
+    ) -> tuple[dict[str, object], bool, str, str, None, str, None, bool]:
         brief: dict[str, object] = {
             "schema": BRIEF_SCHEMA,
             "symbol": symbol,
@@ -972,7 +986,7 @@ def test_scan_retains_capacity_overflow_and_every_universe_symbol(
             "safety_eligibility": {"status": "ELIGIBLE", "explanation_ledger": []},
             "ai_guidance": {"allowed_claims": [], "forbidden_claims": []},
         }
-        return brief, True, "ELIGIBLE", "100.00", None, "UPTREND", None
+        return brief, True, "ELIGIBLE", "100.00", None, "UPTREND", None, False
 
     monkeypatch.setattr(scan_module, "_resolve_target_symbols", fake_resolve)
     monkeypatch.setattr(scan_module, "_scan_stock", fake_scan)
@@ -1120,3 +1134,35 @@ def test_no_refresh_bootstrap_with_stale_handle_requires_refresh(
     rows = cast(list[dict[str, object]], result["other_stocks"])
     assert rows[0]["failed_rule"] == "OBSERVATION_PAIR_BOOTSTRAP_REQUIRES_REFRESH"
     assert read_scanner_pair_state_v1(tmp_path, _SYMBOL) is None
+
+
+def test_scan_bootstrap_warning_survives_safety_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    observation = cast(CurrentStockResearchResultV2, _structure_observation(tmp_path))
+    source = observation.packet.source("MARKET_STRUCTURE")
+    assert source is not None
+    _install_providers(
+        monkeypatch,
+        _Providers(
+            _quote(source.admitted_sessions[-1]),
+            _history(observation),
+            _actions(observation),
+        ),
+    )
+    monkeypatch.setattr(
+        scan_module, "research_current_stock_v2", lambda *_args, **_kwargs: observation
+    )
+
+    warnings: list[str] = []
+    result = scan_signal_decisions_v3(
+        tmp_path, symbols=(_SYMBOL,), clock=lambda: _NOW, warnings=warnings
+    )
+
+    rows = cast(list[dict[str, object]], result["other_stocks"])
+    assert rows[0]["safety_status"] == "INELIGIBLE"
+    assert str(rows[0]["failed_rule"]).startswith("ILLIQUID_SMALLCAP_EXCLUDED")
+    assert warnings == [
+        "BOOTSTRAP: 1 symbol(s) seeded a new pair-state generation; "
+        "this page is not a no-candidate market result."
+    ]
