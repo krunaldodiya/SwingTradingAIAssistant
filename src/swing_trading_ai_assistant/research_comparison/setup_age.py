@@ -88,7 +88,9 @@ def observe_setup_age_v1(
     lookback_sessions: int = 0,
 ) -> dict[str, object]:
     """Count only admitted completed sessions of an unchanged represented event."""
-    continuity = observe_setup_event_continuity_v1(previous, current, lookback_sessions=lookback_sessions)
+    continuity = observe_setup_event_continuity_v1(
+        previous, current, lookback_sessions=lookback_sessions
+    )
     runtime = _runtime(continuity["runtime_code_identity_sha256"])
     before = cast(dict[str, object], continuity["previous"])
     after = cast(dict[str, object], continuity["current"])

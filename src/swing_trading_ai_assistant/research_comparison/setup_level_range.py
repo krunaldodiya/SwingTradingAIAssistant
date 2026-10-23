@@ -56,7 +56,9 @@ def observe_setup_level_range_v1(
     lookback_sessions: int = 0,
 ) -> dict[str, object]:
     """Range inclusion is descriptive; it proves neither a traded tick nor a retest."""
-    level = observe_setup_level_v1(previous, current, lookback_sessions=lookback_sessions)
+    level = observe_setup_level_v1(
+        previous, current, lookback_sessions=lookback_sessions
+    )
     runtime = _runtime(level["runtime_code_identity_sha256"])
     report = dict(level)
     report.pop("relation")

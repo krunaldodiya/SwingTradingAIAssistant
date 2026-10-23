@@ -54,12 +54,16 @@ def assemble_setup_evidence_v3(
     lookback_sessions: int = 0,
 ) -> dict[str, object]:
     """Retain old component bytes and join the admitted range on the exact pair."""
-    legacy = assemble_setup_evidence_v2(previous, current, lookback_sessions=lookback_sessions)
+    legacy = assemble_setup_evidence_v2(
+        previous, current, lookback_sessions=lookback_sessions
+    )
     legacy_unsigned = dict(legacy)
     legacy_identity = legacy_unsigned.pop("result_identity_sha256")
     if legacy_identity != _digest(legacy_unsigned):
         raise ValueError("evidence v3 legacy identity invalid")
-    level_range = observe_setup_level_range_v1(previous, current, lookback_sessions=lookback_sessions)
+    level_range = observe_setup_level_range_v1(
+        previous, current, lookback_sessions=lookback_sessions
+    )
     continuity = cast(dict[str, object], legacy["continuity"])
     level = cast(dict[str, object], legacy["level"])
     for field in (

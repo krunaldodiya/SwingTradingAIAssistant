@@ -97,9 +97,13 @@ def _evidence_with(
     inclusion_status: str | None = None,
     inclusion_observed: bool | None = None,
 ) -> dict[str, object]:
-    value = copy.deepcopy(decision_module.assemble_setup_evidence_v4(
-        previous, current, lookback_sessions=decision_module.CANDIDATE_LOOKBACK_SESSIONS
-    ))
+    value = copy.deepcopy(
+        decision_module.assemble_setup_evidence_v4(
+            previous,
+            current,
+            lookback_sessions=decision_module.CANDIDATE_LOOKBACK_SESSIONS,
+        )
+    )
     if age is not None:
         value["age"]["status"] = "OBSERVED"
         value["age"]["completed_sessions_elapsed"] = age
@@ -209,7 +213,9 @@ def test_v3_optional_inclusion_facts_never_change_the_decision(
         inclusion_observed=True,
     )
     monkeypatch.setattr(
-        decision_module, "assemble_setup_evidence_v4", lambda *_args, **_kwargs: evidence
+        decision_module,
+        "assemble_setup_evidence_v4",
+        lambda *_args, **_kwargs: evidence,
     )
     changed = _evaluate(
         previous,
@@ -357,7 +363,9 @@ def test_v3_decision_enforces_exact_candidate_age_window(
     previous, previous_handle, current, current_handle = _retained_pair(tmp_path)
     evidence = _evidence_with(previous, current, age=age)
     monkeypatch.setattr(
-        decision_module, "assemble_setup_evidence_v4", lambda *_args, **_kwargs: evidence
+        decision_module,
+        "assemble_setup_evidence_v4",
+        lambda *_args, **_kwargs: evidence,
     )
 
     result = _evaluate(
@@ -385,7 +393,9 @@ def test_v3_decision_rejects_observed_structural_invalidation(
     previous, previous_handle, current, current_handle = _retained_pair(tmp_path)
     evidence = _evidence_with(previous, current, invalidation_status="INVALIDATED")
     monkeypatch.setattr(
-        decision_module, "assemble_setup_evidence_v4", lambda *_args, **_kwargs: evidence
+        decision_module,
+        "assemble_setup_evidence_v4",
+        lambda *_args, **_kwargs: evidence,
     )
 
     result = _evaluate(
@@ -483,7 +493,10 @@ def test_window_selection_sees_event_one_session_before_latest(tmp_path: Path) -
 
     exact, _, _ = setup_screen._project(current, "RELIANCE", producer)
     window, _, _ = setup_screen._project(
-        current, "RELIANCE", producer, lookback_sessions=decision_module.CANDIDATE_LOOKBACK_SESSIONS
+        current,
+        "RELIANCE",
+        producer,
+        lookback_sessions=decision_module.CANDIDATE_LOOKBACK_SESSIONS,
     )
 
     assert exact["status"] == "NO_MATCH"
@@ -514,7 +527,9 @@ def test_v3_decision_rejects_extension_above_one_risk_unit(tmp_path: Path) -> No
     assert extension["derived_measurements"]["structural_risk_inr"] == "40"
 
 
-def test_v3_decision_accepts_extension_at_one_risk_unit_boundary(tmp_path: Path) -> None:
+def test_v3_decision_accepts_extension_at_one_risk_unit_boundary(
+    tmp_path: Path,
+) -> None:
     previous, previous_handle, current, current_handle = _retained_pair(tmp_path)
 
     result = _evaluate(

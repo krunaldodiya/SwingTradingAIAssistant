@@ -954,7 +954,9 @@ def test_resealed_component_join_terminal_even_replay(
         bad["result_identity_sha256"] = hashlib.sha256(
             canonical_comparison_bytes(unsigned)
         ).hexdigest()
-    monkeypatch.setattr(module, "observe_setup_level_range_v1", lambda *args, **kwargs: bad)
+    monkeypatch.setattr(
+        module, "observe_setup_level_range_v1", lambda *args, **kwargs: bad
+    )
     with pytest.raises(ValueError):
         _bundle(*pair)
 
@@ -964,7 +966,9 @@ def test_mixed_legacy_component_pair_terminal(pair, monkeypatch, component):
     module = importlib.import_module(PREFIX + "setup_evidence_v3")
     bad = copy.deepcopy(assemble_setup_evidence_v2(*pair))
     bad[component]["current"] = bad[component]["previous"]
-    monkeypatch.setattr(module, "assemble_setup_evidence_v2", lambda *args, **kwargs: bad)
+    monkeypatch.setattr(
+        module, "assemble_setup_evidence_v2", lambda *args, **kwargs: bad
+    )
     with pytest.raises(ValueError):
         _bundle(*pair)
 
@@ -1018,6 +1022,8 @@ def test_legacy_bundle_outer_binding_cannot_be_substituted(pair, monkeypatch, fi
         bad["result_identity_sha256"] = hashlib.sha256(
             canonical_comparison_bytes(unsigned)
         ).hexdigest()
-    monkeypatch.setattr(module, "assemble_setup_evidence_v2", lambda *args, **kwargs: bad)
+    monkeypatch.setattr(
+        module, "assemble_setup_evidence_v2", lambda *args, **kwargs: bad
+    )
     with pytest.raises(ValueError):
         _bundle(*pair)

@@ -896,7 +896,9 @@ def test_outer_lease_failure_and_empty_validation_are_reported(
 
     service, request, _, *_ = _service(tmp_path)
     empty = ProvisionalValidationV1((), None, None, False, False, 3, 0, 0, "b" * 64)
-    monkeypatch.setattr(subject, "validate_provisional_advance", lambda *args, **kwargs: empty)
+    monkeypatch.setattr(
+        subject, "validate_provisional_advance", lambda *args, **kwargs: empty
+    )
     report = service.download(request)
     _assert_failure(
         report,

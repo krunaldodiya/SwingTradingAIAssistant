@@ -64,7 +64,9 @@ def observe_setup_first_inclusion_close_v1(
     lookback_sessions: int = 0,
 ) -> dict[str, object]:
     """Describe one admitted close, preserving upstream integrity and unknown states."""
-    inclusion = observe_setup_level_range_inclusion_v1(previous, current, lookback_sessions=lookback_sessions)
+    inclusion = observe_setup_level_range_inclusion_v1(
+        previous, current, lookback_sessions=lookback_sessions
+    )
     runtime = _runtime(inclusion["runtime_code_identity_sha256"])
     report = dict(inclusion)
     report.pop("result_identity_sha256")

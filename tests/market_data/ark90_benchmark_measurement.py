@@ -723,7 +723,9 @@ def _timed_executor_factory(
     def factory(**kwargs: object) -> PartitionIngestionExecutor:
         return PartitionIngestionExecutor(
             **kwargs,
-            publisher=lambda *args, **kwargs: timers.call("publish", publish_partition, *args),
+            publisher=lambda *args, **kwargs: timers.call(
+                "publish", publish_partition, *args
+            ),
         )
 
     return factory

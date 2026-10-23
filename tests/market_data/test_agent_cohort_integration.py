@@ -676,7 +676,9 @@ def test_closed_raw_absence_preserves_denominator_and_price_features(
 ):
     root, path, members, kwargs, source, adjusted = _setup(tmp_path, monkeypatch)
     observations = _capture_v3(monkeypatch)
-    kwargs["raw_evidence"].query_and_project_under_lease = lambda *args, **kwargs: reason
+    kwargs["raw_evidence"].query_and_project_under_lease = lambda *args, **kwargs: (
+        reason
+    )
     report = _run_api(root, path, members, kwargs)
     context = report["cohort_context"]
     assert context["cohort_size"] == 2

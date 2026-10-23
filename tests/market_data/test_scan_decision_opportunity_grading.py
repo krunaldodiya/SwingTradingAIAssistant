@@ -830,7 +830,9 @@ def _store_context(
 ) -> None:
     monkeypatch.setattr(grading, "_lease", lambda root: nullcontext(_FakeLease()))
     monkeypatch.setattr(
-        grading, "_private_directory", lambda *args, **kwargs: nullcontext(_FakeDirectory())
+        grading,
+        "_private_directory",
+        lambda *args, **kwargs: nullcontext(_FakeDirectory()),
     )
     if names is not None:
         monkeypatch.setattr(grading.os, "listdir", lambda descriptor: list(names))

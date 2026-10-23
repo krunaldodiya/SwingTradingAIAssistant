@@ -54,8 +54,12 @@ def assemble_setup_evidence_v2(
     lookback_sessions: int = 0,
 ) -> dict[str, object]:
     """Retain original component bytes; no aggregate market verdict is inferred."""
-    legacy = assemble_setup_evidence_v1(previous, current, lookback_sessions=lookback_sessions)
-    level = observe_setup_level_v1(previous, current, lookback_sessions=lookback_sessions)
+    legacy = assemble_setup_evidence_v1(
+        previous, current, lookback_sessions=lookback_sessions
+    )
+    level = observe_setup_level_v1(
+        previous, current, lookback_sessions=lookback_sessions
+    )
     continuity = cast(dict[str, object], legacy["continuity"])
     for field in (
         "previous_observation_identity_sha256",
