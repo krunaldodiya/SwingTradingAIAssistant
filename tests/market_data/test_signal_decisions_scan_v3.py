@@ -1370,3 +1370,24 @@ def test_structure_session_reads_requested_sessions() -> None:
     assert scan_module._structure_session(packet) == date(  # pyright: ignore[reportPrivateUsage]
         2026, 10, 22
     )
+
+
+def test_cli_rejects_sessions_back_without_refresh(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    code = cli_main(
+        [
+            "scan",
+            "--storage-root",
+            str(tmp_path),
+            "--symbol",
+            "RELIANCE",
+            "--sessions-back",
+            "1",
+            "--output",
+            "json",
+        ]
+    )
+    captured = capsys.readouterr()
+    assert code == 2
+    assert "request_invalid" in captured.err

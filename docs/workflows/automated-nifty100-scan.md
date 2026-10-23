@@ -155,8 +155,10 @@ scan under the private `scanner-pair-state-v1/` namespace:
    to stderr whenever any symbol seeded, independent of safety precedence. When
    the newest closed session's data is not published yet, the scan binds the
    latest available completed session and writes `LATEST_AVAILABLE`; an
-   explicit `--sessions-back N` binds older sessions (e.g. `2` then `1` to
-   bootstrap the newest available pair) and writes `SESSIONS_BACK`. A
+   explicit `--sessions-back N` with `--refresh` binds older sessions (e.g.
+   `--sessions-back 2 --refresh` then `--sessions-back 1 --refresh` to bootstrap
+   the newest available pair) and writes `SESSIONS_BACK`. The automatic fallback
+   moves back exactly one session; deeper gaps need the explicit option. A
    no-refresh first scan with an unreadable/stale retained handle reports
    `OBSERVATION_PAIR_BOOTSTRAP_REQUIRES_REFRESH`.
 2. A later distinct admitted observation forms the exact previous/current pair,

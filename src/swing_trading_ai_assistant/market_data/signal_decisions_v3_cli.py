@@ -207,6 +207,8 @@ def _valid_request(  # noqa: C901 - command-specific closed request validation
         sessions_back = getattr(args, "sessions_back", None)
         if sessions_back is not None and not 0 <= sessions_back <= 10:
             raise ValueError("invalid sessions back")
+        if sessions_back and not refresh:
+            raise ValueError("sessions back requires refresh")
         symbols = tuple(symbols_raw) if symbols_raw else None
         if (
             output_format not in {"json", "table"}

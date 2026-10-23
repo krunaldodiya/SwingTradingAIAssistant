@@ -1165,6 +1165,12 @@ def test_current_structure_names_a_missing_latest_provider_session(
     assert structure.reason == "LATEST_SESSION_MISSING"
     assert structure.fact is None
 
+    from swing_trading_ai_assistant.market_data.signal_decisions_scan_v3 import (
+        _latest_session_missing,
+    )
+
+    assert _latest_session_missing(result)
+
 
 def test_v2_current_structure_finds_21_sessions_across_holiday_margin(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
