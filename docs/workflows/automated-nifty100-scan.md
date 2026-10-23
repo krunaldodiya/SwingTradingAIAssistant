@@ -152,7 +152,10 @@ scan under the private `scanner-pair-state-v1/` namespace:
    `--refresh` scan is a bootstrap of this kind for every symbol and is not a
    no-candidate market result; eligible seed rows use
    `OBSERVATION_PAIR_SEEDED_BOOTSTRAP`, and the CLI writes a `BOOTSTRAP:` warning
-   to stderr whenever any symbol seeded, independent of safety precedence. A
+   to stderr whenever any symbol seeded, independent of safety precedence. When
+   the newest closed session's data is not published yet, the scan binds the
+   latest available completed session and writes `LATEST_AVAILABLE` instead of
+   failing the run. A
    no-refresh first scan with an unreadable/stale retained handle reports
    `OBSERVATION_PAIR_BOOTSTRAP_REQUIRES_REFRESH`.
 2. A later distinct admitted observation forms the exact previous/current pair,
