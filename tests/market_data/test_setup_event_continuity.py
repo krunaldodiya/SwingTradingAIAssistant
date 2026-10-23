@@ -275,6 +275,11 @@ def test_different_current_event_supersedes_carried_event(tmp_path, monkeypatch)
     comparison["previous"]["candidate"]["event_session"] = source.admitted_sessions[
         -2
     ].isoformat()
+    newer = copy.deepcopy(comparison["previous"]["candidate"])
+    newer["event_session"] = (
+        current.packet.source("MARKET_STRUCTURE").admitted_sessions[-1].isoformat()
+    )
+    comparison["current"]["candidate"] = newer
     comparison["status"] = "DIFFERENT_EVENT"
     comparison["reason"] = "DISTINCT_ADMITTED_EVENT_LOCUS"
     monkeypatch.setattr(
@@ -283,3 +288,40 @@ def test_different_current_event_supersedes_carried_event(tmp_path, monkeypatch)
     report = module.observe_setup_event_continuity_v1(previous, current)
     assert report["status"] == "SUPERSEDED"
     assert report["reason"] == "CURRENT_OBSERVATION_HAS_A_DIFFERENT_EVENT"
+
+
+def test_newer_event_supersedes_on_skipped_pair(tmp_path, monkeypatch):
+    module = importlib.import_module(MODULE)
+    previous = _observe(tmp_path / "previous")
+    current = _rolling_observe(tmp_path / "current")
+    comparison = copy.deepcopy(compare_setup_observations_v1(previous, current))
+    newer = copy.deepcopy(comparison["previous"]["candidate"])
+    newer["event_session"] = (
+        current.packet.source("MARKET_STRUCTURE").admitted_sessions[-1].isoformat()
+    )
+    comparison["current"]["candidate"] = newer
+    comparison["status"] = "DIFFERENT_EVENT"
+    comparison["reason"] = "DISTINCT_ADMITTED_EVENT_LOCUS"
+    monkeypatch.setattr(
+        module, "compare_setup_observations_v1", lambda *args, **kwargs: comparison
+    )
+    report = module.observe_setup_event_continuity_v1(previous, current)
+    assert report["status"] == "SUPERSEDED"
+
+
+def test_same_session_different_locus_is_not_superseded(tmp_path, monkeypatch):
+    module = importlib.import_module(MODULE)
+    previous = _observe(tmp_path / "previous")
+    current = _rolling_observe(tmp_path / "current")
+    comparison = copy.deepcopy(compare_setup_observations_v1(previous, current))
+    comparison["current"]["candidate"] = copy.deepcopy(
+        comparison["previous"]["candidate"]
+    )
+    comparison["current"]["candidate"]["pivot_session"] = "2000-01-01"
+    comparison["status"] = "DIFFERENT_EVENT"
+    comparison["reason"] = "DISTINCT_ADMITTED_EVENT_LOCUS"
+    monkeypatch.setattr(
+        module, "compare_setup_observations_v1", lambda *args, **kwargs: comparison
+    )
+    report = module.observe_setup_event_continuity_v1(previous, current)
+    assert report["status"] != "SUPERSEDED"

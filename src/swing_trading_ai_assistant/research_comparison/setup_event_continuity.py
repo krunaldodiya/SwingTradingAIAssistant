@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from datetime import date
 from pathlib import Path
 from typing import cast
 
@@ -126,6 +127,36 @@ def _representation(
     return "REPRESENTED", "ORIGINAL_EVENT_REPRESENTED", matches[0]
 
 
+def _strictly_newer_event(
+    before: dict[str, object],
+    after: dict[str, object],
+    current: CurrentStockResearchResultV2,
+) -> bool:
+    """A different locus supersedes only when the current event is later."""
+    left = before.get("candidate")
+    right = after.get("candidate")
+    if type(left) is not dict or type(right) is not dict:
+        return False
+    left_session = cast(dict[str, object], left).get("event_session")
+    right_session = cast(dict[str, object], right).get("event_session")
+    if type(left_session) is not str or type(right_session) is not str:
+        return False
+    try:
+        left_date = date.fromisoformat(left_session)
+        right_date = date.fromisoformat(right_session)
+    except ValueError:
+        return False
+    packet = current.packet
+    if type(packet) is not BharatStockResearchPacketV2:
+        return False
+    source = packet.source("MARKET_STRUCTURE")
+    return (
+        source is not None
+        and left_date in source.admitted_sessions
+        and right_date > left_date
+    )
+
+
 def observe_setup_event_continuity_v1(
     previous: CurrentStockResearchResultV2,
     current: CurrentStockResearchResultV2,
@@ -151,11 +182,8 @@ def observe_setup_event_continuity_v1(
     elif comparison["status"] == "REPLAY":
         status, reason = "REPLAY", "IDENTICAL_ADMITTED_OBSERVATION"
         representation = cast(dict[str, object], before["candidate"])
-    elif (
-        comparison["status"] == "DIFFERENT_EVENT"
-        and type(before.get("candidate")) is dict
-        and cast(dict[str, object], before["candidate"]).get("event_session")
-        != before.get("session")
+    elif comparison["status"] == "DIFFERENT_EVENT" and _strictly_newer_event(
+        before, after, current
     ):
         status, reason = "SUPERSEDED", "CURRENT_OBSERVATION_HAS_A_DIFFERENT_EVENT"
     else:
