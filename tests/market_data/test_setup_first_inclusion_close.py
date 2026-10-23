@@ -516,9 +516,9 @@ def test_closed_pure_identity_and_once_upstream(chronological, monkeypatch):
     original = sdk.observe_setup_level_range_inclusion_v1
     calls = []
 
-    def record(*args):
+    def record(*args, **kwargs):
         calls.append(args)
-        return original(*args)
+        return original(*args, **kwargs)
 
     monkeypatch.setattr(sdk, "observe_setup_level_range_inclusion_v1", record)
     before = copy.deepcopy((previous, current))
@@ -565,7 +565,7 @@ def test_selected_first_row_linkage_is_checked_after_upstream_admission(
     )
     original = sdk.observe_setup_level_range_inclusion_v1
 
-    def change_after_admission(*args):
+    def change_after_admission(*args, **kwargs):
         report = original(*args)
         feature = current.packet.members[0].feature("MARKET_STRUCTURE")
         bar = feature.source_bars[-2]

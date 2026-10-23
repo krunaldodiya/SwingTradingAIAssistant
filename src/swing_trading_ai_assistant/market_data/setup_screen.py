@@ -114,6 +114,7 @@ def _project(  # noqa: C901 - explicit admission and causal failures precede pro
     producer_runtime: str,
     *,
     expected_question: str = "CURRENT_STRUCTURE",
+    lookback_sessions: int = 0,
 ) -> tuple[
     dict[str, object], BharatStockInstrument | None, tuple[str, str, str, str] | None
 ]:
@@ -242,13 +243,21 @@ def _project(  # noqa: C901 - explicit admission and causal failures precede pro
     if calculation.structure_state == "INSUFFICIENT_STRUCTURE":
         row["reason"] = "INSUFFICIENT_STRUCTURE"
         return row, instrument, comparable
+    if type(lookback_sessions) is not int or not 0 <= lookback_sessions <= 20:
+        raise ValueError("invalid setup lookback")
+    earliest = len(source.admitted_sessions) - 1 - lookback_sessions
     events = tuple(
         event
         for event in calculation.events
-        if event.event == "BOS" and event.direction == "UP" and event.session == latest
+        if event.event == "BOS"
+        and event.direction == "UP"
+        and event.position >= earliest
     )
     if len(events) > 1:
-        raise ValueError("ambiguous setup events")
+        newest = max(event.position for event in events)
+        events = tuple(event for event in events if event.position == newest)
+        if len(events) != 1:
+            raise ValueError("ambiguous setup events")
     row["status"] = "MATCH" if events else "NO_MATCH"
     row["reason"] = "OBSERVED_COMPARABLE_STRUCTURE"
     if not events:
@@ -265,7 +274,8 @@ def _project(  # noqa: C901 - explicit admission and causal failures precede pro
     if (
         pivot.kind != "SWING_HIGH"
         or event.prior_trend != "UPTREND"
-        or event.position != 20
+        or not earliest <= event.position < len(source.admitted_sessions)
+        or source.admitted_sessions[event.position] != event.session
         or not 0 <= pivot.position < pivot.confirmation_position < event.position
         or source.admitted_sessions[pivot.position] != pivot.session
         or source.admitted_sessions[pivot.confirmation_position]

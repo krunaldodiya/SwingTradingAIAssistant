@@ -372,9 +372,9 @@ def test_closed_output_pure_concurrency_and_once_upstream(chronological, monkeyp
     original = sdk.observe_setup_level_range_v1
     calls = []
 
-    def recording(*args):
+    def recording(*args, **kwargs):
         calls.append(args)
-        return original(*args)
+        return original(*args, **kwargs)
 
     monkeypatch.setattr(sdk, "observe_setup_level_range_v1", recording)
     before = copy.deepcopy((previous, current))

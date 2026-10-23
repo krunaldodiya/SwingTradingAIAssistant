@@ -401,7 +401,7 @@ def test_private_cli_rejection_without_effects(tmp_path, capsys, mode, version):
 def test_runtime_substitution_is_sanitized(tmp_path, monkeypatch, capsys, version):
     path = private_input(tmp_path, json.dumps(request(version)).encode())
     before = path.read_bytes()
-    monkeypatch.setattr(loss, "runtime_source_sha256", lambda *args: "0" * 64)
+    monkeypatch.setattr(loss, "runtime_source_sha256", lambda *args, **kwargs: "0" * 64)
     assert cli.main(command(path, version)) == 2
     output = capsys.readouterr()
     assert output.out == ""

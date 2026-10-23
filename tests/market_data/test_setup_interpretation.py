@@ -238,7 +238,7 @@ def test_malformed_direct_and_json_response_precedes_evidence(
     target[path[-1]] = value
     calls = []
     monkeypatch.setattr(
-        _api(), "assemble_setup_evidence_v1", lambda *args: calls.append(args)
+        _api(), "assemble_setup_evidence_v1", lambda *args, **kwargs: calls.append(args)
     )
     with pytest.raises(ValueError):
         _check(None, None, request)

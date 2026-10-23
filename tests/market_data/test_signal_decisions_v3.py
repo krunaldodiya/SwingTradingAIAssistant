@@ -22,6 +22,7 @@ from test_stock_eligibility_v3 import (
 from test_upstox_full_quote_v3 import _TOKEN
 
 import swing_trading_ai_assistant.market_data.signal_decisions_v3 as decision_module
+from swing_trading_ai_assistant.market_data import setup_screen
 from swing_trading_ai_assistant.market_data.stock_observations import (
     record_stock_observation_v1,
 )
@@ -96,7 +97,9 @@ def _evidence_with(
     inclusion_status: str | None = None,
     inclusion_observed: bool | None = None,
 ) -> dict[str, object]:
-    value = copy.deepcopy(decision_module.assemble_setup_evidence_v4(previous, current))
+    value = copy.deepcopy(decision_module.assemble_setup_evidence_v4(
+        previous, current, lookback_sessions=decision_module.CANDIDATE_LOOKBACK_SESSIONS
+    ))
     if age is not None:
         value["age"]["status"] = "OBSERVED"
         value["age"]["completed_sessions_elapsed"] = age
@@ -138,6 +141,7 @@ def test_v3_decision_returns_a_complete_explanation_for_candidate(
         "CAUSAL_CANDIDATE_AGE",
         "CAUSAL_BROKEN_HIGH_RELATION",
         "CAUSAL_SUPPORTING_LOW_STOP_REFERENCE",
+        "CAUSAL_EXTENSION",
     ]
     assert all(entry["outcome"] == "PASS" for entry in ledger)
     assert all(
@@ -152,7 +156,11 @@ def test_v3_decision_returns_a_complete_explanation_for_candidate(
         }
         for entry in ledger
     )
-    stop = ledger[-1]["derived_measurements"]
+    stop = next(
+        entry
+        for entry in ledger
+        if entry["rule_id"] == "CAUSAL_SUPPORTING_LOW_STOP_REFERENCE"
+    )["derived_measurements"]
     assert stop == {
         "structural_stop_reference_inr": "90",
         "current_quote_price_inr": "134",
@@ -201,7 +209,7 @@ def test_v3_optional_inclusion_facts_never_change_the_decision(
         inclusion_observed=True,
     )
     monkeypatch.setattr(
-        decision_module, "assemble_setup_evidence_v4", lambda *_args: evidence
+        decision_module, "assemble_setup_evidence_v4", lambda *_args, **_kwargs: evidence
     )
     changed = _evaluate(
         previous,
@@ -349,7 +357,7 @@ def test_v3_decision_enforces_exact_candidate_age_window(
     previous, previous_handle, current, current_handle = _retained_pair(tmp_path)
     evidence = _evidence_with(previous, current, age=age)
     monkeypatch.setattr(
-        decision_module, "assemble_setup_evidence_v4", lambda *_args: evidence
+        decision_module, "assemble_setup_evidence_v4", lambda *_args, **_kwargs: evidence
     )
 
     result = _evaluate(
@@ -377,7 +385,7 @@ def test_v3_decision_rejects_observed_structural_invalidation(
     previous, previous_handle, current, current_handle = _retained_pair(tmp_path)
     evidence = _evidence_with(previous, current, invalidation_status="INVALIDATED")
     monkeypatch.setattr(
-        decision_module, "assemble_setup_evidence_v4", lambda *_args: evidence
+        decision_module, "assemble_setup_evidence_v4", lambda *_args, **_kwargs: evidence
     )
 
     result = _evaluate(
@@ -467,3 +475,61 @@ def test_v3_decision_output_limit_accepts_exact_bound_and_rejects_one_more() -> 
     )
     with pytest.raises(ValueError, match="result exceeds output limit"):
         result("x" * (remaining + 1))
+
+
+def test_window_selection_sees_event_one_session_before_latest(tmp_path: Path) -> None:
+    _, _, current, _ = _retained_pair(tmp_path)
+    producer = setup_screen._producer_runtime_identity()
+
+    exact, _, _ = setup_screen._project(current, "RELIANCE", producer)
+    window, _, _ = setup_screen._project(
+        current, "RELIANCE", producer, lookback_sessions=decision_module.CANDIDATE_LOOKBACK_SESSIONS
+    )
+
+    assert exact["status"] == "NO_MATCH"
+    assert window["status"] == "MATCH"
+    assert window["candidate"] is not None
+
+
+def test_v3_decision_rejects_extension_above_one_risk_unit(tmp_path: Path) -> None:
+    previous, previous_handle, current, current_handle = _retained_pair(tmp_path)
+
+    result = _evaluate(
+        previous,
+        previous_handle,
+        current,
+        current_handle,
+        _providers(current, storage_root=tmp_path, price=Decimal("170.05")),
+        tmp_path,
+    )
+
+    assert result["disposition"] == "NO_TRADE"
+    assert result["decision_code"] == "CAUSAL_EXTENSION_EXCEEDS_ONE_RISK_UNIT"
+    extension = next(
+        entry
+        for entry in result["explanation_ledger"]
+        if entry["rule_id"] == "CAUSAL_EXTENSION"
+    )
+    assert extension["outcome"] == "FAIL"
+    assert extension["derived_measurements"]["structural_risk_inr"] == "40"
+
+
+def test_v3_decision_accepts_extension_at_one_risk_unit_boundary(tmp_path: Path) -> None:
+    previous, previous_handle, current, current_handle = _retained_pair(tmp_path)
+
+    result = _evaluate(
+        previous,
+        previous_handle,
+        current,
+        current_handle,
+        _providers(current, storage_root=tmp_path, price=Decimal("170")),
+        tmp_path,
+    )
+
+    assert result["disposition"] == "RESEARCH_CANDIDATE"
+    extension = next(
+        entry
+        for entry in result["explanation_ledger"]
+        if entry["rule_id"] == "CAUSAL_EXTENSION"
+    )
+    assert extension["outcome"] == "PASS"

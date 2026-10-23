@@ -138,3 +138,19 @@ only when every current runtime-identity, result-identity, selection-binding,
 and observation-admission check still matches. This amendment promises no
 universal readability for arbitrary historical v1 records, performs no
 migration, and changes no executable behavior.
+
+## Amendment 2 — 2026-10-23 (#348): carry-policy runtime segment
+
+`supported-signal-decision-policy@v2` changes candidate selection and adds the
+`CAUSAL_EXTENSION` rule, so the scanner and decision runtime identities change.
+Consistent with Amendment 1:
+
+- Retained pages produced before this change remain the historical V1 record;
+  their policy identifier, result identity, and decisions are unchanged.
+- They are not re-admissible under the new runtime identity, and no migration or
+  rewrite is performed.
+- The forward diary starts a new evaluation segment at the first page produced
+  after this change. No completed 10-session window existed before it, so no
+  completed-window evidence is lost.
+- G09 series-level qualification still requires real completed windows under the
+  new segment; this amendment makes no effectiveness claim.

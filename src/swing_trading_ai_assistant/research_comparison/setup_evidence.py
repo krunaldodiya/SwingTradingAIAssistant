@@ -48,13 +48,16 @@ def _runtime(components: dict[str, dict[str, object]]) -> str:
 
 
 def assemble_setup_evidence_v1(
-    previous: CurrentStockResearchResultV2, current: CurrentStockResearchResultV2
+    previous: CurrentStockResearchResultV2,
+    current: CurrentStockResearchResultV2,
+    *,
+    lookback_sessions: int = 0,
 ) -> dict[str, object]:
     """Preserve admitted facts; never decide validity, eligibility or a trade."""
     components = {
-        "continuity": observe_setup_event_continuity_v1(previous, current),
-        "invalidation": observe_setup_invalidation_v1(previous, current),
-        "age": observe_setup_age_v1(previous, current),
+        "continuity": observe_setup_event_continuity_v1(previous, current, lookback_sessions=lookback_sessions),
+        "invalidation": observe_setup_invalidation_v1(previous, current, lookback_sessions=lookback_sessions),
+        "age": observe_setup_age_v1(previous, current, lookback_sessions=lookback_sessions),
     }
     continuity = components["continuity"]
     shared = (

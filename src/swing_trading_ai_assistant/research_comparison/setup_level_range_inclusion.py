@@ -51,10 +51,13 @@ def _runtime(latest_range_runtime: object) -> str:
 
 
 def observe_setup_level_range_inclusion_v1(
-    previous: CurrentStockResearchResultV2, current: CurrentStockResearchResultV2
+    previous: CurrentStockResearchResultV2,
+    current: CurrentStockResearchResultV2,
+    *,
+    lookback_sessions: int = 0,
 ) -> dict[str, object]:
     """Observe chronological range inclusion, without any retest or trading policy."""
-    latest_range = observe_setup_level_range_v1(previous, current)
+    latest_range = observe_setup_level_range_v1(previous, current, lookback_sessions=lookback_sessions)
     runtime = _runtime(latest_range["runtime_code_identity_sha256"])
     report = dict(latest_range)
     report.pop("range_relation")

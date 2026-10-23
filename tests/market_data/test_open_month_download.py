@@ -374,7 +374,7 @@ def test_download_under_lost_caller_lease_returns_publication_failure(
     monkeypatch.setattr(
         service,
         "_advance_under_lease",
-        lambda *args: (_ for _ in ()).throw(StorageRootLeaseError()),
+        lambda *args, **kwargs: (_ for _ in ()).throw(StorageRootLeaseError()),
     )
     with acquired.lease as lease:
         report = service.download_under_lease(request, lease)
@@ -796,7 +796,7 @@ def test_validation_and_catalog_failures_are_stable(
         patch.setattr(
             subject,
             "validate_provisional_advance",
-            lambda *args: (_ for _ in ()).throw(
+            lambda *args, **kwargs: (_ for _ in ()).throw(
                 ProvisionalValidationFailureV1(
                     ProvisionalValidationCodeV1.INVALID_INPUT
                 )
@@ -886,7 +886,7 @@ def test_outer_lease_failure_and_empty_validation_are_reported(
     monkeypatch.setattr(
         service,
         "_advance_under_lease",
-        lambda *args: (_ for _ in ()).throw(StorageRootLeaseError()),
+        lambda *args, **kwargs: (_ for _ in ()).throw(StorageRootLeaseError()),
     )
     _assert_failure(
         service.download(request),
@@ -896,7 +896,7 @@ def test_outer_lease_failure_and_empty_validation_are_reported(
 
     service, request, _, *_ = _service(tmp_path)
     empty = ProvisionalValidationV1((), None, None, False, False, 3, 0, 0, "b" * 64)
-    monkeypatch.setattr(subject, "validate_provisional_advance", lambda *args: empty)
+    monkeypatch.setattr(subject, "validate_provisional_advance", lambda *args, **kwargs: empty)
     report = service.download(request)
     _assert_failure(
         report,

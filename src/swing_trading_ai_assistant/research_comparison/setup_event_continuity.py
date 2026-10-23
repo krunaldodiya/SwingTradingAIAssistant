@@ -127,10 +127,13 @@ def _representation(
 
 
 def observe_setup_event_continuity_v1(
-    previous: CurrentStockResearchResultV2, current: CurrentStockResearchResultV2
+    previous: CurrentStockResearchResultV2,
+    current: CurrentStockResearchResultV2,
+    *,
+    lookback_sessions: int = 0,
 ) -> dict[str, object]:
     """Representation is factual evidence, never a signal-validity decision."""
-    comparison = compare_setup_observations_v1(previous, current)
+    comparison = compare_setup_observations_v1(previous, current, lookback_sessions=lookback_sessions)
     runtime = _runtime(comparison["runtime_code_identity_sha256"])
     before = cast(dict[str, object], comparison["previous"])
     after = cast(dict[str, object], comparison["current"])

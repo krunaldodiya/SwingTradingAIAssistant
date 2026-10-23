@@ -178,3 +178,31 @@ A real provider-backed V3 qualification is required for G08 and any claim that S
 Implementation starts only after this Plan, Issue #299, Milestone 47 and the Delivery Project fields are read back. The owner has authorized ordinary implementation, tests, reviews, PR, hosted gates, merge, publication and closeout. Pause only at a conflicting source/provider boundary, a credential/protected effect problem, material scope expansion, failed review/gate, unavailable live qualification, or residual risk that requires owner acceptance.
 
 The Sprint is done only when every Issue #299 acceptance criterion and this Plan's matrix has current exact-revision evidence, both independent reviews pass, hosted delivery completes, merged main and private package admission are verified, and Issue/Milestone/Project closeout are read back. A source-qualified Stage 2 completion claim remains blocked until the real qualification receipt exists.
+
+## Amendment 2 — 2026-10-23 (#348): five-session carry and extension limit
+
+Owner decision: a confirmed upward BOS remains a candidate for one through five
+completed sessions while it is still valid, and is no longer carried once it has
+already moved too far. This amendment changes the candidate policy; the frozen
+safety policy and every evidence component keep their existing meaning.
+
+- The policy identifier becomes `supported-signal-decision-policy@v2`.
+- Candidate selection considers the latest confirmed upward `BOS` within the last
+  five admitted sessions of each observation, instead of only the observation's
+  final session. `lookback_sessions` defaults to zero everywhere else, so
+  setup-screen and research projections keep their exact-latest behavior.
+- Every V1 causal gate remains: `SAME_EVENT` continuity, no contradiction,
+  observed age 1–5, completed close strictly `ABOVE` the original broken high,
+  current quote strictly above the supporting `SWING_LOW`/`HL`, and safety
+  eligibility under the unchanged eight rules.
+- New rule `CAUSAL_EXTENSION`:
+  `current_quote_price <= broken_level + 1.0 × (broken_level − supporting_low)`.
+  Above that limit the result is `NO_TRADE` with
+  `CAUSAL_EXTENSION_EXCEEDS_ONE_RISK_UNIT`; unavailable level, low, or quote yields
+  the typed `UNKNOWN` path. The limit is a fixed policy constant, not a caller
+  input, and makes no return or profitability claim.
+- The scanner runtime identity changes. Previously retained pages keep their
+  recorded V1 meaning and are not re-admissible under the new build; the forward
+  diary starts a new evaluation segment at the first post-change page, as recorded
+  in Plan 76 Amendment 2. No retained page is rewritten and no completed window is
+  lost.

@@ -101,10 +101,13 @@ def _anchor(
 
 
 def observe_setup_level_v1(
-    previous: CurrentStockResearchResultV2, current: CurrentStockResearchResultV2
+    previous: CurrentStockResearchResultV2,
+    current: CurrentStockResearchResultV2,
+    *,
+    lookback_sessions: int = 0,
 ) -> dict[str, object]:
     """Compare one admitted later close; the relation is never trade confirmation."""
-    continuity = observe_setup_event_continuity_v1(previous, current)
+    continuity = observe_setup_event_continuity_v1(previous, current, lookback_sessions=lookback_sessions)
     runtime = _runtime(continuity["runtime_code_identity_sha256"])
     before = cast(dict[str, object], continuity["previous"])
     after = cast(dict[str, object], continuity["current"])

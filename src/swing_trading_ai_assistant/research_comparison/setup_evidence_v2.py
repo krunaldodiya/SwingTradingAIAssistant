@@ -48,11 +48,14 @@ def _runtime(legacy: dict[str, object], level: dict[str, object]) -> str:
 
 
 def assemble_setup_evidence_v2(
-    previous: CurrentStockResearchResultV2, current: CurrentStockResearchResultV2
+    previous: CurrentStockResearchResultV2,
+    current: CurrentStockResearchResultV2,
+    *,
+    lookback_sessions: int = 0,
 ) -> dict[str, object]:
     """Retain original component bytes; no aggregate market verdict is inferred."""
-    legacy = assemble_setup_evidence_v1(previous, current)
-    level = observe_setup_level_v1(previous, current)
+    legacy = assemble_setup_evidence_v1(previous, current, lookback_sessions=lookback_sessions)
+    level = observe_setup_level_v1(previous, current, lookback_sessions=lookback_sessions)
     continuity = cast(dict[str, object], legacy["continuity"])
     for field in (
         "previous_observation_identity_sha256",

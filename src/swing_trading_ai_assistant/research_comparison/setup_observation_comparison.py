@@ -207,7 +207,10 @@ def _event_values(
 
 
 def compare_setup_observations_v1(
-    previous: CurrentStockResearchResultV2, current: CurrentStockResearchResultV2
+    previous: CurrentStockResearchResultV2,
+    current: CurrentStockResearchResultV2,
+    *,
+    lookback_sessions: int = 0,
 ) -> dict[str, object]:
     """Compare facts, never infer signal validity or correction publisher lineage."""
     runtime = _runtime()
@@ -232,7 +235,12 @@ def compare_setup_observations_v1(
             raise ValueError("setup observation metadata bounds invalid")
         if not _valid_symbol(observation.symbol):
             raise ValueError("invalid setup observation symbol")
-        row, _, _ = _project(observation, observation.symbol, producer)
+        row, _, _ = _project(
+            observation,
+            observation.symbol,
+            producer,
+            lookback_sessions=lookback_sessions,
+        )
         if (
             observation.evidence_known_at is not None
             and observation.evidence_known_at > observation.acquisition_deadline
