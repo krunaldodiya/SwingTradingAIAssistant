@@ -240,7 +240,7 @@ def test_malformed_direct_and_json_response_precedes_evidence(
     target[path[-1]] = value
     calls = []
     monkeypatch.setattr(
-        _api(), "assemble_setup_evidence_v2", lambda *args: calls.append(args)
+        _api(), "assemble_setup_evidence_v2", lambda *args, **kwargs: calls.append(args)
     )
     with pytest.raises(ValueError):
         _check(None, None, request)
@@ -711,7 +711,7 @@ def test_level_composition_substitution_terminal(pair, monkeypatch, mutation):
             bad["result_identity_sha256"] = hashlib.sha256(
                 canonical_comparison_bytes(unsigned)
             ).hexdigest()
-    monkeypatch.setattr(module, "observe_setup_level_v1", lambda *a: bad)
+    monkeypatch.setattr(module, "observe_setup_level_v1", lambda *a, **k: bad)
     with pytest.raises(ValueError):
         _bundle(*pair)
 

@@ -207,10 +207,15 @@ def _contradiction(  # noqa: C901 - explicit closed anchored evidence outcomes.
 
 
 def observe_setup_invalidation_v1(
-    previous: CurrentStockResearchResultV2, current: CurrentStockResearchResultV2
+    previous: CurrentStockResearchResultV2,
+    current: CurrentStockResearchResultV2,
+    *,
+    lookback_sessions: int = 0,
 ) -> dict[str, object]:
     """Contradiction applies only to the fixed original continuation premise."""
-    continuity = observe_setup_event_continuity_v1(previous, current)
+    continuity = observe_setup_event_continuity_v1(
+        previous, current, lookback_sessions=lookback_sessions
+    )
     runtime = _runtime(continuity["runtime_code_identity_sha256"])
     original_low = current_low = witness = None
     status, reason = cast(str, continuity["status"]), cast(str, continuity["reason"])

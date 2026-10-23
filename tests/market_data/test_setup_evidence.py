@@ -230,8 +230,8 @@ def test_component_substitution_is_terminal_even_if_resealed(
     current = _anchored(tmp_path / "c", later=True)
     original = api.observe_setup_age_v1
 
-    def substituted(*args):
-        value = original(*args)
+    def substituted(*args, **kwargs):
+        value = original(*args, **kwargs)
         value[field] = {} if field in ("previous", "current") else "0" * 64
         if field != "result_identity_sha256":
             unsigned = dict(value)

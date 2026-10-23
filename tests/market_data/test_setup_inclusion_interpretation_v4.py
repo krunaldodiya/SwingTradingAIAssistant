@@ -203,7 +203,7 @@ def test_new_claim_types_precede_any_observation_access(
     response["facts"]["level_range_inclusion"][field] = value
     calls = []
     monkeypatch.setattr(
-        _api(), "assemble_setup_evidence_v4", lambda *args: calls.append(args)
+        _api(), "assemble_setup_evidence_v4", lambda *args, **kwargs: calls.append(args)
     )
     with pytest.raises(ValueError):
         _check(None, None, response)
@@ -330,7 +330,7 @@ def test_resealed_inclusion_join_terminal_including_replay(
             canonical_comparison_bytes(unsigned)
         ).hexdigest()
     monkeypatch.setattr(
-        module, "observe_setup_level_range_inclusion_v1", lambda *args: false
+        module, "observe_setup_level_range_inclusion_v1", lambda *args, **kwargs: false
     )
     with pytest.raises(ValueError):
         _bundle(*pair)
@@ -347,13 +347,13 @@ def test_both_original_builders_called_once_on_identical_pair(
     )
     calls = []
 
-    def old(*args):
+    def old(*args, **kwargs):
         calls.append(("v3", args))
-        return legacy(*args)
+        return legacy(*args, **kwargs)
 
-    def original(*args):
+    def original(*args, **kwargs):
         calls.append(("inclusion", args))
-        return inclusion(*args)
+        return inclusion(*args, **kwargs)
 
     monkeypatch.setattr(module, "assemble_setup_evidence_v3", old)
     monkeypatch.setattr(module, "observe_setup_level_range_inclusion_v1", original)

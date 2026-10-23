@@ -41,7 +41,11 @@ from .stock_eligibility_v3 import (
 from .stock_observations import read_stock_observation_v1
 
 SCHEMA: Final = "stock-signal-decision@v3"
-DECISION_POLICY_IDENTIFIER: Final = "supported-signal-decision-policy@v1"
+DECISION_POLICY_IDENTIFIER: Final = "supported-signal-decision-policy@v2"
+# A five-session maximum age needs the previous observation to look back six
+# sessions: an event five sessions old in the current window sits one position
+# earlier in the previous window.
+CANDIDATE_LOOKBACK_SESSIONS: Final = 6
 _DIGEST: Final = re.compile(r"[0-9a-f]{64}\Z")
 _MAX_RESULT_BYTES: Final = 128 * 1024
 _SOURCES: Final = (
@@ -62,6 +66,7 @@ _POLICY: Final = {
     "required_invalidation_status": "NO_CONTRADICTION_OBSERVED",
     "minimum_completed_sessions_elapsed": 1,
     "maximum_completed_sessions_elapsed": 5,
+    "maximum_extension_risk_units": 1,
     "required_broken_high_relation": "ABOVE",
     "required_supporting_low_kind": "SWING_LOW",
     "required_supporting_low_relation": "HL",
@@ -324,6 +329,50 @@ def _quote_price(eligibility: dict[str, object]) -> Decimal | None:
     return value if value.is_finite() and value > 0 else None
 
 
+def _broken_high_level(
+    current: CurrentStockResearchResultV2,
+    continuity: dict[str, object],
+) -> Decimal | None:
+    """Find the represented original event's broken level in the current window."""
+    previous = continuity.get("previous")
+    if type(previous) is not dict:
+        return None
+    candidate = cast(dict[str, object], previous).get("candidate")
+    if type(candidate) is not dict:
+        return None
+    event_kind = cast(dict[str, object], candidate).get("event")
+    direction = cast(dict[str, object], candidate).get("direction")
+    session = cast(dict[str, object], candidate).get("event_session")
+    if (event_kind, direction) != ("BOS", "UP") or type(session) is not str:
+        return None
+    packet = current.packet
+    if type(packet) is not BharatStockResearchPacketV2 or len(packet.members) != 1:
+        return None
+    feature = packet.members[0].feature("MARKET_STRUCTURE")
+    if (
+        feature is None
+        or type(feature.fact) is not BharatStockAdjustedMarketStructureFactV1
+    ):
+        return None
+    matches = tuple(
+        event
+        for event in feature.fact.calculation.events
+        if event.event == "BOS"
+        and event.direction == "UP"
+        and event.session.isoformat() == session
+    )
+    if len(matches) != 1:
+        return None
+    broken_level = matches[0].broken_level
+    if (
+        type(broken_level) is not Decimal
+        or not broken_level.is_finite()
+        or broken_level <= 0
+    ):
+        return None
+    return broken_level
+
+
 def _supporting_low_reference(
     current: CurrentStockResearchResultV2,
     invalidation: dict[str, object],
@@ -571,9 +620,16 @@ def _evaluate_causal_policy(  # noqa: C901 - ordered closed candidate policy
     eligibility: dict[str, object],
     runtime: str,
 ) -> dict[str, object]:
-    evidence = _admit_setup_evidence(assemble_setup_evidence_v4(previous, current))
+    evidence = _admit_setup_evidence(
+        assemble_setup_evidence_v4(
+            previous, current, lookback_sessions=CANDIDATE_LOOKBACK_SESSIONS
+        )
+    )
     summary = _causal_summary(
-        evidence, observe_setup_first_inclusion_close_v1(previous, current)
+        evidence,
+        observe_setup_first_inclusion_close_v1(
+            previous, current, lookback_sessions=CANDIDATE_LOOKBACK_SESSIONS
+        ),
     )
     continuity = _safe_component(evidence["continuity"], "continuity")
     continuity_status = summary["continuity_status"]
@@ -597,6 +653,7 @@ def _evaluate_causal_policy(  # noqa: C901 - ordered closed candidate policy
                 "CAUSAL_CANDIDATE_AGE",
                 "CAUSAL_BROKEN_HIGH_RELATION",
                 "CAUSAL_SUPPORTING_LOW_STOP_REFERENCE",
+                "CAUSAL_EXTENSION",
             ),
             eligibility=eligibility,
             summary=summary,
@@ -627,6 +684,7 @@ def _evaluate_causal_policy(  # noqa: C901 - ordered closed candidate policy
                 "CAUSAL_CANDIDATE_AGE",
                 "CAUSAL_BROKEN_HIGH_RELATION",
                 "CAUSAL_SUPPORTING_LOW_STOP_REFERENCE",
+                "CAUSAL_EXTENSION",
             ),
             eligibility=eligibility,
             summary=summary,
@@ -665,6 +723,7 @@ def _evaluate_causal_policy(  # noqa: C901 - ordered closed candidate policy
                 "CAUSAL_CANDIDATE_AGE",
                 "CAUSAL_BROKEN_HIGH_RELATION",
                 "CAUSAL_SUPPORTING_LOW_STOP_REFERENCE",
+                "CAUSAL_EXTENSION",
             ),
             eligibility=eligibility,
             summary=summary,
@@ -694,6 +753,7 @@ def _evaluate_causal_policy(  # noqa: C901 - ordered closed candidate policy
                 "CAUSAL_CANDIDATE_AGE",
                 "CAUSAL_BROKEN_HIGH_RELATION",
                 "CAUSAL_SUPPORTING_LOW_STOP_REFERENCE",
+                "CAUSAL_EXTENSION",
             ),
             eligibility=eligibility,
             summary=summary,
@@ -730,6 +790,7 @@ def _evaluate_causal_policy(  # noqa: C901 - ordered closed candidate policy
             later_rules=(
                 "CAUSAL_BROKEN_HIGH_RELATION",
                 "CAUSAL_SUPPORTING_LOW_STOP_REFERENCE",
+                "CAUSAL_EXTENSION",
             ),
             eligibility=eligibility,
             summary=summary,
@@ -761,6 +822,7 @@ def _evaluate_causal_policy(  # noqa: C901 - ordered closed candidate policy
             later_rules=(
                 "CAUSAL_BROKEN_HIGH_RELATION",
                 "CAUSAL_SUPPORTING_LOW_STOP_REFERENCE",
+                "CAUSAL_EXTENSION",
             ),
             eligibility=eligibility,
             summary=summary,
@@ -796,7 +858,7 @@ def _evaluate_causal_policy(  # noqa: C901 - ordered closed candidate policy
                 },
                 {"observed_level_status": summary["level_status"]},
             ),
-            later_rules=("CAUSAL_SUPPORTING_LOW_STOP_REFERENCE",),
+            later_rules=("CAUSAL_SUPPORTING_LOW_STOP_REFERENCE", "CAUSAL_EXTENSION"),
             eligibility=eligibility,
             summary=summary,
             previous_handle=previous_handle,
@@ -822,7 +884,7 @@ def _evaluate_causal_policy(  # noqa: C901 - ordered closed candidate policy
                 },
             ),
             earlier_entries=[continuity_entry, invalidation_entry, age_entry],
-            later_rules=("CAUSAL_SUPPORTING_LOW_STOP_REFERENCE",),
+            later_rules=("CAUSAL_SUPPORTING_LOW_STOP_REFERENCE", "CAUSAL_EXTENSION"),
             eligibility=eligibility,
             summary=summary,
             previous_handle=previous_handle,
@@ -853,7 +915,7 @@ def _evaluate_causal_policy(  # noqa: C901 - ordered closed candidate policy
                     ]
                 },
             ),
-            later_rules=(),
+            later_rules=("CAUSAL_EXTENSION",),
             eligibility=eligibility,
             summary=summary,
             previous_handle=previous_handle,
@@ -883,7 +945,7 @@ def _evaluate_causal_policy(  # noqa: C901 - ordered closed candidate policy
                 age_entry,
                 relation_entry,
             ],
-            later_rules=(),
+            later_rules=("CAUSAL_EXTENSION",),
             eligibility=eligibility,
             summary=summary,
             previous_handle=previous_handle,
@@ -897,6 +959,107 @@ def _evaluate_causal_policy(  # noqa: C901 - ordered closed candidate policy
         "The current bound quote is strictly above the unchanged higher-low structural reference. The reference remains a daily-close invalidation condition, not an order instruction.",
         stop_references,
         stop_measurements,
+    )
+    broken_level = _broken_high_level(current, continuity)
+    extension_measurements = {
+        "original_broken_high_inr": (
+            _decimal_text(broken_level) if broken_level is not None else None
+        ),
+        "structural_stop_reference_inr": _decimal_text(stop_price),
+        "current_quote_price_inr": _decimal_text(quote_price),
+        "maximum_extension_risk_units": _POLICY["maximum_extension_risk_units"],
+    }
+    if broken_level is None:
+        return _unknown_causal_result(
+            code="CAUSAL_EXTENSION_UNAVAILABLE",
+            entry=_entry(
+                "CAUSAL_EXTENSION",
+                "UNKNOWN",
+                "ORIGINAL_BROKEN_HIGH_NOT_REPRESENTED",
+                "The original broken high could not be represented in the current admitted structure, so the extension limit is not established.",
+                {
+                    "setup_evidence_identity_sha256": summary[
+                        "setup_evidence_identity_sha256"
+                    ]
+                },
+                extension_measurements,
+            ),
+            later_rules=(),
+            eligibility=eligibility,
+            summary=summary,
+            previous_handle=previous_handle,
+            current_handle=current_handle,
+            runtime=runtime,
+        )
+    risk_per_share = broken_level - stop_price
+    if risk_per_share <= 0:
+        return _unknown_causal_result(
+            code="CAUSAL_EXTENSION_UNAVAILABLE",
+            entry=_entry(
+                "CAUSAL_EXTENSION",
+                "UNKNOWN",
+                "NON_POSITIVE_STRUCTURAL_RISK",
+                "The structural stop reference is not below the original broken high, so the extension limit is not established.",
+                {
+                    "setup_evidence_identity_sha256": summary[
+                        "setup_evidence_identity_sha256"
+                    ]
+                },
+                extension_measurements,
+            ),
+            later_rules=(),
+            eligibility=eligibility,
+            summary=summary,
+            previous_handle=previous_handle,
+            current_handle=current_handle,
+            runtime=runtime,
+        )
+    maximum_extension_risk_units = Decimal(str(_POLICY["maximum_extension_risk_units"]))
+    extension = quote_price - broken_level
+    if extension > risk_per_share * maximum_extension_risk_units:
+        return _no_trade_causal_result(
+            code="CAUSAL_EXTENSION_EXCEEDS_ONE_RISK_UNIT",
+            entry=_entry(
+                "CAUSAL_EXTENSION",
+                "FAIL",
+                "CURRENT_PRICE_MORE_THAN_ONE_RISK_UNIT_ABOVE_ORIGINAL_BROKEN_HIGH",
+                "The current price is more than one structural risk unit above the original broken high, so the fixed no-chasing extension condition fails.",
+                {
+                    "setup_evidence_identity_sha256": summary[
+                        "setup_evidence_identity_sha256"
+                    ]
+                },
+                {
+                    **extension_measurements,
+                    "extension_inr": _decimal_text(extension),
+                    "structural_risk_inr": _decimal_text(risk_per_share),
+                },
+            ),
+            earlier_entries=[
+                continuity_entry,
+                invalidation_entry,
+                age_entry,
+                relation_entry,
+                stop_entry,
+            ],
+            later_rules=(),
+            eligibility=eligibility,
+            summary=summary,
+            previous_handle=previous_handle,
+            current_handle=current_handle,
+            runtime=runtime,
+        )
+    extension_entry = _entry(
+        "CAUSAL_EXTENSION",
+        "PASS",
+        "CURRENT_PRICE_WITHIN_ONE_RISK_UNIT_OF_ORIGINAL_BROKEN_HIGH",
+        "The current price is within one structural risk unit of the original broken high, so the fixed no-chasing extension condition passes.",
+        {"setup_evidence_identity_sha256": summary["setup_evidence_identity_sha256"]},
+        {
+            **extension_measurements,
+            "extension_inr": _decimal_text(extension),
+            "structural_risk_inr": _decimal_text(risk_per_share),
+        },
     )
     return _base_result(
         disposition="RESEARCH_CANDIDATE",
@@ -923,6 +1086,7 @@ def _evaluate_causal_policy(  # noqa: C901 - ordered closed candidate policy
             age_entry,
             relation_entry,
             stop_entry,
+            extension_entry,
         ],
         runtime=runtime,
     )

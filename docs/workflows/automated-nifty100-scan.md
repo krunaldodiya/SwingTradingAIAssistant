@@ -32,6 +32,14 @@ Nifty 100 priority and the conditional N200-ex-N100 tier-2 fill; Nifty 50,
 Nifty Next 50, and Nifty 100 scans are exact with no cross-universe gap fill.
 Nifty 500 is retired as a runtime scan universe.
 
+**Candidate carry.** A confirmed upward `BOS` remains a research candidate for
+one through five completed sessions while the event is unchanged, no later DOWN
+`CHOCH` of the original supporting low was observed, the completed close stays
+above the original broken high, the quote stays above the supporting low, safety
+is eligible, and the price has not moved more than one structural risk unit
+(`broken high − supporting low`) above the breakout. The policy identifier for
+this behavior is `supported-signal-decision-policy@v2`.
+
 **Timing.** Scans and research commands may be run at any time. The scheduled
 nightly runner (`~/daily-scan/run.sh`) carries an 08:00–19:59 IST skip so the
 diary does not capture intraday or not-yet-published data; that guard applies to

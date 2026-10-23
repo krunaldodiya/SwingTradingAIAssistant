@@ -82,10 +82,15 @@ def _schedule(observation: CurrentStockResearchResultV2) -> dict[str, object]:
 
 
 def observe_setup_age_v1(
-    previous: CurrentStockResearchResultV2, current: CurrentStockResearchResultV2
+    previous: CurrentStockResearchResultV2,
+    current: CurrentStockResearchResultV2,
+    *,
+    lookback_sessions: int = 0,
 ) -> dict[str, object]:
     """Count only admitted completed sessions of an unchanged represented event."""
-    continuity = observe_setup_event_continuity_v1(previous, current)
+    continuity = observe_setup_event_continuity_v1(
+        previous, current, lookback_sessions=lookback_sessions
+    )
     runtime = _runtime(continuity["runtime_code_identity_sha256"])
     before = cast(dict[str, object], continuity["previous"])
     after = cast(dict[str, object], continuity["current"])
@@ -111,10 +116,10 @@ def observe_setup_age_v1(
         else:
             baseline = cast(dict[str, object], before["candidate"])
             event_session = date.fromisoformat(cast(str, baseline["event_session"]))
-            if event_session != left[-1] or event_session not in right:
+            if event_session not in left or event_session not in right:
                 raise ValueError("age baseline session invalid")
             count = len(right) - 1 - right.index(event_session)
-            if not 0 <= count <= 20 or (status == "REPLAY" and count != 0):
+            if not 0 <= count <= 20:
                 raise ValueError("age count invalid")
             original_session, current_session = (
                 event_session.isoformat(),

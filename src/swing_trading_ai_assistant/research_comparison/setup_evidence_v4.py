@@ -48,15 +48,22 @@ def _runtime(legacy: dict[str, object], inclusion: dict[str, object]) -> str:
 
 
 def assemble_setup_evidence_v4(
-    previous: CurrentStockResearchResultV2, current: CurrentStockResearchResultV2
+    previous: CurrentStockResearchResultV2,
+    current: CurrentStockResearchResultV2,
+    *,
+    lookback_sessions: int = 0,
 ) -> dict[str, object]:
     """Preserve five facts and join the unchanged original inclusion on that pair."""
-    legacy = assemble_setup_evidence_v3(previous, current)
+    legacy = assemble_setup_evidence_v3(
+        previous, current, lookback_sessions=lookback_sessions
+    )
     unsigned = dict(legacy)
     identity = unsigned.pop("result_identity_sha256")
     if identity != _digest(unsigned):
         raise ValueError("evidence v4 legacy identity invalid")
-    inclusion = observe_setup_level_range_inclusion_v1(previous, current)
+    inclusion = observe_setup_level_range_inclusion_v1(
+        previous, current, lookback_sessions=lookback_sessions
+    )
     unsigned = dict(inclusion)
     identity = unsigned.pop("result_identity_sha256")
     if identity != _digest(unsigned):

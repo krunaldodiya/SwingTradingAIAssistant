@@ -236,8 +236,8 @@ def test_invalid_cohort_has_no_effects(tmp_path, symbols):
             symbols,
             tmp_path,
             research=lambda *a, **k: calls.append(a),
-            confirm_research=lambda *a: calls.append(a),
-            previous_research=lambda *a: calls.append(a),
+            confirm_research=lambda *a, **k: calls.append(a),
+            previous_research=lambda *a, **k: calls.append(a),
         )
     assert calls == []
     assert list(tmp_path.iterdir()) == []
@@ -328,8 +328,8 @@ def test_storage_rejected_before_price_or_event_effect(tmp_path, mode):
                 ("PNB",),
                 root,
                 research=lambda *a, **k: calls.append(a),
-                confirm_research=lambda *a: calls.append(a),
-                previous_research=lambda *a: calls.append(a),
+                confirm_research=lambda *a, **k: calls.append(a),
+                previous_research=lambda *a, **k: calls.append(a),
             )
         assert calls == []
     finally:

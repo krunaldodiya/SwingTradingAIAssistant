@@ -180,8 +180,8 @@ def _setup(tmp_path, monkeypatch, *, count=2):
     adjusted = AdjustedPrices(clock)
     kwargs = {
         "research": research,
-        "confirm_research": lambda *args: None,
-        "previous_research": lambda *args: None,
+        "confirm_research": lambda *args, **kwargs: None,
+        "previous_research": lambda *args, **kwargs: None,
         "clock": clock.now,
         "calendar_transport": official,
         "snapshot_transport": official,
@@ -676,7 +676,9 @@ def test_closed_raw_absence_preserves_denominator_and_price_features(
 ):
     root, path, members, kwargs, source, adjusted = _setup(tmp_path, monkeypatch)
     observations = _capture_v3(monkeypatch)
-    kwargs["raw_evidence"].query_and_project_under_lease = lambda *args: reason
+    kwargs["raw_evidence"].query_and_project_under_lease = lambda *args, **kwargs: (
+        reason
+    )
     report = _run_api(root, path, members, kwargs)
     context = report["cohort_context"]
     assert context["cohort_size"] == 2
@@ -698,7 +700,7 @@ def test_ambiguous_legacy_mapping_or_acquisition_failure_is_fatal(
     tmp_path, monkeypatch, reason
 ):
     root, path, members, kwargs, source, _ = _setup(tmp_path, monkeypatch)
-    kwargs["raw_evidence"].mappings_under_lease = lambda *args: reason
+    kwargs["raw_evidence"].mappings_under_lease = lambda *args, **kwargs: reason
     with pytest.raises(ValueError):
         _run_api(root, path, members, kwargs)
     assert source.calls == []

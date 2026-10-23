@@ -703,11 +703,11 @@ def _timed_coordinator(
 
 
 def _timed_normalizer(timers: _PhaseTimers) -> Callable[..., object]:
-    return lambda *args: timers.call("normalize", normalize_candles, *args)
+    return lambda *args, **kwargs: timers.call("normalize", normalize_candles, *args)
 
 
 def _timed_canonicalizer(timers: _PhaseTimers) -> Callable[..., object]:
-    return lambda *args: timers.call(
+    return lambda *args, **kwargs: timers.call(
         "normalize", canonicalize_upstox_equity_candles, *args
     )
 
@@ -723,7 +723,9 @@ def _timed_executor_factory(
     def factory(**kwargs: object) -> PartitionIngestionExecutor:
         return PartitionIngestionExecutor(
             **kwargs,
-            publisher=lambda *args: timers.call("publish", publish_partition, *args),
+            publisher=lambda *args, **kwargs: timers.call(
+                "publish", publish_partition, *args
+            ),
         )
 
     return factory

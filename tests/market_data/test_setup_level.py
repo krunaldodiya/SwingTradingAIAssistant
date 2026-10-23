@@ -343,9 +343,9 @@ def test_pure_retry_concurrency_privacy_and_once_continuity(admitted, monkeypatc
     original = module.observe_setup_event_continuity_v1
     calls = []
 
-    def observe(*args):
+    def observe(*args, **kwargs):
         calls.append(1)
-        return original(*args)
+        return original(*args, **kwargs)
 
     monkeypatch.setattr(module, "observe_setup_event_continuity_v1", observe)
     previous, current = admitted["previous"], admitted["above"]

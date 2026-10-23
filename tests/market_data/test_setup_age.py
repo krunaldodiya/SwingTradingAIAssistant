@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import importlib
 import importlib.util
@@ -418,3 +419,35 @@ def test_cli_rejects_returned_selector_without_partial_result(tmp_path, capsys):
     )
     output = capsys.readouterr()
     assert not output.out and output.err == "setup_age_failed\n"
+
+
+def test_age_accepts_carried_baseline_before_previous_final_session(
+    tmp_path, monkeypatch
+):
+    module = importlib.import_module(MODULE)
+    previous = _observe(tmp_path / "previous")
+    current = _rolling_observe(tmp_path / "current")
+    original = module.observe_setup_event_continuity_v1
+
+    def carried(*args, **kwargs):
+        report = copy.deepcopy(original(*args, **kwargs))
+        source = previous.packet.source("MARKET_STRUCTURE")
+        report["previous"]["candidate"]["event_session"] = source.admitted_sessions[
+            -2
+        ].isoformat()
+        return report
+
+    monkeypatch.setattr(module, "observe_setup_event_continuity_v1", carried)
+    report = module.observe_setup_age_v1(previous, current)
+    assert report["status"] == "OBSERVED"
+    assert report["completed_sessions_elapsed"] == 2
+
+
+def test_replay_of_carried_observation_reports_age_without_raising(tmp_path):
+    module = importlib.import_module(MODULE)
+    observation = _rolling_observe(tmp_path / "observation")
+
+    report = module.observe_setup_age_v1(observation, observation, lookback_sessions=6)
+
+    assert report["status"] == "REPLAY"
+    assert report["completed_sessions_elapsed"] == 1
