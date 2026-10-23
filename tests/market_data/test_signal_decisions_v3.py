@@ -336,7 +336,11 @@ def test_v3_decision_rejects_quote_at_structural_stop_reference(
 
     assert result["disposition"] == "NO_TRADE"
     assert result["decision_code"] == "CAUSAL_CURRENT_QUOTE_AT_OR_BELOW_STRUCTURAL_STOP"
-    entry = result["explanation_ledger"][-1]
+    entry = next(
+        item
+        for item in result["explanation_ledger"]
+        if item["rule_id"] == "CAUSAL_SUPPORTING_LOW_STOP_REFERENCE"
+    )
     assert entry["reason_code"] == (
         "CURRENT_QUOTE_NOT_STRICTLY_ABOVE_STRUCTURAL_STOP_REFERENCE"
     )

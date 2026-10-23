@@ -945,7 +945,7 @@ def _evaluate_causal_policy(  # noqa: C901 - ordered closed candidate policy
                 age_entry,
                 relation_entry,
             ],
-            later_rules=(),
+            later_rules=("CAUSAL_EXTENSION",),
             eligibility=eligibility,
             summary=summary,
             previous_handle=previous_handle,
@@ -1014,8 +1014,9 @@ def _evaluate_causal_policy(  # noqa: C901 - ordered closed candidate policy
             current_handle=current_handle,
             runtime=runtime,
         )
+    maximum_extension_risk_units = Decimal(str(_POLICY["maximum_extension_risk_units"]))
     extension = quote_price - broken_level
-    if extension > risk_per_share:
+    if extension > risk_per_share * maximum_extension_risk_units:
         return _no_trade_causal_result(
             code="CAUSAL_EXTENSION_EXCEEDS_ONE_RISK_UNIT",
             entry=_entry(

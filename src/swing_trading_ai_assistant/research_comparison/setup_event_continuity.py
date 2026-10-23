@@ -151,6 +151,13 @@ def observe_setup_event_continuity_v1(
     elif comparison["status"] == "REPLAY":
         status, reason = "REPLAY", "IDENTICAL_ADMITTED_OBSERVATION"
         representation = cast(dict[str, object], before["candidate"])
+    elif (
+        comparison["status"] == "DIFFERENT_EVENT"
+        and type(before.get("candidate")) is dict
+        and cast(dict[str, object], before["candidate"]).get("event_session")
+        != before.get("session")
+    ):
+        status, reason = "SUPERSEDED", "CURRENT_OBSERVATION_HAS_A_DIFFERENT_EVENT"
     else:
         baseline = cast(dict[str, object], before["candidate"])
         status, reason, representation = _representation(current, baseline)

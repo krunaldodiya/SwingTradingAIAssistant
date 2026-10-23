@@ -187,10 +187,12 @@ already moved too far. This amendment changes the candidate policy; the frozen
 safety policy and every evidence component keep their existing meaning.
 
 - The policy identifier becomes `supported-signal-decision-policy@v2`.
-- Candidate selection considers the latest confirmed upward `BOS` within the last
-  five admitted sessions of each observation, instead of only the observation's
-  final session. `lookback_sessions` defaults to zero everywhere else, so
-  setup-screen and research projections keep their exact-latest behavior.
+- Candidate selection considers the latest confirmed upward `BOS` with an age of
+  one through five completed sessions, instead of only the observation's final
+  session. The previous observation is projected with a six-session lookback so
+  the oldest allowed event remains representable; the age gate still rejects six.
+  `lookback_sessions` defaults to zero everywhere else, so setup-screen and
+  research projections keep their exact-latest behavior.
 - Every V1 causal gate remains: `SAME_EVENT` continuity, no contradiction,
   observed age 1–5, completed close strictly `ABOVE` the original broken high,
   current quote strictly above the supporting `SWING_LOW`/`HL`, and safety
@@ -201,6 +203,8 @@ safety policy and every evidence component keep their existing meaning.
   `CAUSAL_EXTENSION_EXCEEDS_ONE_RISK_UNIT`; unavailable level, low, or quote yields
   the typed `UNKNOWN` path. The limit is a fixed policy constant, not a caller
   input, and makes no return or profitability claim.
+- A newer confirmed breakout supersedes the carried event; continuity reports
+  `SUPERSEDED` rather than carrying the older event.
 - The scanner runtime identity changes. Previously retained pages keep their
   recorded V1 meaning and are not re-admissible under the new build; the forward
   diary starts a new evaluation segment at the first post-change page, as recorded

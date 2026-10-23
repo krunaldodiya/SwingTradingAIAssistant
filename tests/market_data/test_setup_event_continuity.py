@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import importlib
 import json
@@ -263,3 +264,22 @@ def test_output_limit_and_plus_one():
     report["x"] += "a"
     with pytest.raises(ValueError):
         canonical_comparison_bytes(report)
+
+
+def test_different_current_event_supersedes_carried_event(tmp_path, monkeypatch):
+    module = importlib.import_module(MODULE)
+    previous = _observe(tmp_path / "previous")
+    current = _rolling_observe(tmp_path / "current")
+    comparison = copy.deepcopy(compare_setup_observations_v1(previous, current))
+    source = previous.packet.source("MARKET_STRUCTURE")
+    comparison["previous"]["candidate"]["event_session"] = source.admitted_sessions[
+        -2
+    ].isoformat()
+    comparison["status"] = "DIFFERENT_EVENT"
+    comparison["reason"] = "DISTINCT_ADMITTED_EVENT_LOCUS"
+    monkeypatch.setattr(
+        module, "compare_setup_observations_v1", lambda *args, **kwargs: comparison
+    )
+    report = module.observe_setup_event_continuity_v1(previous, current)
+    assert report["status"] == "SUPERSEDED"
+    assert report["reason"] == "CURRENT_OBSERVATION_HAS_A_DIFFERENT_EVENT"
