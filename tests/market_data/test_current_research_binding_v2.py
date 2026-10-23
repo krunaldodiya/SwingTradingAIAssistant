@@ -11,7 +11,10 @@ from pathlib import Path
 
 import pytest
 
-from swing_trading_ai_assistant.market_data import current_research_binding_v2
+from swing_trading_ai_assistant.market_data import (
+    current_research_binding_v2,
+    instrument_snapshot,
+)
 from swing_trading_ai_assistant.market_data.adjusted_daily.service_v3 import (
     mapping_identity_v3,
 )
@@ -319,8 +322,6 @@ def test_mapping_binding_rejects_constructed_copied_and_mutated_values(
 def test_snapshot_resolution_reuses_parsed_catalog(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from swing_trading_ai_assistant.market_data import instrument_snapshot
-
     root = tmp_path / "cache"
     root.mkdir(mode=0o700)
     decompressed = json.dumps([_INSTRUMENT], separators=(",", ":")).encode()
