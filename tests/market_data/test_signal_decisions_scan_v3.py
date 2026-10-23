@@ -1250,13 +1250,15 @@ def test_scan_uses_latest_available_session_when_today_unpublished(
         bound = kwargs.get("bound_symbols")
         if back and type(bound) is list:
             bound.append(symbol)
-        reason = (
-            "OBSERVATION_PAIR_SEEDED_BOOTSTRAP"
-            if back == 2
-            else "OBSERVATION_STRUCTURE_NOT_READY"
-        )
+        seeded = kwargs.get("seeded_symbols")
+        if back == 2:
+            if type(seeded) is list:
+                seeded.append(symbol)
+            return scan_module._unavailable_result(  # pyright: ignore[reportPrivateUsage]
+                symbol, "LOW_PRICE_AND_CIRCUIT_DISTANCE"
+            )
         return scan_module._unavailable_result(  # pyright: ignore[reportPrivateUsage]
-            symbol, reason
+            symbol, "OBSERVATION_STRUCTURE_NOT_READY"
         )
 
     monkeypatch.setattr(scan_module, "_scan_stock", fake_scan)

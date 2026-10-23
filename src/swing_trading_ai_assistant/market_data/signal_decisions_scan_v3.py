@@ -1106,20 +1106,19 @@ def scan_signal_decisions_v3(  # noqa: C901 - lifecycle orchestration
                 if state is None:
                     missing.append(symbol)
             if missing:
-                seeded_prior = 0
+                seeded_prior: list[str] = []
                 for symbol in missing:
-                    pre = _scan_stock(
+                    _scan_stock(
                         symbol,
                         storage_root,
                         refresh,
                         industry_map.get(symbol, "Unknown"),
                         benchmark_median,
                         None,
+                        seeded_symbols=seeded_prior,
                         sessions_back=selected_back + 1,
                     )
-                    if pre[4] == "OBSERVATION_PAIR_SEEDED_BOOTSTRAP":
-                        seeded_prior += 1
-                bootstrap_pair = seeded_prior > 0
+                bootstrap_pair = bool(seeded_prior)
 
     for symbol in target_symbols:
         ind = industry_map.get(symbol, "Unknown")
