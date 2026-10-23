@@ -154,8 +154,9 @@ scan under the private `scanner-pair-state-v1/` namespace:
    `OBSERVATION_PAIR_SEEDED_BOOTSTRAP`, and the CLI writes a `BOOTSTRAP:` warning
    to stderr whenever any symbol seeded, independent of safety precedence. When
    the newest closed session's data is not published yet, the scan binds the
-   latest available completed session and writes `LATEST_AVAILABLE` instead of
-   failing the run. A
+   latest available completed session and writes `LATEST_AVAILABLE`; an
+   explicit `--sessions-back N` binds older sessions (e.g. `2` then `1` to
+   bootstrap the newest available pair) and writes `SESSIONS_BACK`. A
    no-refresh first scan with an unreadable/stale retained handle reports
    `OBSERVATION_PAIR_BOOTSTRAP_REQUIRES_REFRESH`.
 2. A later distinct admitted observation forms the exact previous/current pair,

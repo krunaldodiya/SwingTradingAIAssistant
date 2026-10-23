@@ -10,10 +10,11 @@ A runtime-identity change starts a new generation. Its first scan **with
 `--refresh`** has no admitted predecessor for any symbol, seeds one current
 observation per symbol, and reports `OBSERVATION_PAIR_SEEDED_BOOTSTRAP` on those rows.
 That reason covers both a genuine first-use root and a post-reset generation; a
-normal zero-candidate day never uses it. If the newest officially closed session
-has not been published yet, the scanner binds the latest available completed
-session instead of failing: it probes once, then scans with that session and
-writes `LATEST_AVAILABLE` on stderr. The scan CLI also writes a `BOOTSTRAP:`
+normal zero-candidate day never uses it. The scanner resolves the newest completed session whose data is actually
+available and never blocks on an unpublished session: it probes once, falls
+back one session, and `--sessions-back N` exposes deeper historical runs (for
+example, bootstrapping the newest two available sessions). Fallback runs write
+`LATEST_AVAILABLE` (or `SESSIONS_BACK`) on stderr. The scan CLI also writes a `BOOTSTRAP:`
 warning to stderr whenever any symbol seeded state, independent of the per-row
 safety precedence. A no-refresh first scan with an unreadable/stale retained
 handle reports `OBSERVATION_PAIR_BOOTSTRAP_REQUIRES_REFRESH` instead of a provider
