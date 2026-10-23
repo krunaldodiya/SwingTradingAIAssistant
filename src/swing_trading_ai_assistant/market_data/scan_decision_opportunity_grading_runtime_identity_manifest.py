@@ -15,6 +15,6 @@ SCAN_DECISION_OPPORTUNITY_GRADING_RUNTIME_SOURCE_SHA256_V1: Final[dict[str, str]
     "src/swing_trading_ai_assistant/market_data/signal_decisions_v3_cli.py": "aeded8802891aae6783514f3a006d14044629f0ac81664221fb87afad0063ed8",
     "src/swing_trading_ai_assistant/market_data/stock_observations.py": "01e59ddaa39d3d0020c5e7ee51dfa5a88a0ffee6d5f950f88f2a3ceabe0d585e",
     "src/swing_trading_ai_assistant/market_data/current_stock_research.py": "1cb067767faa60dd6a35ff44e434b2cc2e071f3cfbb71cd371c6b8a781ba590e",
-    "src/swing_trading_ai_assistant/market_data/signal_decisions_scan_v3.py": "c19ab4de5412574a1bfb36c73403152023c276293e16bc78feaadee66834e645",
-    "src/swing_trading_ai_assistant/market_data/signal_decisions_scan_v3_runtime_identity_manifest.py": "d5bc024b75d7a97fe9097ed6d1af63e2be16bc8b128d30013117a1d3220485fa",
+    "src/swing_trading_ai_assistant/market_data/signal_decisions_scan_v3.py": "e2745b413a823de9f4ce0518121e3c384c1568e04cb4e3635bd33eaed4495f8e",
+    "src/swing_trading_ai_assistant/market_data/signal_decisions_scan_v3_runtime_identity_manifest.py": "4a7c31d5ccf8fe92b22e7fc4ae327bbf9554238f45310cb678ef657aeb01dfd6",
 }

@@ -1208,3 +1208,41 @@ def test_scan_bootstrap_warning_survives_eligibility_exception(
     state = read_scanner_pair_state_v1(tmp_path, _SYMBOL)
     assert state is not None
     assert state.sequence == 1
+
+
+def test_scan_uses_latest_available_session_when_today_unpublished(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    symbols = ("RELIANCE",)
+    seen: list[bool] = []
+
+    def fake_resolve(
+        *_args: object, **_kwargs: object
+    ) -> tuple[tuple[str, ...], str, frozenset[str], dict[str, object] | None]:
+        return (symbols, "NIFTY_200", frozenset(symbols), {"source": "test"})
+
+    monkeypatch.setattr(scan_module, "_resolve_target_symbols", fake_resolve)
+    monkeypatch.setattr(
+        scan_module,
+        "research_current_stock_v2",
+        lambda *_args, **_kwargs: type("R", (), {"status": "NOT_READY"})(),
+    )
+
+    def fake_scan(symbol: str, *args: object) -> tuple[object, ...]:
+        seen.append(bool(args[-1]))
+        return scan_module._unavailable_result(  # pyright: ignore[reportPrivateUsage]
+            symbol, "OBSERVATION_STRUCTURE_NOT_READY"
+        )
+
+    monkeypatch.setattr(scan_module, "_scan_stock", fake_scan)
+
+    warnings: list[str] = []
+    scan_signal_decisions_v3(
+        tmp_path, symbols=symbols, refresh=True, clock=lambda: _NOW, warnings=warnings
+    )
+
+    assert seen == [True]
+    assert warnings == [
+        "LATEST_AVAILABLE: today's completed session is not published; "
+        "this page binds the latest available completed session."
+    ]

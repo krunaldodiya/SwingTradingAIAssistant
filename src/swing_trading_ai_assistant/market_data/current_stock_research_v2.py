@@ -532,8 +532,13 @@ def research_current_stock_v2(
     snapshot_transport: HttpTransport | None = None,
     price_client: BharatStockClient | None = None,
     terminal_missing_diagnostic: bool = False,
+    previous_session: bool = False,
 ) -> CurrentStockResearchResultV2:
-    """Acquire independent price windows and compose a truthful V5 result."""
+    """Acquire independent price windows and compose a truthful V5 result.
+
+    ``previous_session`` binds the latest available completed session when the
+    newest officially closed session has not been published yet.
+    """
     if question not in _REQUIRED:
         raise legacy.CurrentStockResearchInputError("unsupported research question")
     try:
@@ -546,7 +551,7 @@ def research_current_stock_v2(
             calendar_transport=calendar_transport,
             snapshot_transport=snapshot_transport,
             price_client=price_client,
-            previous_session=False,
+            previous_session=previous_session,
             terminal_missing_diagnostic=terminal_missing_diagnostic,
             selection_override=None,
             deadline_override=None,

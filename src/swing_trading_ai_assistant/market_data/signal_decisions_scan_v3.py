@@ -682,6 +682,7 @@ def _scan_stock(  # noqa: C901 - multi-family screening and anti-manipulation ga
     benchmark_median_return: Decimal,
     retained_handle: str | None = None,
     seeded_symbols: list[str] | None = None,
+    previous_session: bool = False,
 ) -> tuple[dict[str, object], bool, str, str | None, str | None, str, str | None]:
     """Execute the canonical pair policy, safety eligibility, and brief generation.
 
@@ -715,6 +716,7 @@ def _scan_stock(  # noqa: C901 - multi-family screening and anti-manipulation ga
                 storage_root,
                 question="CURRENT_STRUCTURE",
                 refresh=refresh,
+                previous_session=previous_session,
             )
             handle = record_stock_observation_v1(storage_root, obs_result)
     except Exception:
@@ -1009,6 +1011,18 @@ def scan_signal_decisions_v3(  # noqa: C901 - lifecycle orchestration
     unknown_count = 0
     retained_handles = {} if refresh else _retained_structure_handles(storage_root)
     seeded_symbols: list[str] = []
+    previous_session = False
+    if refresh and target_symbols:
+        try:
+            probe = research_current_stock_v2(
+                target_symbols[0],
+                storage_root,
+                question="CURRENT_STRUCTURE",
+                refresh=True,
+            )
+            previous_session = probe.status != "READY"
+        except Exception:  # noqa: BLE001 - the per-symbol boundary reports this
+            previous_session = False
 
     for symbol in target_symbols:
         ind = industry_map.get(symbol, "Unknown")
@@ -1028,6 +1042,7 @@ def scan_signal_decisions_v3(  # noqa: C901 - lifecycle orchestration
             benchmark_median,
             retained_handles.get(symbol),
             seeded_symbols,
+            previous_session,
         )
         trends.append(trend)
         if evidence_rows is not None:
@@ -1127,6 +1142,11 @@ def scan_signal_decisions_v3(  # noqa: C901 - lifecycle orchestration
 
     market_regime = _calculate_market_regime(trends)
 
+    if previous_session and warnings is not None:
+        warnings.append(
+            "LATEST_AVAILABLE: today's completed session is not published; "
+            "this page binds the latest available completed session."
+        )
     if seeded_symbols and warnings is not None:
         warnings.append(
             f"BOOTSTRAP: {len(seeded_symbols)} symbol(s) seeded a new pair-state "
