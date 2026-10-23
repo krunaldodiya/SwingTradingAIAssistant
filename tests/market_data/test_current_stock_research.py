@@ -4181,3 +4181,32 @@ def test_agent_research_run_terminal_mapping_failure_has_typed_missing_facts(
     assert [item["availability"] for item in row["context"]] == ["NOT_ATTEMPTED"] * 3
     assert report["jointly_comparable"] is False
     assert prices.calls == []
+
+
+def test_producer_identity_excludes_decision_projection(monkeypatch):
+    import swing_trading_ai_assistant.market_data.current_stock_research_v2 as producer
+    from swing_trading_ai_assistant.market_data.current_stock_research_runtime_identity_manifest import (
+        CURRENT_STOCK_RESEARCH_RUNTIME_SOURCE_SHA256_V1,
+    )
+    from swing_trading_ai_assistant.market_data.current_stock_research_v2_runtime_identity_manifest import (
+        CURRENT_STOCK_RESEARCH_RUNTIME_SOURCE_SHA256_V2,
+    )
+
+    paths = {
+        **CURRENT_STOCK_RESEARCH_RUNTIME_SOURCE_SHA256_V1,
+        **CURRENT_STOCK_RESEARCH_RUNTIME_SOURCE_SHA256_V2,
+    }
+    assert not any("setup_screen" in path for path in paths)
+
+    seen = []
+    original = producer.runtime_source_sha256
+
+    def spy(module_name, root, relative):
+        seen.append(relative)
+        return original(module_name, root, relative)
+
+    monkeypatch.setattr(producer, "runtime_source_sha256", spy)
+    producer._runtime_identity()
+
+    assert seen
+    assert not any("setup_screen" in path for path in seen)

@@ -148,7 +148,9 @@ scan under the private `scanner-pair-state-v1/` namespace:
 
 1. The first admitted observation seeds the state and the symbol is reported as
    an explicit non-candidate (`INSUFFICIENT_OBSERVATION_PAIR`); no predecessor is
-   fabricated.
+   fabricated. A runtime-identity change starts a new generation, so its first
+   scan is a bootstrap of this kind for every symbol and is not a no-candidate
+   market result.
 2. A later distinct admitted observation forms the exact previous/current pair,
    is evaluated by the canonical policy, and only then advances the state.
 3. Re-scanning the same admitted observation replays the canonical policy result

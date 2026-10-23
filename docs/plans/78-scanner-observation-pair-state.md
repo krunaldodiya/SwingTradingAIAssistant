@@ -6,6 +6,13 @@ Status: accepted bounded contract under [Issue #329](https://github.com/krunaldo
 
 `signal-decisions scan` uses the existing immutable `CURRENT_STRUCTURE` observations to form one exact prior/current pair per symbol for the existing Plan 70 policy (`evaluate_signal_decision_from_records_v3`). A bounded private scanner-state record maps each canonical symbol to the last admitted current observation handle. On each successful later observation, that handle becomes `previous`; the new admitted handle is `current`; only then may the scanner invoke the Plan 70 policy.
 
+A runtime-identity change starts a new generation. Its first scan has no admitted
+predecessor for any symbol, seeds one current observation per symbol, and reports
+`INSUFFICIENT_OBSERVATION_PAIR` on those rows. That page is a state bootstrap, not
+a candidate result, and must not be reported as a no-candidate market day. The
+second scan in the generation pairs the seeded observation with the next admitted
+observation and evaluates the policy normally.
+
 First observation has no predecessor and returns an explicit non-candidate state (`INSUFFICIENT_OBSERVATION_PAIR`). Repeated identical observations are handled by the existing policy as replay (canonical replay result, `NO_TRADE`/no new confirmation, state unchanged); no fallback or invented pair exists. Pair state is advanced only after observation admission and policy evaluation succeed; malformed, unavailable, conflicting, interrupted, or incompatible state never substitutes another handle.
 
 ## State contract

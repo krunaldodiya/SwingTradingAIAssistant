@@ -55,7 +55,7 @@ MARKET_DATA_RUNTIME_SOURCE_SHA256_V1: Final[dict[str, str]] = {
     "current_same_pass_daily_v4.py": "1a423896676eb4b983c58ca5035bf29f29156fefd3b982462168c5e6232ec402",
     "current_same_pass_daily_v4_runtime_identity_manifest.py": "15661e2d022afc5314fa690bafe130178a3d8f584e107a32b61d90bb5202edfb",
     "current_stock_research.py": "1cb067767faa60dd6a35ff44e434b2cc2e071f3cfbb71cd371c6b8a781ba590e",
-    "current_stock_research_runtime_identity_manifest.py": "7948676003405e0b1a707316a2e2710caee4aec074849e8006af6a12379f2ba4",
+    "current_stock_research_runtime_identity_manifest.py": "a05e13caf172fa2e9e0d1d4a1faff71cc090918bd24597c0492e5beaf98e1668",
     "current_stock_research_v2.py": "5fefdd72b70496d4526b50d447e7720cca703525b3c24c006051d8f13dea42e7",
     "current_stock_research_v2_runtime_identity_manifest.py": "e06ec428bb616d1f6ef3f2be05b2236c1aa75d7ea0041cb2bf2f4a22f8dd960b",
     "daily_ohlcv.py": "dd0dab2e0b1cc0f1fa1365593475e492e1bd7fcfed58ed3e9aa02352fa52301c",
