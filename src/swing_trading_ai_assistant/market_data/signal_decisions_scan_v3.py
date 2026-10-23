@@ -674,6 +674,29 @@ def _retained_unselected_stocks(
     return retained
 
 
+def _structure_session(packet: object) -> date | None:
+    slots = getattr(packet, "feature_slots", None)
+    if type(slots) is not tuple:
+        return None
+    for slot in slots:
+        if getattr(slot, "feature", None) == "MARKET_STRUCTURE":
+            sessions = getattr(slot, "requested_sessions", ())
+            return sessions[-1] if sessions else None
+    return None
+
+
+def _latest_session_missing(result: object) -> bool:
+    packet = getattr(result, "packet", None)
+    if packet is None or getattr(packet, "execution_state", None) != "COMPLETED":
+        return False
+    slots = getattr(packet, "feature_slots", ())
+    return any(
+        getattr(slot, "feature", None) == "MARKET_STRUCTURE"
+        and getattr(slot, "failure_reason", None) == "LATEST_SESSION_MISSING"
+        for slot in slots
+    )
+
+
 def _scan_stock(  # noqa: C901 - multi-family screening and anti-manipulation gate
     symbol: str,
     storage_root: Path,
@@ -683,6 +706,7 @@ def _scan_stock(  # noqa: C901 - multi-family screening and anti-manipulation ga
     retained_handle: str | None = None,
     seeded_symbols: list[str] | None = None,
     sessions_back: int = 0,
+    bound_symbols: list[str] | None = None,
 ) -> tuple[dict[str, object], bool, str, str | None, str | None, str, str | None]:
     """Execute the canonical pair policy, safety eligibility, and brief generation.
 
@@ -747,6 +771,24 @@ def _scan_stock(  # noqa: C901 - multi-family screening and anti-manipulation ga
                 storage_root, handle, handle
             )
         else:
+            current_session = _structure_session(obs_result.packet)
+            try:
+                stored = read_stock_observation_v1(
+                    storage_root, state.current_observation_identity_sha256
+                )
+                stored_session = _structure_session(stored.packet)
+            except Exception:  # noqa: BLE001 - pair state remains fail-closed
+                stored_session = None
+            if (
+                current_session is not None
+                and stored_session is not None
+                and current_session <= stored_session
+            ):
+                return _unavailable_result(
+                    symbol, "OBSERVATION_PAIR_AWAITING_NEXT_SESSION"
+                )
+            if sessions_back and bound_symbols is not None:
+                bound_symbols.append(symbol)
             policy_result = evaluate_signal_decision_from_records_v3(
                 storage_root,
                 state.current_observation_identity_sha256,
@@ -988,6 +1030,10 @@ def scan_signal_decisions_v3(  # noqa: C901 - lifecycle orchestration
     sessions_back: int | None = None,
 ) -> dict[str, object]:
     """Scan one exact retained universe or an explicit equity list."""
+    if sessions_back is not None and (
+        type(sessions_back) is not int or not 0 <= sessions_back <= 10
+    ):
+        raise ValueError("invalid sessions back")
     if not storage_root.is_absolute():
         raise ValueError("invalid storage root")
 
@@ -1012,6 +1058,7 @@ def scan_signal_decisions_v3(  # noqa: C901 - lifecycle orchestration
     unknown_count = 0
     retained_handles = {} if refresh else _retained_structure_handles(storage_root)
     seeded_symbols: list[str] = []
+    bound_symbols: list[str] = []
     selected_back = 0 if sessions_back is None else sessions_back
     if sessions_back is None and refresh and target_symbols:
         try:
@@ -1021,7 +1068,9 @@ def scan_signal_decisions_v3(  # noqa: C901 - lifecycle orchestration
                 question="CURRENT_STRUCTURE",
                 refresh=True,
             )
-            selected_back = 1 if probe.status != "READY" else 0
+            selected_back = (
+                1 if probe.status != "READY" and _latest_session_missing(probe) else 0
+            )
         except Exception:  # noqa: BLE001 - the per-symbol boundary reports this
             selected_back = 0
 
@@ -1043,7 +1092,8 @@ def scan_signal_decisions_v3(  # noqa: C901 - lifecycle orchestration
             benchmark_median,
             retained_handles.get(symbol),
             seeded_symbols,
-            selected_back,
+            sessions_back=selected_back,
+            bound_symbols=bound_symbols,
         )
         trends.append(trend)
         if evidence_rows is not None:
@@ -1143,11 +1193,11 @@ def scan_signal_decisions_v3(  # noqa: C901 - lifecycle orchestration
 
     market_regime = _calculate_market_regime(trends)
 
-    if selected_back and warnings is not None:
+    if bound_symbols and warnings is not None:
         label = "LATEST_AVAILABLE" if sessions_back is None else "SESSIONS_BACK"
         warnings.append(
-            f"{label}: bound {selected_back} completed session(s) before the "
-            "newest official close; this page uses the latest available data."
+            f"{label}: {len(bound_symbols)} symbol(s) bound a completed session "
+            f"{selected_back} before the newest official close."
         )
     if seeded_symbols and warnings is not None:
         warnings.append(

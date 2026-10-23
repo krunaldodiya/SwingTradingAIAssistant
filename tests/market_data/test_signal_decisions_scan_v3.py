@@ -1214,22 +1214,38 @@ def test_scan_uses_latest_available_session_when_today_unpublished(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     symbols = ("RELIANCE",)
-    seen: list[bool] = []
+    seen: list[int] = []
 
     def fake_resolve(
         *_args: object, **_kwargs: object
     ) -> tuple[tuple[str, ...], str, frozenset[str], dict[str, object] | None]:
         return (symbols, "NIFTY_200", frozenset(symbols), {"source": "test"})
 
+    slot = type(
+        "Slot",
+        (),
+        {
+            "feature": "MARKET_STRUCTURE",
+            "requested_sessions": (date(2026, 10, 22),),
+            "failure_reason": "LATEST_SESSION_MISSING",
+            "failure_code": "INSUFFICIENT_EVIDENCE",
+        },
+    )()
+    packet = type(
+        "Packet", (), {"execution_state": "COMPLETED", "feature_slots": (slot,)}
+    )()
+    probe = type("Probe", (), {"status": "NOT_READY", "packet": packet})()
+
     monkeypatch.setattr(scan_module, "_resolve_target_symbols", fake_resolve)
     monkeypatch.setattr(
-        scan_module,
-        "research_current_stock_v2",
-        lambda *_args, **_kwargs: type("R", (), {"status": "NOT_READY"})(),
+        scan_module, "research_current_stock_v2", lambda *_args, **_kwargs: probe
     )
 
-    def fake_scan(symbol: str, *args: object) -> tuple[object, ...]:
-        seen.append(bool(args[-1]))
+    def fake_scan(symbol: str, *_args: object, **kwargs: object) -> tuple[object, ...]:
+        seen.append(cast(int, kwargs["sessions_back"]))
+        bound = kwargs.get("bound_symbols")
+        if type(bound) is list:
+            bound.append(symbol)
         return scan_module._unavailable_result(  # pyright: ignore[reportPrivateUsage]
             symbol, "OBSERVATION_STRUCTURE_NOT_READY"
         )
@@ -1243,6 +1259,54 @@ def test_scan_uses_latest_available_session_when_today_unpublished(
 
     assert seen == [1]
     assert warnings == [
-        "LATEST_AVAILABLE: bound 1 completed session(s) before the newest "
-        "official close; this page uses the latest available data."
+        "LATEST_AVAILABLE: 1 symbol(s) bound a completed session 1 before the "
+        "newest official close."
     ]
+
+
+def test_scan_does_not_fall_back_for_unrelated_not_ready(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    symbols = ("RELIANCE",)
+    seen: list[int] = []
+
+    def fake_resolve(
+        *_args: object, **_kwargs: object
+    ) -> tuple[tuple[str, ...], str, frozenset[str], dict[str, object] | None]:
+        return (symbols, "NIFTY_200", frozenset(symbols), {"source": "test"})
+
+    slot = type(
+        "Slot",
+        (),
+        {
+            "feature": "MARKET_STRUCTURE",
+            "requested_sessions": (),
+            "failure_reason": "HISTORY_INCOMPLETE",
+            "failure_code": "INSUFFICIENT_EVIDENCE",
+        },
+    )()
+    packet = type(
+        "Packet", (), {"execution_state": "COMPLETED", "feature_slots": (slot,)}
+    )()
+    probe = type("Probe", (), {"status": "NOT_READY", "packet": packet})()
+
+    monkeypatch.setattr(scan_module, "_resolve_target_symbols", fake_resolve)
+    monkeypatch.setattr(
+        scan_module, "research_current_stock_v2", lambda *_args, **_kwargs: probe
+    )
+
+    def fake_scan(symbol: str, *_args: object, **kwargs: object) -> tuple[object, ...]:
+        seen.append(cast(int, kwargs["sessions_back"]))
+        return scan_module._unavailable_result(  # pyright: ignore[reportPrivateUsage]
+            symbol, "OBSERVATION_STRUCTURE_NOT_READY"
+        )
+
+    monkeypatch.setattr(scan_module, "_scan_stock", fake_scan)
+
+    warnings: list[str] = []
+    scan_signal_decisions_v3(
+        tmp_path, symbols=symbols, refresh=True, clock=lambda: _NOW, warnings=warnings
+    )
+
+    assert seen == [0]
+    assert warnings == []
