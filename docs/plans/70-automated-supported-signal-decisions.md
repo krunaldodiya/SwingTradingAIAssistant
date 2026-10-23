@@ -203,8 +203,10 @@ safety policy and every evidence component keep their existing meaning.
   `CAUSAL_EXTENSION_EXCEEDS_ONE_RISK_UNIT`; unavailable level, low, or quote yields
   the typed `UNKNOWN` path. The limit is a fixed policy constant, not a caller
   input, and makes no return or profitability claim.
-- A newer confirmed breakout supersedes the carried event; continuity reports
-  `SUPERSEDED` rather than carrying the older event.
+- A newer confirmed breakout supersedes the carried event, including when scans
+  were skipped and the previous observation still carries the older event on its
+  final session; continuity reports `SUPERSEDED` rather than carrying the older
+  event. A same-session revision is not a supersession.
 - The scanner runtime identity changes. Previously retained pages keep their
   recorded V1 meaning and are not re-admissible under the new build; the forward
   diary starts a new evaluation segment at the first post-change page, as recorded
