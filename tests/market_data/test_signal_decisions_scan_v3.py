@@ -320,21 +320,6 @@ def test_cli_scan_subcommand_json_and_table(
         lambda *, clock: providers,
     )
 
-    code_json = cli_main(
-        [
-            "scan",
-            "--storage-root",
-            str(tmp_path),
-            "--symbol",
-            _SYMBOL,
-            "--output",
-            "json",
-        ]
-    )
-    captured_json = capsys.readouterr()
-    assert code_json == 0
-    assert "swing-trade-scan@v2" in captured_json.out
-
     code_table = cli_main(
         [
             "scan",
@@ -349,6 +334,23 @@ def test_cli_scan_subcommand_json_and_table(
     captured_table = capsys.readouterr()
     assert code_table == 0
     assert "SWING TRADING CANDIDATE SCAN" in captured_table.out
+    assert "BOOTSTRAP: 1 symbol" in captured_table.err
+
+    code_json = cli_main(
+        [
+            "scan",
+            "--storage-root",
+            str(tmp_path),
+            "--symbol",
+            _SYMBOL,
+            "--output",
+            "json",
+        ]
+    )
+    captured_json = capsys.readouterr()
+    assert code_json == 0
+    assert "swing-trade-scan@v2" in captured_json.out
+    assert "BOOTSTRAP" not in captured_json.err
 
 
 def test_cli_rejects_explicit_bound_plus_one_before_scan(
@@ -484,7 +486,7 @@ def test_scan_first_observation_records_explicit_non_candidate_state(
     assert len(rows) == 1
     assert rows[0]["decision"] == "UNKNOWN"
     assert rows[0]["safety_status"] == "ELIGIBLE"
-    assert rows[0]["failed_rule"] == "INSUFFICIENT_OBSERVATION_PAIR"
+    assert rows[0]["failed_rule"] == "OBSERVATION_PAIR_SEEDED_BOOTSTRAP"
 
     state = read_scanner_pair_state_v1(tmp_path, _SYMBOL)
     assert state is not None
@@ -688,10 +690,16 @@ def test_scan_stock_anti_manipulation_rejection_agrees_with_brief_and_ledger(
         scan_module, "research_current_stock_v2", lambda *_args, **_kwargs: observation
     )
 
-    brief, is_candidate, safety_status, _price, failed_rule, _trend, handle = (
-        scan_module._scan_stock(  # pyright: ignore[reportPrivateUsage]
-            _SYMBOL, tmp_path, False, "Testing", Decimal("0")
-        )
+    (
+        brief,
+        is_candidate,
+        safety_status,
+        _price,
+        failed_rule,
+        _trend,
+        handle,
+    ) = scan_module._scan_stock(  # pyright: ignore[reportPrivateUsage]
+        _SYMBOL, tmp_path, False, "Testing", Decimal("0")
     )
 
     assert is_candidate is False
@@ -745,7 +753,7 @@ def test_scan_preserves_every_requested_symbol_exactly_once(
     assert sorted(by_symbol) == ["RELIANCE", "ZULU"]
     assert by_symbol[_SYMBOL]["decision"] == "UNKNOWN"
     assert by_symbol[_SYMBOL]["safety_status"] == "ELIGIBLE"
-    assert by_symbol[_SYMBOL]["failed_rule"] == "INSUFFICIENT_OBSERVATION_PAIR"
+    assert by_symbol[_SYMBOL]["failed_rule"] == "OBSERVATION_PAIR_SEEDED_BOOTSTRAP"
     assert by_symbol["ZULU"]["decision"] == "UNKNOWN"
     assert by_symbol["ZULU"]["safety_status"] == "UNKNOWN"
     assert by_symbol["ZULU"]["failed_rule"] == "OBSERVATION_OR_PROVIDER_UNAVAILABLE"
@@ -787,7 +795,8 @@ def test_cli_scan_first_observation_then_pair_candidate(
     first_scan = cast(dict[str, object], json.loads(first_output.out))
     assert first_scan["candidate_count"] == 0
     first_rows = cast(list[dict[str, object]], first_scan["other_stocks"])
-    assert first_rows[0]["failed_rule"] == "INSUFFICIENT_OBSERVATION_PAIR"
+    assert first_rows[0]["failed_rule"] == "OBSERVATION_PAIR_SEEDED_BOOTSTRAP"
+    assert "BOOTSTRAP: 1 symbol" in first_output.err
 
     current = cast(
         CurrentStockResearchResultV2, _structure_observation(tmp_path, later=True)
@@ -892,10 +901,16 @@ def test_scan_stock_safety_override_drops_stale_policy_candidacy(
         scan_module, "evaluate_signal_decision_from_records_v3", spying_policy
     )
 
-    brief, is_candidate, safety_status, _price, failed_rule, _trend, handle = (
-        scan_module._scan_stock(  # pyright: ignore[reportPrivateUsage]
-            _SYMBOL, tmp_path, True, "Testing", Decimal("0")
-        )
+    (
+        brief,
+        is_candidate,
+        safety_status,
+        _price,
+        failed_rule,
+        _trend,
+        handle,
+    ) = scan_module._scan_stock(  # pyright: ignore[reportPrivateUsage]
+        _SYMBOL, tmp_path, True, "Testing", Decimal("0")
     )
 
     assert recorded
@@ -1094,3 +1109,102 @@ def test_build_trade_brief_non_candidate_claims_unchanged() -> None:
     ]
     assert "policy_decision" not in brief
     assert "optional_context" not in brief
+
+
+def test_no_refresh_bootstrap_with_stale_handle_requires_refresh(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    observation = cast(CurrentStockResearchResultV2, _structure_observation(tmp_path))
+    handle = record_stock_observation_v1(tmp_path, observation)
+    monkeypatch.setattr(
+        scan_module,
+        "_retained_structure_handles",
+        lambda root: {_SYMBOL: handle},
+    )
+    original = scan_module.read_stock_observation_v1
+
+    def guarded(root, candidate):
+        if candidate == handle:
+            raise RuntimeError("stale generation")
+        return original(root, candidate)
+
+    monkeypatch.setattr(scan_module, "read_stock_observation_v1", guarded)
+
+    result = scan_signal_decisions_v3(tmp_path, symbols=(_SYMBOL,), clock=lambda: _NOW)
+
+    rows = cast(list[dict[str, object]], result["other_stocks"])
+    assert rows[0]["failed_rule"] == "OBSERVATION_PAIR_BOOTSTRAP_REQUIRES_REFRESH"
+    assert read_scanner_pair_state_v1(tmp_path, _SYMBOL) is None
+
+
+def test_scan_bootstrap_warning_survives_safety_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    observation = cast(CurrentStockResearchResultV2, _structure_observation(tmp_path))
+    source = observation.packet.source("MARKET_STRUCTURE")
+    assert source is not None
+    _install_providers(
+        monkeypatch,
+        _Providers(
+            _quote(source.admitted_sessions[-1]),
+            _history(observation),
+            _actions(observation),
+        ),
+    )
+    monkeypatch.setattr(
+        scan_module, "research_current_stock_v2", lambda *_args, **_kwargs: observation
+    )
+
+    warnings: list[str] = []
+    result = scan_signal_decisions_v3(
+        tmp_path, symbols=(_SYMBOL,), clock=lambda: _NOW, warnings=warnings
+    )
+
+    rows = cast(list[dict[str, object]], result["other_stocks"])
+    assert rows[0]["safety_status"] == "INELIGIBLE"
+    assert str(rows[0]["failed_rule"]).startswith("ILLIQUID_SMALLCAP_EXCLUDED")
+    assert warnings == [
+        "BOOTSTRAP: 1 symbol(s) seeded a new pair-state generation; "
+        "this page is not a no-candidate market result."
+    ]
+
+
+def test_scan_bootstrap_warning_survives_eligibility_exception(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    observation = cast(CurrentStockResearchResultV2, _structure_observation(tmp_path))
+    source = observation.packet.source("MARKET_STRUCTURE")
+    assert source is not None
+    _install_providers(
+        monkeypatch,
+        _Providers(
+            _quote(source.admitted_sessions[-1]),
+            _history(observation),
+            _actions(observation),
+        ),
+    )
+    monkeypatch.setattr(
+        scan_module, "research_current_stock_v2", lambda *_args, **_kwargs: observation
+    )
+
+    def raising_eligibility(*_args: object, **_kwargs: object) -> dict[str, object]:
+        raise RuntimeError("eligibility provider down")
+
+    monkeypatch.setattr(
+        scan_module, "evaluate_stock_eligibility_from_record_v3", raising_eligibility
+    )
+
+    warnings: list[str] = []
+    result = scan_signal_decisions_v3(
+        tmp_path, symbols=(_SYMBOL,), clock=lambda: _NOW, warnings=warnings
+    )
+
+    rows = cast(list[dict[str, object]], result["other_stocks"])
+    assert rows[0]["failed_rule"] == "OBSERVATION_OR_PROVIDER_UNAVAILABLE"
+    assert warnings == [
+        "BOOTSTRAP: 1 symbol(s) seeded a new pair-state generation; "
+        "this page is not a no-candidate market result."
+    ]
+    state = read_scanner_pair_state_v1(tmp_path, _SYMBOL)
+    assert state is not None
+    assert state.sequence == 1

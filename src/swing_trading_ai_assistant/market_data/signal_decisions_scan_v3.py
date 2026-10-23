@@ -681,6 +681,7 @@ def _scan_stock(  # noqa: C901 - multi-family screening and anti-manipulation ga
     industry: str,
     benchmark_median_return: Decimal,
     retained_handle: str | None = None,
+    seeded_symbols: list[str] | None = None,
 ) -> tuple[dict[str, object], bool, str, str | None, str | None, str, str | None]:
     """Execute the canonical pair policy, safety eligibility, and brief generation.
 
@@ -700,7 +701,14 @@ def _scan_stock(  # noqa: C901 - multi-family screening and anti-manipulation ga
             obs_result = read_stock_observation_v1(storage_root, handle)
         elif retained_handle is not None and not refresh:
             handle = retained_handle
-            obs_result = read_stock_observation_v1(storage_root, handle)
+            try:
+                obs_result = read_stock_observation_v1(storage_root, handle)
+            except Exception:
+                if state is None:
+                    return _unavailable_result(
+                        symbol, "OBSERVATION_PAIR_BOOTSTRAP_REQUIRES_REFRESH"
+                    )
+                raise
         else:
             obs_result = research_current_stock_v2(
                 symbol,
@@ -729,7 +737,9 @@ def _scan_stock(  # noqa: C901 - multi-family screening and anti-manipulation ga
                 expected_current_observation_identity_sha256=None,
                 new_current_observation_identity_sha256=handle,
             )
-            failure_reason = "INSUFFICIENT_OBSERVATION_PAIR"
+            if seeded_symbols is not None:
+                seeded_symbols.append(symbol)
+            failure_reason = "OBSERVATION_PAIR_SEEDED_BOOTSTRAP"
         elif handle == state.current_observation_identity_sha256:
             policy_result = evaluate_signal_decision_from_records_v3(
                 storage_root, handle, handle
@@ -972,6 +982,7 @@ def scan_signal_decisions_v3(  # noqa: C901 - lifecycle orchestration
     refresh: bool = False,
     clock: Callable[[], datetime] | None = None,
     evidence_rows: list[dict[str, object]] | None = None,
+    warnings: list[str] | None = None,
 ) -> dict[str, object]:
     """Scan one exact retained universe or an explicit equity list."""
     if not storage_root.is_absolute():
@@ -997,6 +1008,7 @@ def scan_signal_decisions_v3(  # noqa: C901 - lifecycle orchestration
     ineligible_count = 0
     unknown_count = 0
     retained_handles = {} if refresh else _retained_structure_handles(storage_root)
+    seeded_symbols: list[str] = []
 
     for symbol in target_symbols:
         ind = industry_map.get(symbol, "Unknown")
@@ -1015,6 +1027,7 @@ def scan_signal_decisions_v3(  # noqa: C901 - lifecycle orchestration
             ind,
             benchmark_median,
             retained_handles.get(symbol),
+            seeded_symbols,
         )
         trends.append(trend)
         if evidence_rows is not None:
@@ -1113,6 +1126,12 @@ def scan_signal_decisions_v3(  # noqa: C901 - lifecycle orchestration
         }
 
     market_regime = _calculate_market_regime(trends)
+
+    if seeded_symbols and warnings is not None:
+        warnings.append(
+            f"BOOTSTRAP: {len(seeded_symbols)} symbol(s) seeded a new pair-state "
+            "generation; this page is not a no-candidate market result."
+        )
 
     scan_result: dict[str, object] = {
         "schema": SCHEMA,

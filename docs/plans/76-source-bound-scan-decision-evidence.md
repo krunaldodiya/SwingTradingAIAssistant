@@ -154,3 +154,21 @@ Consistent with Amendment 1:
   completed-window evidence is lost.
 - G09 series-level qualification still requires real completed windows under the
   new segment; this amendment makes no effectiveness claim.
+
+
+## Amendment 3 — 2026-10-23 (#356): producer-identity reset and retained-evidence scope
+
+The observation producer identity is no longer pinned to the decision projection
+(`setup_screen.py`), so future decision-layer changes do not start a new pair-state
+generation. This identity change itself starts one deliberate fresh generation.
+
+- Observations recorded under the previous producer identity are not readable by
+  the new producer; nothing is migrated or rewritten.
+- Retained decision-evidence pages that reference those observations report the
+  existing unavailable admission rather than re-deriving a decision. Their recorded
+  bytes and identities remain unchanged.
+- The forward diary starts a new segment at the first page produced after this
+  change. No completed 10-session window exists across the boundary.
+- The first scan of the new generation must use `--refresh`; a no-refresh first
+  scan with an unreadable/stale retained handle reports
+  `OBSERVATION_PAIR_BOOTSTRAP_REQUIRES_REFRESH`.
