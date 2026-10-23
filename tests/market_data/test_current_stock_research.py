@@ -65,6 +65,9 @@ from swing_trading_ai_assistant.market_data.current_stock_research_v2 import (
     CurrentStockResearchResultV2,
     research_current_stock_v2,
 )
+from swing_trading_ai_assistant.market_data.signal_decisions_scan_v3 import (
+    _latest_session_missing,
+)
 from swing_trading_ai_assistant.market_data.current_stock_research_v2_runtime_identity_manifest import (
     CURRENT_STOCK_RESEARCH_RUNTIME_SOURCE_SHA256_V2,
 )
@@ -1164,10 +1167,6 @@ def test_current_structure_names_a_missing_latest_provider_session(
     assert structure.availability == "INSUFFICIENT_EVIDENCE"
     assert structure.reason == "LATEST_SESSION_MISSING"
     assert structure.fact is None
-
-    from swing_trading_ai_assistant.market_data.signal_decisions_scan_v3 import (
-        _latest_session_missing,
-    )
 
     assert _latest_session_missing(result)
 
