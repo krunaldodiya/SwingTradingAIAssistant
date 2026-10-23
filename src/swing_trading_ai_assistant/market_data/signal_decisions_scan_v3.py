@@ -602,7 +602,7 @@ def _evaluate_anti_manipulation_safety(
 
 def _unavailable_result(
     symbol: str, reason: str
-) -> tuple[dict[str, object], bool, str, str | None, str | None, str, str | None, bool]:
+) -> tuple[dict[str, object], bool, str, str | None, str | None, str, str | None]:
     """Return one explicit fail-closed symbol result with no pair and no candidate."""
     brief: dict[str, object] = {
         "schema": BRIEF_SCHEMA,
@@ -617,7 +617,7 @@ def _unavailable_result(
             "forbidden_claims": [],
         },
     }
-    return brief, False, "UNKNOWN", None, reason, "INSUFFICIENT_STRUCTURE", None, False
+    return brief, False, "UNKNOWN", None, reason, "INSUFFICIENT_STRUCTURE", None
 
 
 def _optional_context_from_policy(
@@ -681,7 +681,8 @@ def _scan_stock(  # noqa: C901 - multi-family screening and anti-manipulation ga
     industry: str,
     benchmark_median_return: Decimal,
     retained_handle: str | None = None,
-) -> tuple[dict[str, object], bool, str, str | None, str | None, str, str | None, bool]:
+    seeded_symbols: list[str] | None = None,
+) -> tuple[dict[str, object], bool, str, str | None, str | None, str, str | None]:
     """Execute the canonical pair policy, safety eligibility, and brief generation.
 
     Pair state is the only source of a prior/current observation pair. The
@@ -729,7 +730,6 @@ def _scan_stock(  # noqa: C901 - multi-family screening and anti-manipulation ga
     policy_result: dict[str, object] | None = None
     failure_reason: str | None = None
     try:
-        seeded = state is None
         if state is None:
             advance_scanner_pair_state_v1(
                 storage_root,
@@ -737,6 +737,8 @@ def _scan_stock(  # noqa: C901 - multi-family screening and anti-manipulation ga
                 expected_current_observation_identity_sha256=None,
                 new_current_observation_identity_sha256=handle,
             )
+            if seeded_symbols is not None:
+                seeded_symbols.append(symbol)
             failure_reason = "OBSERVATION_PAIR_SEEDED_BOOTSTRAP"
         elif handle == state.current_observation_identity_sha256:
             policy_result = evaluate_signal_decision_from_records_v3(
@@ -874,16 +876,7 @@ def _scan_stock(  # noqa: C901 - multi-family screening and anti-manipulation ga
         optional_context=_optional_context_from_policy(decision_authority),
     )
     is_candidate = decision == "RESEARCH_CANDIDATE"
-    return (
-        brief,
-        is_candidate,
-        safety_status,
-        price_inr,
-        failed_rule,
-        trend,
-        handle,
-        seeded,
-    )
+    return brief, is_candidate, safety_status, price_inr, failed_rule, trend, handle
 
 
 _UNIVERSE_SOURCE_LISTS: Final = {
@@ -1015,7 +1008,7 @@ def scan_signal_decisions_v3(  # noqa: C901 - lifecycle orchestration
     ineligible_count = 0
     unknown_count = 0
     retained_handles = {} if refresh else _retained_structure_handles(storage_root)
-    seeded_symbols = 0
+    seeded_symbols: list[str] = []
 
     for symbol in target_symbols:
         ind = industry_map.get(symbol, "Unknown")
@@ -1027,7 +1020,6 @@ def scan_signal_decisions_v3(  # noqa: C901 - lifecycle orchestration
             failed_rule,
             trend,
             observation_handle,
-            seeded,
         ) = _scan_stock(
             symbol,
             storage_root,
@@ -1035,10 +1027,9 @@ def scan_signal_decisions_v3(  # noqa: C901 - lifecycle orchestration
             ind,
             benchmark_median,
             retained_handles.get(symbol),
+            seeded_symbols,
         )
         trends.append(trend)
-        if seeded:
-            seeded_symbols += 1
         if evidence_rows is not None:
             evidence_rows.append(
                 {
@@ -1138,7 +1129,7 @@ def scan_signal_decisions_v3(  # noqa: C901 - lifecycle orchestration
 
     if seeded_symbols and warnings is not None:
         warnings.append(
-            f"BOOTSTRAP: {seeded_symbols} symbol(s) seeded a new pair-state "
+            f"BOOTSTRAP: {len(seeded_symbols)} symbol(s) seeded a new pair-state "
             "generation; this page is not a no-candidate market result."
         )
 

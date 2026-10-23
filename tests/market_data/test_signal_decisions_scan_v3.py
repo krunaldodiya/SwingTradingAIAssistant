@@ -320,21 +320,6 @@ def test_cli_scan_subcommand_json_and_table(
         lambda *, clock: providers,
     )
 
-    code_json = cli_main(
-        [
-            "scan",
-            "--storage-root",
-            str(tmp_path),
-            "--symbol",
-            _SYMBOL,
-            "--output",
-            "json",
-        ]
-    )
-    captured_json = capsys.readouterr()
-    assert code_json == 0
-    assert "swing-trade-scan@v2" in captured_json.out
-
     code_table = cli_main(
         [
             "scan",
@@ -349,6 +334,23 @@ def test_cli_scan_subcommand_json_and_table(
     captured_table = capsys.readouterr()
     assert code_table == 0
     assert "SWING TRADING CANDIDATE SCAN" in captured_table.out
+    assert "BOOTSTRAP: 1 symbol" in captured_table.err
+
+    code_json = cli_main(
+        [
+            "scan",
+            "--storage-root",
+            str(tmp_path),
+            "--symbol",
+            _SYMBOL,
+            "--output",
+            "json",
+        ]
+    )
+    captured_json = capsys.readouterr()
+    assert code_json == 0
+    assert "swing-trade-scan@v2" in captured_json.out
+    assert "BOOTSTRAP" not in captured_json.err
 
 
 def test_cli_rejects_explicit_bound_plus_one_before_scan(
@@ -696,7 +698,6 @@ def test_scan_stock_anti_manipulation_rejection_agrees_with_brief_and_ledger(
         failed_rule,
         _trend,
         handle,
-        _seeded,
     ) = scan_module._scan_stock(  # pyright: ignore[reportPrivateUsage]
         _SYMBOL, tmp_path, False, "Testing", Decimal("0")
     )
@@ -795,6 +796,7 @@ def test_cli_scan_first_observation_then_pair_candidate(
     assert first_scan["candidate_count"] == 0
     first_rows = cast(list[dict[str, object]], first_scan["other_stocks"])
     assert first_rows[0]["failed_rule"] == "OBSERVATION_PAIR_SEEDED_BOOTSTRAP"
+    assert "BOOTSTRAP: 1 symbol" in first_output.err
 
     current = cast(
         CurrentStockResearchResultV2, _structure_observation(tmp_path, later=True)
@@ -907,7 +909,6 @@ def test_scan_stock_safety_override_drops_stale_policy_candidacy(
         failed_rule,
         _trend,
         handle,
-        _seeded,
     ) = scan_module._scan_stock(  # pyright: ignore[reportPrivateUsage]
         _SYMBOL, tmp_path, True, "Testing", Decimal("0")
     )
@@ -974,7 +975,7 @@ def test_scan_retains_capacity_overflow_and_every_universe_symbol(
 
     def fake_scan(
         symbol: str, *_args: object, **_kwargs: object
-    ) -> tuple[dict[str, object], bool, str, str, None, str, None, bool]:
+    ) -> tuple[dict[str, object], bool, str, str, None, str, None]:
         brief: dict[str, object] = {
             "schema": BRIEF_SCHEMA,
             "symbol": symbol,
@@ -986,7 +987,7 @@ def test_scan_retains_capacity_overflow_and_every_universe_symbol(
             "safety_eligibility": {"status": "ELIGIBLE", "explanation_ledger": []},
             "ai_guidance": {"allowed_claims": [], "forbidden_claims": []},
         }
-        return brief, True, "ELIGIBLE", "100.00", None, "UPTREND", None, False
+        return brief, True, "ELIGIBLE", "100.00", None, "UPTREND", None
 
     monkeypatch.setattr(scan_module, "_resolve_target_symbols", fake_resolve)
     monkeypatch.setattr(scan_module, "_scan_stock", fake_scan)
@@ -1166,3 +1167,44 @@ def test_scan_bootstrap_warning_survives_safety_override(
         "BOOTSTRAP: 1 symbol(s) seeded a new pair-state generation; "
         "this page is not a no-candidate market result."
     ]
+
+
+def test_scan_bootstrap_warning_survives_eligibility_exception(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    observation = cast(CurrentStockResearchResultV2, _structure_observation(tmp_path))
+    source = observation.packet.source("MARKET_STRUCTURE")
+    assert source is not None
+    _install_providers(
+        monkeypatch,
+        _Providers(
+            _quote(source.admitted_sessions[-1]),
+            _history(observation),
+            _actions(observation),
+        ),
+    )
+    monkeypatch.setattr(
+        scan_module, "research_current_stock_v2", lambda *_args, **_kwargs: observation
+    )
+
+    def raising_eligibility(*_args: object, **_kwargs: object) -> dict[str, object]:
+        raise RuntimeError("eligibility provider down")
+
+    monkeypatch.setattr(
+        scan_module, "evaluate_stock_eligibility_from_record_v3", raising_eligibility
+    )
+
+    warnings: list[str] = []
+    result = scan_signal_decisions_v3(
+        tmp_path, symbols=(_SYMBOL,), clock=lambda: _NOW, warnings=warnings
+    )
+
+    rows = cast(list[dict[str, object]], result["other_stocks"])
+    assert rows[0]["failed_rule"] == "OBSERVATION_OR_PROVIDER_UNAVAILABLE"
+    assert warnings == [
+        "BOOTSTRAP: 1 symbol(s) seeded a new pair-state generation; "
+        "this page is not a no-candidate market result."
+    ]
+    state = read_scanner_pair_state_v1(tmp_path, _SYMBOL)
+    assert state is not None
+    assert state.sequence == 1
