@@ -260,8 +260,13 @@ and why.
 Use the latest completed official session and never mix sessions. The owner's
 recorded current-day capture rule (at or after 20:00 IST; see
 `docs/notes/2026-09-22-next-sprint-and-linux-handoff.md`) governs when to attempt
-today's current-session capture; the scheduled after-close run is the diary's
-current-session pass. Before a pass, check the owner's private research ledger;
+today's current-session capture; the scheduled 20:30 IST after-close run is the
+diary's current-session pass. These time rules govern capture and the automatic
+diary, not whether research may be requested or executed: an on-demand research
+pass is allowed at any time. Before the current day's session data is published,
+a pass uses the latest completed official session (live quotes inform safety
+only); state that limitation rather than refusing or deferring the request.
+Before a pass, check the owner's private research ledger;
 if it already holds a pass on the same question, scope, and data cutoff with
 unchanged material inputs, report the prior outcome and ask before rerunning.
 After a real pass, ask before storing an entry (default store; full detail;

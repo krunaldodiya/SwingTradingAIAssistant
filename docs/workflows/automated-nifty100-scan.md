@@ -32,6 +32,12 @@ Nifty 100 priority and the conditional N200-ex-N100 tier-2 fill; Nifty 50,
 Nifty Next 50, and Nifty 100 scans are exact with no cross-universe gap fill.
 Nifty 500 is retired as a runtime scan universe.
 
+**Timing.** Scans and research commands may be run at any time. The scheduled
+nightly runner (`~/daily-scan/run.sh`) carries an 08:00–19:59 IST skip so the
+diary does not capture intraday or not-yet-published data; that guard applies to
+the scheduled job only and does not restrict on-demand scans or `market-data`
+research commands.
+
 ```bash
 doppler run -- signal-decisions scan \
   --storage-root /absolute/path/to/SwingTradingAIAssistantData \
