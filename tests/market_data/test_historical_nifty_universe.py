@@ -85,7 +85,7 @@ def _run(
     calls: list[str] = []
 
     def fake_stock(
-        symbol: str, *_: object
+        symbol: str, *_: object, **__: object
     ) -> tuple[dict[str, object], bool, str, str, None, str, None]:
         calls.append(symbol)
         candidate = symbol in candidates
