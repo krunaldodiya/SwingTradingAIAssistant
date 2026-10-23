@@ -484,7 +484,7 @@ def test_scan_first_observation_records_explicit_non_candidate_state(
     assert len(rows) == 1
     assert rows[0]["decision"] == "UNKNOWN"
     assert rows[0]["safety_status"] == "ELIGIBLE"
-    assert rows[0]["failed_rule"] == "INSUFFICIENT_OBSERVATION_PAIR"
+    assert rows[0]["failed_rule"] == "OBSERVATION_PAIR_SEEDED_BOOTSTRAP"
 
     state = read_scanner_pair_state_v1(tmp_path, _SYMBOL)
     assert state is not None
@@ -745,7 +745,7 @@ def test_scan_preserves_every_requested_symbol_exactly_once(
     assert sorted(by_symbol) == ["RELIANCE", "ZULU"]
     assert by_symbol[_SYMBOL]["decision"] == "UNKNOWN"
     assert by_symbol[_SYMBOL]["safety_status"] == "ELIGIBLE"
-    assert by_symbol[_SYMBOL]["failed_rule"] == "INSUFFICIENT_OBSERVATION_PAIR"
+    assert by_symbol[_SYMBOL]["failed_rule"] == "OBSERVATION_PAIR_SEEDED_BOOTSTRAP"
     assert by_symbol["ZULU"]["decision"] == "UNKNOWN"
     assert by_symbol["ZULU"]["safety_status"] == "UNKNOWN"
     assert by_symbol["ZULU"]["failed_rule"] == "OBSERVATION_OR_PROVIDER_UNAVAILABLE"
@@ -787,7 +787,7 @@ def test_cli_scan_first_observation_then_pair_candidate(
     first_scan = cast(dict[str, object], json.loads(first_output.out))
     assert first_scan["candidate_count"] == 0
     first_rows = cast(list[dict[str, object]], first_scan["other_stocks"])
-    assert first_rows[0]["failed_rule"] == "INSUFFICIENT_OBSERVATION_PAIR"
+    assert first_rows[0]["failed_rule"] == "OBSERVATION_PAIR_SEEDED_BOOTSTRAP"
 
     current = cast(
         CurrentStockResearchResultV2, _structure_observation(tmp_path, later=True)
@@ -1094,3 +1094,29 @@ def test_build_trade_brief_non_candidate_claims_unchanged() -> None:
     ]
     assert "policy_decision" not in brief
     assert "optional_context" not in brief
+
+
+def test_no_refresh_bootstrap_with_stale_handle_requires_refresh(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    observation = cast(CurrentStockResearchResultV2, _structure_observation(tmp_path))
+    handle = record_stock_observation_v1(tmp_path, observation)
+    monkeypatch.setattr(
+        scan_module,
+        "_retained_structure_handles",
+        lambda root: {_SYMBOL: handle},
+    )
+    original = scan_module.read_stock_observation_v1
+
+    def guarded(root, candidate):
+        if candidate == handle:
+            raise RuntimeError("stale generation")
+        return original(root, candidate)
+
+    monkeypatch.setattr(scan_module, "read_stock_observation_v1", guarded)
+
+    result = scan_signal_decisions_v3(tmp_path, symbols=(_SYMBOL,), clock=lambda: _NOW)
+
+    rows = cast(list[dict[str, object]], result["other_stocks"])
+    assert rows[0]["failed_rule"] == "OBSERVATION_PAIR_BOOTSTRAP_REQUIRES_REFRESH"
+    assert read_scanner_pair_state_v1(tmp_path, _SYMBOL) is None

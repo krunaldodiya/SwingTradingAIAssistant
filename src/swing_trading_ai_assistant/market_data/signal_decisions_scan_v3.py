@@ -700,7 +700,14 @@ def _scan_stock(  # noqa: C901 - multi-family screening and anti-manipulation ga
             obs_result = read_stock_observation_v1(storage_root, handle)
         elif retained_handle is not None and not refresh:
             handle = retained_handle
-            obs_result = read_stock_observation_v1(storage_root, handle)
+            try:
+                obs_result = read_stock_observation_v1(storage_root, handle)
+            except Exception:
+                if state is None:
+                    return _unavailable_result(
+                        symbol, "OBSERVATION_PAIR_BOOTSTRAP_REQUIRES_REFRESH"
+                    )
+                raise
         else:
             obs_result = research_current_stock_v2(
                 symbol,
@@ -729,7 +736,7 @@ def _scan_stock(  # noqa: C901 - multi-family screening and anti-manipulation ga
                 expected_current_observation_identity_sha256=None,
                 new_current_observation_identity_sha256=handle,
             )
-            failure_reason = "INSUFFICIENT_OBSERVATION_PAIR"
+            failure_reason = "OBSERVATION_PAIR_SEEDED_BOOTSTRAP"
         elif handle == state.current_observation_identity_sha256:
             policy_result = evaluate_signal_decision_from_records_v3(
                 storage_root, handle, handle

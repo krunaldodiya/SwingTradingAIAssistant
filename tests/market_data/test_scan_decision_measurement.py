@@ -69,7 +69,7 @@ def _other(
     *,
     decision: str = "UNKNOWN",
     safety: str = "UNKNOWN",
-    failed_rule: str | None = "INSUFFICIENT_OBSERVATION_PAIR",
+    failed_rule: str | None = "OBSERVATION_PAIR_SEEDED_BOOTSTRAP",
 ) -> dict[str, object]:
     return {
         "symbol": symbol,
@@ -258,8 +258,10 @@ def test_measurement_separates_policy_outcomes_from_optional_context(
     assert totals["selected_basket_candidates"] == 1
     assert totals["candidate_retention_rate"] == "100.00%"
     assert totals["basket_selection_loss"] == 0
-    assert totals["exclusion_reasons"] == {"INSUFFICIENT_OBSERVATION_PAIR": 1}
-    assert totals["exclusion_reason_families"] == {"INSUFFICIENT_OBSERVATION_PAIR": 1}
+    assert totals["exclusion_reasons"] == {"OBSERVATION_PAIR_SEEDED_BOOTSTRAP": 1}
+    assert totals["exclusion_reason_families"] == {
+        "OBSERVATION_PAIR_SEEDED_BOOTSTRAP": 1
+    }
     assert totals["optional_context"] == {
         "measured_separately_from_decision": True,
         "candidates_with_context": 1,
