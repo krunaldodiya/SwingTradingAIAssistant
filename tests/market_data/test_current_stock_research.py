@@ -65,9 +65,6 @@ from swing_trading_ai_assistant.market_data.current_stock_research_v2 import (
     CurrentStockResearchResultV2,
     research_current_stock_v2,
 )
-from swing_trading_ai_assistant.market_data.signal_decisions_scan_v3 import (
-    _latest_session_missing,
-)
 from swing_trading_ai_assistant.market_data.current_stock_research_v2_runtime_identity_manifest import (
     CURRENT_STOCK_RESEARCH_RUNTIME_SOURCE_SHA256_V2,
 )
@@ -86,6 +83,9 @@ from swing_trading_ai_assistant.market_data.instruments import (
 )
 from swing_trading_ai_assistant.market_data.schedule_evidence import (
     ScheduleEvidenceStore,
+)
+from swing_trading_ai_assistant.market_data.signal_decisions_scan_v3 import (
+    _latest_session_missing,
 )
 from swing_trading_ai_assistant.market_data.storage_root_lease import (
     LeaseOutcome,
