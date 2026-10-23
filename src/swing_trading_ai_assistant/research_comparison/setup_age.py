@@ -119,7 +119,7 @@ def observe_setup_age_v1(
             if event_session not in left or event_session not in right:
                 raise ValueError("age baseline session invalid")
             count = len(right) - 1 - right.index(event_session)
-            if not 0 <= count <= 20 or (status == "REPLAY" and count != 0):
+            if not 0 <= count <= 20:
                 raise ValueError("age count invalid")
             original_session, current_session = (
                 event_session.isoformat(),
