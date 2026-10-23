@@ -299,3 +299,11 @@ To prevent capital risk from operator pump-and-dump schemes, newly listed volati
 | **Penny / Low-Priced Stocks** | Price $\ge \text{INR } 50.00$ | Rejects sub-50 operator-dominated penny stocks (`PENNY_STOCK_EXCLUDED`). |
 | **Illiquid Small-Caps** | 20-day Median Turnover $\ge \text{INR } 25.0\text{ Crore / day}$ | Rejects thinly traded small-caps prone to syndicates (`ILLIQUID_SMALLCAP_EXCLUDED`). |
 | **Circuit Band Buffer** | Distance to Upper/Lower Circuit $\ge 2.0\%$ | Rejects circuit-locked stocks where exits are trapped (`CIRCUIT_PROXIMITY`). |
+## Performance
+
+The parsed instrument snapshot is cached in process memory by its immutable
+content hash. The first lookup parses and validates the snapshot; later lookups
+(including every other symbol in the same scan) reuse the parsed catalog. This
+removes the repeated multi-second parse that previously dominated a 200-symbol
+run.
+

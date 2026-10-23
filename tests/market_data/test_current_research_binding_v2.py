@@ -314,3 +314,58 @@ def test_mapping_binding_rejects_constructed_copied_and_mutated_values(
     )
     with pytest.raises(ValueError, match="not admitted"):
         validate_current_research_binding_v2(binding)
+
+
+def test_snapshot_resolution_reuses_parsed_catalog(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from swing_trading_ai_assistant.market_data import instrument_snapshot
+
+    root = tmp_path / "cache"
+    root.mkdir(mode=0o700)
+    decompressed = json.dumps([_INSTRUMENT], separators=(",", ":")).encode()
+    compressed = gzip.compress(decompressed, mtime=0)
+    fetched = FetchedInstrumentSnapshotV1(
+        datetime(2026, 8, 26, 8, tzinfo=UTC),
+        date(2026, 8, 26),
+        compressed,
+        decompressed,
+        hashlib.sha256(compressed).hexdigest(),
+        hashlib.sha256(decompressed).hexdigest(),
+        InstrumentCatalog.from_json_bytes(decompressed),
+        None,
+        None,
+    )
+    acquired = StorageRootLease.try_acquire(root)
+    assert acquired.lease is not None
+    lease = acquired.lease
+    with lease:
+        with DuckDBCatalog(root, lease=lease) as catalog:
+            InstrumentSnapshotStoreV1(root, lease, catalog).retain(fetched)
+
+        instrument_snapshot._CATALOG_CACHE.clear()  # pyright: ignore[reportPrivateUsage]
+        calls: list[int] = []
+        original = InstrumentCatalog.from_json_bytes.__func__
+
+        def counting(cls: type[InstrumentCatalog], payload: bytes) -> InstrumentCatalog:
+            calls.append(1)
+            return original(cls, payload)
+
+        monkeypatch.setattr(InstrumentCatalog, "from_json_bytes", classmethod(counting))
+        with DuckDBCatalog(root, lease=lease) as catalog:
+            store = InstrumentSnapshotStoreV1(root, lease, catalog)
+            first = store.resolve_equity(
+                source=SNAPSHOT_SOURCE_V1,
+                segment="NSE_EQ",
+                symbol="ALPHA",
+                as_of=fetched.retrieved_at,
+            )
+            second = store.resolve_equity(
+                source=SNAPSHOT_SOURCE_V1,
+                segment="NSE_EQ",
+                symbol="ALPHA",
+                as_of=fetched.retrieved_at,
+            )
+
+    assert first.instrument.isin == second.instrument.isin == "INE002A01018"
+    assert len(calls) == 1

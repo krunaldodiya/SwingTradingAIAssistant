@@ -9,6 +9,7 @@ import json
 import os
 import re
 import stat
+import threading
 import zlib
 from contextlib import suppress
 from dataclasses import dataclass
@@ -249,6 +250,11 @@ class InstrumentSnapshotClientV1:
                 response.headers.get_single("Last-Modified")
             ),
         )
+
+
+_CATALOG_CACHE: dict[str, InstrumentCatalog] = {}
+_CATALOG_CACHE_LOCK = threading.Lock()
+_CATALOG_CACHE_MAX = 2
 
 
 class InstrumentSnapshotStoreV1:
@@ -516,9 +522,9 @@ class InstrumentSnapshotStoreV1:
                     _close_snapshot_directories(
                         object_fd, observations_fd, active_exception
                     )
-            decompressed = _validate_compressed_object(metadata, compressed)
+            catalog = _validate_compressed_object(metadata, compressed)
             _ensure_deadline_live(deadline)
-            instrument = _resolve_equity_in_payload(decompressed, segment, symbol)
+            instrument = _resolve_equity_in_payload(catalog, segment, symbol)
             _ensure_deadline_live(deadline)
             return ResolvedInstrumentSnapshotV1(metadata, instrument)
         except (InstrumentSnapshotError, StorageRootLeaseError):
@@ -552,12 +558,20 @@ def _metadata_without_observation(
 
 
 def _resolve_equity_in_payload(
-    decompressed: bytes, segment: str, symbol: str
+    decompressed: bytes | InstrumentCatalog, segment: str, symbol: str
 ) -> Instrument:
+    if isinstance(decompressed, InstrumentCatalog):
+        return _resolve_instrument(decompressed, segment, symbol)
     try:
         catalog = InstrumentCatalog.from_json_bytes(decompressed)
     except InstrumentCatalogPayloadError:
         raise InstrumentSnapshotCorruptError("instrument snapshot corrupt") from None
+    return _resolve_instrument(catalog, segment, symbol)
+
+
+def _resolve_instrument(
+    catalog: InstrumentCatalog, segment: str, symbol: str
+) -> Instrument:
     try:
         instrument = catalog.resolve(
             segment=segment, symbol=symbol, instrument_type="EQ"
@@ -958,7 +972,17 @@ def _remove_journal(operation: StorageRootLeaseOperation, snapshot_fd: int) -> N
 
 def _validate_compressed_object(
     metadata: InstrumentSnapshotMetadataV1, compressed: bytes
-) -> bytes:
+) -> InstrumentCatalog:
+    key = metadata.compressed_sha256
+    with _CATALOG_CACHE_LOCK:
+        cached = _CATALOG_CACHE.get(key)
+    if cached is not None:
+        if (
+            len(compressed) != metadata.compressed_byte_count
+            or _sha256(compressed) != metadata.compressed_sha256
+        ):
+            raise InstrumentSnapshotCorruptError("instrument snapshot corrupt")
+        return cached
     try:
         if (
             len(compressed) != metadata.compressed_byte_count
@@ -972,10 +996,14 @@ def _validate_compressed_object(
             or _sha256(decompressed) != metadata.decompressed_sha256
         ):
             raise InstrumentSnapshotCorruptError("instrument snapshot corrupt")
-        InstrumentCatalog.from_json_bytes(decompressed)
-        return decompressed
+        catalog = InstrumentCatalog.from_json_bytes(decompressed)
     except (EOFError, gzip.BadGzipFile, zlib.error, InstrumentCatalogPayloadError):
         raise InstrumentSnapshotCorruptError("instrument snapshot corrupt") from None
+    with _CATALOG_CACHE_LOCK:
+        if len(_CATALOG_CACHE) >= _CATALOG_CACHE_MAX:
+            _CATALOG_CACHE.pop(next(iter(_CATALOG_CACHE)))
+        _CATALOG_CACHE[key] = catalog
+    return catalog
 
 
 def _read_bounded(parent_fd: int, name: str, limit: int) -> bytes:
