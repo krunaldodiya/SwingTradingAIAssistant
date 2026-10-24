@@ -4,7 +4,7 @@ from typing import Final
 
 SCAN_DECISION_OPPORTUNITY_GRADING_RUNTIME_SOURCE_SHA256_V1: Final[dict[str, str]] = {
     "src/swing_trading_ai_assistant/market_data/scan_decision_opportunity_grading.py": "b2e408f784192a6173cecaa274dfa0b22250c9277a2dc4c4cc057817cd69451a",
-    "src/swing_trading_ai_assistant/market_data/scan_decision_evidence.py": "f2e630c9c2f71f1700e0d21eff89ed5d93f1c75854b00b502b52bf2ed9960289",
+    "src/swing_trading_ai_assistant/market_data/scan_decision_evidence.py": "f57eabeacfd0772bea6e2e104954a129757b4e9df6c8d2c09ff638aabaa29dd7",
     "src/swing_trading_ai_assistant/market_data/bharatstock.py": "3549dc75ae84f1ef41245c50d840541712ef562fd5a2bc955fbe8dcf471aadb5",
     "src/swing_trading_ai_assistant/market_data/bharatstock_capture.py": "9b529bb2f413ac58d5e14e545380409a18c10b797dd913cb24536a90f3f92d2a",
     "src/swing_trading_ai_assistant/market_data/bharatstock_capture_runtime_identity_manifest.py": "52b6ea23caf00260b9e4ffd473df9e1eec31b4934c70493862b5b096b077c4d5",
@@ -15,6 +15,6 @@ SCAN_DECISION_OPPORTUNITY_GRADING_RUNTIME_SOURCE_SHA256_V1: Final[dict[str, str]
     "src/swing_trading_ai_assistant/market_data/signal_decisions_v3_cli.py": "91f02ec96c16f7b6bdfedd7f53fe36967f6b995a6b4130c650d1f9f20c33dfce",
     "src/swing_trading_ai_assistant/market_data/stock_observations.py": "01e59ddaa39d3d0020c5e7ee51dfa5a88a0ffee6d5f950f88f2a3ceabe0d585e",
     "src/swing_trading_ai_assistant/market_data/current_stock_research.py": "1cb067767faa60dd6a35ff44e434b2cc2e071f3cfbb71cd371c6b8a781ba590e",
-    "src/swing_trading_ai_assistant/market_data/signal_decisions_scan_v3.py": "586d1b7dd97094924bfd8cf5e2658e5af8c3b472190c356ba2c63ba7a76a8554",
-    "src/swing_trading_ai_assistant/market_data/signal_decisions_scan_v3_runtime_identity_manifest.py": "4cfcd9bf45c01b8daf3fa265be30b606e7a150921c976234daca7fecb1192d16",
+    "src/swing_trading_ai_assistant/market_data/signal_decisions_scan_v3.py": "7859bfa58f7c9cb690f9832f3cae7aa576a228b6f4537616414ec7a01ac05e26",
+    "src/swing_trading_ai_assistant/market_data/signal_decisions_scan_v3_runtime_identity_manifest.py": "ff175b2b0870d8bfc9c2d226a015aaefcc9254cfde520882177707f35be1c6b4",
 }

@@ -1082,8 +1082,9 @@ def test_build_trade_brief_candidate_claims_attribute_display_anchors() -> None:
         "policy_decision.causal_evidence."
     )
     assert claims[7] == (
-        "State the display projection's SMC demand-area support reference is INR "
-        "3905.6 with implied zone width INR 118.5."
+        "State the display projection's stop reference is INR 3905.6; the "
+        "displayed span to the broken high is INR 118.5 and is not an order "
+        "block or SMC zone."
     )
     # Non-anchor claims are unchanged and authority attachments stay intact.
     assert claims[1] == "State current quote price is INR 4387.4."
