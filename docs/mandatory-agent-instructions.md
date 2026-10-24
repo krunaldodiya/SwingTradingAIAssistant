@@ -290,8 +290,11 @@ if it already holds a pass on the same question, scope, and data cutoff with
 unchanged material inputs, report the prior outcome and ask before rerunning.
 After a real pass, ask before storing an entry (default store; full detail;
 append-only; private, never in the public repository; if the owner is unreachable
-at completion, write it flagged `unconfirmed`). The claim boundaries in "Product
-mission and scope" and "Research integrity" apply unchanged.
+at completion, write it flagged `unconfirmed`). **Research delivery gate:** a
+result is not delivered until the entry is written and synced, or the owner
+explicitly says skip. The delivered answer MUST name the ledger entry path.
+Persisting the pass is part of the pass, not optional post-processing. The claim
+boundaries in "Product mission and scope" and "Research integrity" apply unchanged.
 
 ### Tracker and lifecycle
 
