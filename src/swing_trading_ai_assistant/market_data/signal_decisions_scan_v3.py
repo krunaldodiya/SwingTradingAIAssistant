@@ -5,7 +5,9 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import os
 import re
+import stat
 from collections.abc import Callable, Sequence
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -125,24 +127,132 @@ def resolve_nifty100_symbols(storage_root: Path) -> tuple[str, ...]:
     raise ValueError("could not resolve 100 Nifty 100 symbols from storage root")
 
 
-def _load_industry_mapping(storage_root: Path) -> dict[str, str]:
+_INDUSTRY_MAPPING_SCHEMA: Final = "nifty200-industry-mapping@v1"
+_INDUSTRY_MAPPING_DIR: Final = ".nifty200-industry-mapping-v1"
+_INDUSTRY_SOURCE_URL: Final = (
+    "https://nsearchives.nseindia.com/content/indices/ind_nifty200list.csv"
+)
+_INDUSTRY_COLUMNS: Final = (
+    "Company Name",
+    "Industry",
+    "Symbol",
+    "Series",
+    "ISIN Code",
+)
+_INDUSTRY_SYMBOL: Final = re.compile(r"[A-Z0-9][A-Z0-9&._-]{0,63}\Z")
+_INDUSTRY_DIGEST: Final = re.compile(r"[0-9a-f]{64}\Z")
+_INDUSTRY_MAX_BYTES: Final = 1024 * 1024
+_NIFTY100_RAW_DIGEST: Final = (
+    "1a40e33a0febf458986a178bc76f7b0051f163718f2a8bc11a726ba70a39c0a9"
+)
+
+
+def _read_private_bytes(path: Path) -> bytes:
+    descriptor = os.open(
+        path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
+    )
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode) or info.st_size > _INDUSTRY_MAX_BYTES:
+            raise ValueError("invalid industry mapping artifact")
+        raw = os.read(descriptor, _INDUSTRY_MAX_BYTES + 1)
+        if len(raw) != info.st_size:
+            raise ValueError("invalid industry mapping artifact")
+        return raw
+    finally:
+        os.close(descriptor)
+
+
+def _parse_industry_csv(raw: bytes, expected_rows: int) -> dict[str, str] | None:
+    try:
+        reader = csv.DictReader(raw.decode().strip().split("\n"))
+        if reader.fieldnames != list(_INDUSTRY_COLUMNS):
+            return None
+        rows = list(reader)
+    except (csv.Error, UnicodeError):
+        return None
+    if len(rows) != expected_rows:
+        return None
     mapping: dict[str, str] = {}
+    for row in rows:
+        symbol = row.get("Symbol", "")
+        industry = row.get("Industry", "")
+        if (
+            type(symbol) is not str
+            or _INDUSTRY_SYMBOL.fullmatch(symbol) is None
+            or type(industry) is not str
+            or not 1 <= len(industry) <= 128
+            or any(
+                ord(character) < 32 or ord(character) == 127 for character in industry
+            )
+            or symbol in mapping
+        ):
+            return None
+        mapping[symbol] = industry
+    return mapping
+
+
+def _load_nifty200_industry_mapping(storage_root: Path) -> dict[str, str]:
+    directory = storage_root / _INDUSTRY_MAPPING_DIR
+    try:
+        manifest_value = json.loads(_read_private_bytes(directory / "manifest.json"))
+        if type(manifest_value) is not dict:
+            return {}
+        manifest = cast(dict[str, object], manifest_value)
+        if set(manifest) != {
+            "schema",
+            "source_url",
+            "retrieved_at",
+            "sha256",
+            "row_count",
+        }:
+            return {}
+        if (
+            manifest.get("schema") != _INDUSTRY_MAPPING_SCHEMA
+            or manifest.get("source_url") != _INDUSTRY_SOURCE_URL
+        ):
+            return {}
+        retrieved_value = manifest.get("retrieved_at")
+        digest_value = manifest.get("sha256")
+        row_count_value = manifest.get("row_count")
+        if (
+            type(retrieved_value) is not str
+            or type(digest_value) is not str
+            or _INDUSTRY_DIGEST.fullmatch(digest_value) is None
+            or row_count_value != 200
+        ):
+            return {}
+        try:
+            retrieved = datetime.fromisoformat(retrieved_value.replace("Z", "+00:00"))
+        except ValueError:
+            return {}
+        if retrieved.tzinfo is None:
+            return {}
+        digest = digest_value
+        raw = _read_private_bytes(directory / f"raw-{digest}.csv")
+        if hashlib.sha256(raw).hexdigest() != digest:
+            return {}
+        return _parse_industry_csv(raw, 200) or {}
+    except (OSError, ValueError, csv.Error, UnicodeError):
+        return {}
+
+
+def _load_industry_mapping(storage_root: Path) -> dict[str, str]:
+    mapping = _load_nifty200_industry_mapping(storage_root)
+    if mapping:
+        return mapping
     csv_file = (
         storage_root
         / ".current-industry-classification-v1"
-        / "raw-1a40e33a0febf458986a178bc76f7b0051f163718f2a8bc11a726ba70a39c0a9.csv"
+        / f"raw-{_NIFTY100_RAW_DIGEST}.csv"
     )
-    if csv_file.exists():
-        try:
-            reader = csv.DictReader(csv_file.read_text().strip().split("\n"))
-            for row in reader:
-                sym = str(row.get("Symbol", ""))
-                ind = str(row.get("Industry", ""))
-                if sym and ind:
-                    mapping[sym] = ind
-        except (OSError, ValueError):
-            pass
-    return mapping
+    try:
+        raw = _read_private_bytes(csv_file)
+    except (OSError, ValueError):
+        return {}
+    if hashlib.sha256(raw).hexdigest() != _NIFTY100_RAW_DIGEST:
+        return {}
+    return _parse_industry_csv(raw, 100) or {}
 
 
 def _load_historical_bars_for_symbol(
