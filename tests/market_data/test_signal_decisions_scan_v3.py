@@ -565,6 +565,73 @@ def test_scan_advances_distinct_observation_with_canonical_pair_policy(
     assert state.previous_observation_identity_sha256 == previous_handle
     assert state.current_observation_identity_sha256 == current_handle
 
+    replay = scan_signal_decisions_v3(tmp_path, symbols=(_SYMBOL,), clock=lambda: _NOW)
+    assert replay["candidate_count"] == 1
+    replay_candidates = cast(list[dict[str, object]], replay["candidates"])
+    assert replay_candidates[0]["symbol"] == _SYMBOL
+    replay_policy = cast(dict[str, object], replay_candidates[0]["policy_decision"])
+    assert replay_policy["decision_code"] == policy["decision_code"]
+    state_after = read_scanner_pair_state_v1(tmp_path, _SYMBOL)
+    assert state_after == state
+
+    refreshed = scan_signal_decisions_v3(
+        tmp_path, symbols=(_SYMBOL,), refresh=True, clock=lambda: _NOW
+    )
+    assert refreshed["candidate_count"] == 1
+    refreshed_candidates = cast(list[dict[str, object]], refreshed["candidates"])
+    assert refreshed_candidates[0]["symbol"] == _SYMBOL
+    state_refreshed = read_scanner_pair_state_v1(tmp_path, _SYMBOL)
+    assert state_refreshed == state
+
+    revised_handle = "b" * 64
+    assert revised_handle != state.current_observation_identity_sha256
+    monkeypatch.setattr(
+        scan_module,
+        "record_stock_observation_v1",
+        lambda *_args, **_kwargs: revised_handle,
+    )
+    monkeypatch.setattr(
+        scan_module, "research_current_stock_v2", lambda *_args, **_kwargs: current
+    )
+    built_observations: list[object] = []
+    real_builder = scan_module._build_candidate_display_summary
+
+    def builder_spy(observation: object, *args: object, **kwargs: object) -> object:
+        built_observations.append(observation)
+        return real_builder(observation, *args, **kwargs)
+
+    monkeypatch.setattr(scan_module, "_build_candidate_display_summary", builder_spy)
+    (
+        revised_brief,
+        revised_candidate,
+        _revised_safety,
+        _revised_price,
+        _revised_rule,
+        _revised_trend,
+        revised_result_handle,
+    ) = scan_module._scan_stock(  # pyright: ignore[reportPrivateUsage]
+        _SYMBOL, tmp_path, True, "Testing", Decimal("0")
+    )
+    assert revised_candidate is True
+    assert revised_result_handle == state.current_observation_identity_sha256
+    revised_policy = cast(dict[str, object], revised_brief["policy_decision"])
+    assert (
+        revised_policy["current_observation_identity_sha256"]
+        == state.current_observation_identity_sha256
+    )
+    assert (
+        revised_policy["previous_observation_identity_sha256"]
+        == state.previous_observation_identity_sha256
+    )
+    revised_summary = cast(dict[str, object], revised_brief["candidate_summary"])
+    original_summary = cast(dict[str, object], candidate["candidate_summary"])
+    assert revised_summary["event_session"] == original_summary["event_session"]
+    assert revised_summary["current_price_inr"] == original_summary["current_price_inr"]
+    assert built_observations
+    assert built_observations[-1] is not current
+    assert getattr(built_observations[-1], "symbol", None) == _SYMBOL
+    assert read_scanner_pair_state_v1(tmp_path, _SYMBOL) == state
+
 
 def test_scan_replay_returns_canonical_policy_without_candidate(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -588,8 +655,8 @@ def test_scan_replay_returns_canonical_policy_without_candidate(
     assert result["candidate_count"] == 0
     rows = cast(list[dict[str, object]], result["other_stocks"])
     assert len(rows) == 1
-    assert rows[0]["decision"] == "NO_TRADE"
-    assert rows[0]["failed_rule"] == "CAUSAL_REPLAY_HAS_NO_NEW_CONFIRMATION"
+    assert rows[0]["decision"] == "UNKNOWN"
+    assert rows[0]["failed_rule"] == "OBSERVATION_PAIR_AWAITING_NEXT_SESSION"
 
     state = read_scanner_pair_state_v1(tmp_path, _SYMBOL)
     assert state is not None
