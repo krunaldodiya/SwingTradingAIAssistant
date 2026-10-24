@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
+from typing import cast
 
 from swing_trading_ai_assistant.market_data import swing_analysis as module
 from swing_trading_ai_assistant.market_data.bharatstock import BharatStockDailyPrice
@@ -402,3 +404,92 @@ def test_analyze_scan_preserves_provider_and_identity_failures(
     assert members[1]["flags"] == ["INVALID_SCAN_INPUT"]
     assert members[0]["policy"]["outcome"] == "INSUFFICIENT"
     assert members[1]["policy"]["outcome"] == "INSUFFICIENT"
+
+
+def test_lifecycle_reports_every_stage_status(tmp_path: Path, monkeypatch) -> None:
+    scan = {
+        "universe_type": "NIFTY_200",
+        "scan_timestamp": "2026-10-24T00:00:00Z",
+        "result_identity_sha256": "a" * 64,
+        "candidates": [
+            {
+                "symbol": "UNIONBANK",
+                "decision": "RESEARCH_CANDIDATE",
+                "safety_eligibility": {"status": "ELIGIBLE"},
+                "failed_rule": None,
+            }
+        ],
+        "other_stocks": [
+            {
+                "symbol": "BAD",
+                "decision": "NO_TRADE",
+                "safety_status": "INELIGIBLE",
+                "failed_rule": "PENNY_STOCK_EXCLUDED",
+            },
+            {
+                "symbol": "UNK",
+                "decision": "UNKNOWN",
+                "safety_status": "UNKNOWN",
+                "failed_rule": "PROVIDER_OBSERVABLE_HISTORY",
+            },
+        ],
+    }
+    analysis_path = tmp_path / "analysis.json"
+    analysis_path.write_text(
+        json.dumps(
+            {
+                "members": [
+                    {
+                        "symbol": "UNIONBANK",
+                        "policy": {"outcome": "NOT_QUALIFIED"},
+                    }
+                ]
+            }
+        )
+    )
+    monkeypatch.setattr(module, "_read_scan_bytes", lambda path: b"scan")
+    monkeypatch.setattr(module, "admit_retained_scan_document_v1", lambda raw: scan)
+    monkeypatch.setattr(
+        module, "read_scanner_pair_state_v1", lambda root, symbol: object()
+    )
+    monkeypatch.setattr(
+        module,
+        "read_stock_observation_v1",
+        lambda root, handle: type("Obs", (), {"status": "READY"})(),
+    )
+    monkeypatch.setattr(
+        module,
+        "_observation_structure",
+        lambda observation: {
+            "trend": "UPTREND",
+            "structure": "CONFIRMED",
+            "pivots": 4,
+            "latest_event": {"event": "BOS", "direction": "UP"},
+        },
+    )
+
+    report = module.analyze_lifecycle(  # pyright: ignore[reportPrivateUsage]
+        tmp_path / "scan.json", tmp_path, analysis_path
+    )
+    members = cast(list[dict[str, object]], report["members"])
+    assert [m["symbol"] for m in members] == ["UNIONBANK", "BAD", "UNK"]
+    by_symbol = {str(m["symbol"]): m for m in members}
+    candidate_stages = {
+        stage["id"]: stage["status"]
+        for stage in cast(list[dict[str, object]], by_symbol["UNIONBANK"]["stages"])
+    }
+    assert candidate_stages["SAFETY"] == "PASS"
+    assert candidate_stages["CANDIDATE_ANALYSIS"] == "NOT_QUALIFIED"
+    assert candidate_stages["BASKET"] == "NOT_QUALIFIED"
+    ineligible = {
+        stage["id"]: stage["status"]
+        for stage in cast(list[dict[str, object]], by_symbol["BAD"]["stages"])
+    }
+    assert ineligible["SAFETY"] == "FAIL"
+    assert ineligible["CANDIDATE_ANALYSIS"] == "NOT_APPLICABLE"
+    unknown = {
+        stage["id"]: stage["status"]
+        for stage in cast(list[dict[str, object]], by_symbol["UNK"]["stages"])
+    }
+    assert unknown["SAFETY"] == "UNKNOWN"
+    assert unknown["BASKET"] == "NOT_REACHED"
