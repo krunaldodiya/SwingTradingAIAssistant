@@ -311,14 +311,41 @@ doppler run -- swing-analysis \
   --output json
 ```
 
-Per candidate it reports ATR20, event-session volume versus the prior 20-session
-average and median, completed-bar retest state, 252-session swing
-support/resistance clusters, weekly trend, a real last-bearish-candle demand
-zone, and explicit flags (`VOLUME_RATIO_BELOW_1`, `RETEST_NOT_CONFIRMED`,
-`WEEKLY_TREND_NOT_UP`, `DEMAND_ZONE_TESTED`, `EXTENSION_ABOVE_2_ATR`). It also
-labels whether the structural stop came from policy evidence or the display
-projection. Flags are for research filtering; they are not hard decision gates
-yet.
+The artifact schema is `swing-analysis@v2`. Per candidate it reports ATR20,
+ATR-percent, event-session volume versus the prior 20-session average and
+median, completed-bar retest state, 252-session swing support/resistance
+clusters with nearest levels and ATR distances, weekly trend, a real
+last-bearish-candle demand zone, ATR-normalized extension and risk, and explicit
+flags.
+
+It also evaluates `swing-analysis-policy@v1` and returns a deterministic
+`members[].policy.outcome` (with report-level `policy.outcome_counts` and
+`policy.gate_counts`):
+
+| Outcome | Rule |
+|---|---|
+| `QUALIFIED` | Every gate `PASS`. |
+| `WATCH` | No `FAIL` or `UNAVAILABLE`; at least one `PENDING` gate. |
+| `NOT_QUALIFIED` | At least one gate `FAIL`. |
+| `INSUFFICIENT` | No `FAIL`, but at least one gate `UNAVAILABLE`. |
+
+| Gate | Pass rule |
+|---|---|
+| `ATR_AVAILABLE` | ATR20 is present. |
+| `VOLUME_EXPANSION` | Event volume $\ge 1.50\times$ the prior 20-session average. |
+| `CANDLE_BODY_QUALITY` | Bullish event body $\ge 60\%$ of the event range. |
+| `RETEST_CONFIRMED` | Completed-bar state is `RETEST_CONFIRMED`; `TESTING`, `NO_RETEST`, and `NO_SESSIONS_AFTER_EVENT` are `PENDING`; `BELOW_LEVEL` is `FAIL`. |
+| `WEEKLY_TREND_UP` | Weekly trend is `UPTREND`; `RANGE_OR_TRANSITION` is `PENDING`; `DOWNTREND` is `FAIL`. |
+| `DEMAND_ZONE_VALID` | A demand zone exists and the latest close is at or above its low. |
+| `EXTENSION_WITHIN_2_ATR` | Latest close is at most $2.00$ ATR above the broken high. |
+| `RISK_POSITIVE` | Latest close is strictly above the structural stop. |
+
+The policy is `PROVISIONAL_RESEARCH`: the thresholds are explicit, versioned,
+and owner-directed, but have not been shown by baseline/out-of-sample evidence
+to improve a trading outcome. The report preserves every scan candidate and
+reports outcome and gate counts; it does not suppress, reorder, or reclassify
+the scan candidate set. Flags remain available for research filtering.
+
 
 ## Research delivery gate
 

@@ -8,7 +8,7 @@ Integrate all 7 architecture-locked research families into the unified scanner (
 
 1. **Market Structure (`market_structure`):** 21-day pivots, trend, close-confirmed Break of Structure (`BOS` / `CHOCH`), age 1–5 sessions, protective swing-low stop.
 2. **Safety Eligibility (`market_data`):** 8-rule conservative safety screen (24/7/365 active).
-3. **Price Action & SMC Retest (`price_action`):** Breakout candle body quality (body % of range), breakout retest status (`TESTING_BROKEN_HIGH` vs `EXPANDING_ABOVE`), and institutional demand base zone.
+3. **Price Action & SMC Retest (`price_action`):** Breakout candle body quality (body % of range), exact price relation to the broken high (`BELOW_BROKEN_HIGH`, `AT_BROKEN_HIGH`, `ABOVE_BROKEN_HIGH`) with distance percent, and the display stop span. The relation is a price-distance fact, not a completed-bar retest or an SMC zone.
 4. **Volume Analysis (`volume_analysis`):** 20-day volume baseline, breakout Relative Volume (RVOL), and volume expansion confirmation ($\text{RVOL} \ge 1.0\times$).
 5. **Sector / Industry Analysis (`sector_analysis`):** Official NSE Indices Industry mapping (17 industries), industry peer count, and sector breakout participation rate.
 6. **Relative Strength (`relative_strength`):** 20-session stock return versus Nifty 100 median benchmark return, excess return delta %, and outperformance classification.

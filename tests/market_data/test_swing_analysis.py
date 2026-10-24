@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 from decimal import Decimal
+from pathlib import Path
 
 from swing_trading_ai_assistant.market_data import swing_analysis as module
 from swing_trading_ai_assistant.market_data.bharatstock import BharatStockDailyPrice
@@ -184,7 +185,43 @@ def test_insufficient_member_still_has_identity() -> None:
     )
     assert member["flags"] == ["INSUFFICIENT_HISTORY"]
     assert member["latest_session"] is None
+    assert member["policy"]["outcome"] == "INSUFFICIENT"
     assert "analysis_identity_sha256" in member
+
+
+def test_invalid_scan_fields_do_not_abort_the_member() -> None:
+    candidate = {
+        "candidate_summary": {
+            "event_session": "2026-03-20",
+            "broken_high_level_inr": "Infinity",
+        },
+        "policy_decision": {},
+    }
+    member = module._analyze_member(  # pyright: ignore[reportPrivateUsage]
+        "TEST", "INE000000001", "NSE", _bars(80), candidate
+    )
+    assert member["flags"] == ["INVALID_SCAN_INPUT"]
+    assert member["policy"]["outcome"] == "INSUFFICIENT"
+    assert member["policy"]["gates"][0]["id"] == "CANDIDATE_INPUT_VALID"
+    assert member["policy"]["gates"][0]["observed"] == "Infinity"
+
+
+def test_event_outside_window_reports_the_actual_reason() -> None:
+    candidate = {
+        "candidate_summary": {
+            "event_session": "2025-01-01",
+            "broken_high_level_inr": "175",
+        },
+        "policy_decision": {},
+    }
+    member = module._analyze_member(  # pyright: ignore[reportPrivateUsage]
+        "TEST", "INE000000001", "NSE", _bars(80), candidate
+    )
+    assert member["flags"] == ["EVENT_SESSION_OUTSIDE_WINDOW"]
+    assert member["policy"]["outcome"] == "INSUFFICIENT"
+    gate = member["policy"]["gates"][0]
+    assert gate["id"] == "EVENT_SESSION_IN_WINDOW"
+    assert gate["observed"]["event_session"] == "2025-01-01"
 
 
 def test_weekly_trend_exercises_swing_pivots() -> None:
@@ -205,3 +242,163 @@ def test_weekly_trend_exercises_swing_pivots() -> None:
         )
     weekly = module._weekly(module._bars(rows))  # pyright: ignore[reportPrivateUsage]
     assert weekly["trend"] == "UPTREND"
+
+
+def _policy(
+    *,
+    atr: Decimal | None = Decimal("5"),
+    ratio: str | None = "2.0",
+    retest: str = "RETEST_CONFIRMED",
+    weekly: str = "UPTREND",
+    demand_kind: str = "LAST_BEARISH_CANDLE",
+    demand_low: str | None = "100",
+    close: str = "110",
+    extension_atr: Decimal | None = Decimal("1"),
+    risk_atr: Decimal | None = Decimal("2"),
+) -> dict[str, object]:
+    return module._research_policy(  # pyright: ignore[reportPrivateUsage]
+        atr,
+        {"ratio": ratio},
+        {"state": retest},
+        {"trend": weekly},
+        {"kind": demand_kind, "low": demand_low},
+        Decimal(close),
+        extension_atr,
+        risk_atr,
+        module.AnalysisBar(
+            date(2026, 1, 1),
+            Decimal("100"),
+            Decimal("110"),
+            Decimal("99"),
+            Decimal("109"),
+            1000,
+        ),
+    )
+
+
+def test_policy_qualified_when_all_gates_pass() -> None:
+    policy = _policy()
+    assert policy["outcome"] == "QUALIFIED"
+    assert policy["failed_gates"] == []
+    assert policy["pending_gates"] == []
+    assert {gate["status"] for gate in policy["gates"]} == {"PASS"}
+
+
+def test_policy_fails_closed_on_volume_and_weekly() -> None:
+    policy = _policy(ratio="1.2", weekly="DOWNTREND")
+    assert policy["outcome"] == "NOT_QUALIFIED"
+    assert policy["failed_gates"] == ["VOLUME_EXPANSION", "WEEKLY_TREND_UP"]
+
+
+def test_policy_pending_retest_is_watch() -> None:
+    policy = _policy(retest="NO_RETEST")
+    assert policy["outcome"] == "WATCH"
+    assert policy["pending_gates"] == ["RETEST_CONFIRMED"]
+    assert policy["failed_gates"] == []
+
+
+def test_policy_demand_and_extension_fail() -> None:
+    demand = _policy(close="90")
+    assert demand["outcome"] == "NOT_QUALIFIED"
+    assert "DEMAND_ZONE_VALID" in demand["failed_gates"]
+    extension = _policy(extension_atr=Decimal("2.5"))
+    assert extension["outcome"] == "NOT_QUALIFIED"
+    assert extension["failed_gates"] == ["EXTENSION_WITHIN_2_ATR"]
+    risk = _policy(risk_atr=Decimal("-1"))
+    assert risk["outcome"] == "NOT_QUALIFIED"
+    assert risk["failed_gates"] == ["RISK_POSITIVE"]
+
+
+def test_policy_candle_body_quality_fails() -> None:
+    policy = module._research_policy(  # pyright: ignore[reportPrivateUsage]
+        Decimal("5"),
+        {"ratio": "2.0"},
+        {"state": "RETEST_CONFIRMED"},
+        {"trend": "UPTREND"},
+        {"kind": "LAST_BEARISH_CANDLE", "low": "100"},
+        Decimal("110"),
+        Decimal("1"),
+        Decimal("2"),
+        module.AnalysisBar(
+            date(2026, 1, 1),
+            Decimal("110"),
+            Decimal("111"),
+            Decimal("99"),
+            Decimal("105"),
+            1000,
+        ),
+    )
+    assert policy["outcome"] == "NOT_QUALIFIED"
+    assert policy["failed_gates"] == ["CANDLE_BODY_QUALITY"]
+
+
+def test_policy_missing_atr_is_insufficient() -> None:
+    policy = _policy(atr=None, extension_atr=None, ratio=None)
+    assert policy["outcome"] == "INSUFFICIENT"
+    assert policy["unavailable_gates"] == [
+        "ATR_AVAILABLE",
+        "VOLUME_EXPANSION",
+        "EXTENSION_WITHIN_2_ATR",
+    ]
+
+
+def test_policy_summary_counts_outcomes() -> None:
+    qualified = {"policy": _policy()}
+    failed = {"policy": _policy(ratio="1.0")}
+    summary = module._policy_summary(  # pyright: ignore[reportPrivateUsage]
+        [qualified, failed]
+    )
+    assert summary["outcome_counts"] == {
+        "QUALIFIED": 1,
+        "WATCH": 0,
+        "NOT_QUALIFIED": 1,
+        "INSUFFICIENT": 0,
+    }
+    assert summary["gate_counts"]["VOLUME_EXPANSION"] == {
+        "PASS": 1,
+        "FAIL": 1,
+    }
+
+
+def test_analyze_scan_preserves_provider_and_identity_failures(
+    monkeypatch,
+) -> None:
+    valid_candidate = {
+        "symbol": "TEST",
+        "isin": "INE000000001",
+        "exchange": "NSE",
+        "candidate_summary": {
+            "event_session": "2026-03-20",
+            "broken_high_level_inr": "175",
+        },
+        "policy_decision": {},
+    }
+    invalid_candidate = {
+        "symbol": "BAD",
+        "exchange": "NSE",
+    }
+
+    class FailingClient:
+        def history(self, instrument, start, end):  # noqa: ANN001
+            raise ValueError("provider unavailable")
+
+    monkeypatch.setattr(module, "_read_scan_bytes", lambda path: b"scan")
+    monkeypatch.setattr(
+        module,
+        "admit_retained_scan_document_v1",
+        lambda raw: {
+            "candidates": [valid_candidate, invalid_candidate],
+            "result_identity_sha256": "0" * 64,
+            "scan_timestamp": "2026-10-24T00:00:00Z",
+            "runtime_code_identity_sha256": "1" * 64,
+        },
+    )
+    monkeypatch.setattr(module, "BharatStockClient", FailingClient)
+
+    report = module.analyze_scan(Path("scan.json"))
+    members = report["members"]
+    assert len(members) == 2
+    assert members[0]["flags"] == ["PROVIDER_HISTORY_UNAVAILABLE"]
+    assert members[1]["flags"] == ["INVALID_SCAN_INPUT"]
+    assert members[0]["policy"]["outcome"] == "INSUFFICIENT"
+    assert members[1]["policy"]["outcome"] == "INSUFFICIENT"
