@@ -16,7 +16,7 @@ CURRENT_STOCK_RESEARCH_RUNTIME_SOURCE_SHA256_V1: Final[dict[str, str]] = {
     "src/swing_trading_ai_assistant/market_data/current_industry_classification.py": "04df27c6fe19c43dd448c42e6e7ea9a38a0ccda67c6a7ad2fd6e8209de02381c",
     "src/swing_trading_ai_assistant/market_data/current_stock_research.py": "1cb067767faa60dd6a35ff44e434b2cc2e071f3cfbb71cd371c6b8a781ba590e",
     "src/swing_trading_ai_assistant/market_data/http.py": "ef5becb9960502f2808c3353099fc285de4d908d2eae7da65816266e2d02cd6e",
-    "src/swing_trading_ai_assistant/market_data/instrument_snapshot.py": "9dff899d47241382f769998f03f92a28445f21399d2c30ebf2431d43cb23e70f",
+    "src/swing_trading_ai_assistant/market_data/instrument_snapshot.py": "f1c6da70dfce71bc19e4500198a88244d91163b0838795839c2651057e18132d",
     "src/swing_trading_ai_assistant/market_data/instruments.py": "88da37f7a12c1e7e8a3dfa44c2755e12581f986886728b6addce91e851123029",
     "src/swing_trading_ai_assistant/market_data/manifest_lifecycle.py": "fbf92746d79a8569cbd84aa9cd5be6c4d201b3a3f23abf19a86b7fb6925282e5",
     "src/swing_trading_ai_assistant/market_data/monthly_request_planner.py": "5854dfc5c9e4b24ff6a4f7c79f61b0a445789f8cd305e1dbcd0f130bc3ce0b00",

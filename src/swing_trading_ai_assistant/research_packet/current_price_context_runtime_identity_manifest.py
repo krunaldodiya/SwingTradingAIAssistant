@@ -37,7 +37,7 @@ CURRENT_PRICE_CONTEXT_RUNTIME_SOURCE_SHA256_V1: Final[dict[str, str]] = {
     "src/swing_trading_ai_assistant/market_data/historical_revision_store.py": "3dbb44af9ba07efc1e6306890269c005ce36947bd471b1e0db8b68f611abc13d",
     "src/swing_trading_ai_assistant/market_data/historical_upstox_raw.py": "03e2674ae8e931d1d78c37ecb51903a2006338a5ff940af0ad352a0306859071",
     "src/swing_trading_ai_assistant/market_data/http.py": "ef5becb9960502f2808c3353099fc285de4d908d2eae7da65816266e2d02cd6e",
-    "src/swing_trading_ai_assistant/market_data/instrument_snapshot.py": "9dff899d47241382f769998f03f92a28445f21399d2c30ebf2431d43cb23e70f",
+    "src/swing_trading_ai_assistant/market_data/instrument_snapshot.py": "f1c6da70dfce71bc19e4500198a88244d91163b0838795839c2651057e18132d",
     "src/swing_trading_ai_assistant/market_data/instruments.py": "88da37f7a12c1e7e8a3dfa44c2755e12581f986886728b6addce91e851123029",
     "src/swing_trading_ai_assistant/market_data/intraday.py": "0966bb9b3bd3bd6870b0a15c1196529d383316a46df51251323caf6b792bcc83",
     "src/swing_trading_ai_assistant/market_data/intraday_views.py": "eb9ae60e50b915060a768d5fd2bf5bdd0598dc952d2c7268ad0a3bbb981dc096",
