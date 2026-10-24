@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
-from typing import Final, cast
+from typing import Any, Final, cast
 
 from .bharatstock import (
     BharatStockClient,
@@ -33,6 +33,8 @@ from .bharatstock import (
     BharatStockInstrument,
 )
 from .scan_decision_evidence import admit_retained_scan_document_v1
+from .scanner_observation_pair_state_v1 import read_scanner_pair_state_v1
+from .stock_observations import read_stock_observation_v1
 
 SCHEMA: Final = "swing-analysis@v2"
 POLICY_SCHEMA: Final = "swing-analysis-policy@v1"
@@ -518,6 +520,163 @@ def _policy_summary(members: Sequence[dict[str, object]]) -> dict[str, object]:
     }
 
 
+LIFECYCLE_SCHEMA: Final = "swing-lifecycle@v1"
+
+
+def _lifecycle_stage(stage_id: str, status: str, observed: object) -> dict[str, object]:
+    return {"id": stage_id, "status": status, "observed": observed}
+
+
+def _observation_structure(observation: object) -> dict[str, object] | None:
+    try:
+        packet = cast(Any, observation).packet
+        for member in packet.members:
+            for feature in member.features:
+                if (
+                    feature.feature == "MARKET_STRUCTURE"
+                    and feature.availability == "OBSERVED"
+                ):
+                    fact = feature.fact
+                    calculation = fact.calculation
+                    events = getattr(calculation, "events", ())
+                    latest = events[-1] if events else None
+                    return {
+                        "trend": str(getattr(calculation, "trend", "")),
+                        "structure": str(getattr(calculation, "structure_state", "")),
+                        "pivots": len(getattr(calculation, "pivots", ())),
+                        "latest_event": (
+                            {
+                                "event": str(getattr(latest, "event", "")),
+                                "direction": str(getattr(latest, "direction", "")),
+                                "session": str(getattr(latest, "session", "")),
+                            }
+                            if latest is not None
+                            else None
+                        ),
+                    }
+    except Exception:  # noqa: BLE001 - display-only lifecycle projection
+        return None
+    return None
+
+
+def _safety_status(value: object) -> str:
+    return {
+        "ELIGIBLE": "PASS",
+        "INELIGIBLE": "FAIL",
+        "UNKNOWN": "UNKNOWN",
+    }.get(str(value), "UNKNOWN")
+
+
+def analyze_lifecycle(  # noqa: C901 - complete stage projection
+    scan_path: Path,
+    storage_root: Path,
+    analysis_path: Path | None = None,
+) -> dict[str, object]:
+    """Project every scan member through its actual fail-closed lifecycle.
+
+    Read-only: no provider call and no state mutation.
+    """
+    if not storage_root.is_absolute():
+        raise ValueError("invalid storage root")
+    scan = admit_retained_scan_document_v1(_read_scan_bytes(scan_path))
+    rows = [
+        *cast(list[dict[str, object]], scan.get("candidates") or []),
+        *cast(list[dict[str, object]], scan.get("other_stocks") or []),
+    ]
+    analysis_outcomes: dict[str, str] = {}
+    if analysis_path is not None:
+        analysis_value = json.loads(analysis_path.read_text())
+        if type(analysis_value) is not dict:
+            raise ValueError("invalid analysis report")
+        analysis = cast(dict[str, object], analysis_value)
+        for member_value in cast(list[object], analysis.get("members") or []):
+            if type(member_value) is not dict:
+                continue
+            member_row = cast(dict[str, object], member_value)
+            symbol = member_row.get("symbol")
+            policy_value = member_row.get("policy")
+            if type(symbol) is str and type(policy_value) is dict:
+                policy = cast(dict[str, object], policy_value)
+                outcome = policy.get("outcome")
+                if type(outcome) is str:
+                    analysis_outcomes[symbol] = outcome
+    members: list[dict[str, object]] = []
+    for row in rows:
+        symbol = row.get("symbol")
+        symbol_text = symbol if type(symbol) is str else ""
+        safety_value = row.get("safety_status")
+        if safety_value is None:
+            safety_eligibility = row.get("safety_eligibility")
+            if type(safety_eligibility) is dict:
+                safety_value = cast(dict[str, object], safety_eligibility).get("status")
+        reason = row.get("failed_rule")
+        decision = row.get("decision")
+        decision_text = decision if type(decision) is str else "UNKNOWN"
+        structure: dict[str, object] | None = None
+        data_status = "UNAVAILABLE"
+        try:
+            state = read_scanner_pair_state_v1(storage_root, symbol_text)
+            if state is not None:
+                observation = read_stock_observation_v1(
+                    storage_root, state.current_observation_identity_sha256
+                )
+                data_status = "PASS" if observation.status == "READY" else "UNAVAILABLE"
+                structure = _observation_structure(observation)
+        except Exception:  # noqa: BLE001 - per-symbol lifecycle boundary
+            data_status = "UNAVAILABLE"
+        outcome = analysis_outcomes.get(symbol_text)
+        stages = [
+            _lifecycle_stage(
+                "UNIVERSE", "PASS", {"membership": scan.get("universe_type")}
+            ),
+            _lifecycle_stage("DATA", data_status, {"observed": data_status}),
+            _lifecycle_stage(
+                "SAFETY",
+                _safety_status(safety_value),
+                {"status": safety_value, "reason": reason},
+            ),
+            _lifecycle_stage(
+                "STRUCTURE",
+                "PASS" if structure is not None else "INSUFFICIENT",
+                structure or {},
+            ),
+            _lifecycle_stage("POLICY", decision_text, {"reason": reason}),
+            _lifecycle_stage(
+                "CANDIDATE_ANALYSIS",
+                outcome
+                if outcome is not None
+                else (
+                    "NOT_RUN"
+                    if decision_text == "RESEARCH_CANDIDATE"
+                    else "NOT_APPLICABLE"
+                ),
+                {"outcome": outcome},
+            ),
+            _lifecycle_stage(
+                "BASKET",
+                (outcome if outcome is not None else "NOT_REACHED"),
+                {"outcome": outcome},
+            ),
+        ]
+        member: dict[str, object] = {
+            "symbol": symbol_text,
+            "industry": row.get("industry"),
+            "decision": decision_text,
+            "stages": stages,
+        }
+        member["lifecycle_identity_sha256"] = _identity(member)
+        members.append(member)
+    report: dict[str, object] = {
+        "schema": LIFECYCLE_SCHEMA,
+        "scan_result_identity_sha256": scan.get("result_identity_sha256"),
+        "scan_timestamp": scan.get("scan_timestamp"),
+        "universe_type": scan.get("universe_type"),
+        "members": members,
+    }
+    report["report_identity_sha256"] = _identity(report)
+    return report
+
+
 def _identity(value: object) -> str:
     return hashlib.sha256(
         json.dumps(
@@ -913,4 +1072,4 @@ def analyze_scan(scan_path: Path) -> dict[str, object]:
     return report
 
 
-__all__ = ["SCHEMA", "analyze_scan"]
+__all__ = ["LIFECYCLE_SCHEMA", "SCHEMA", "analyze_lifecycle", "analyze_scan"]
