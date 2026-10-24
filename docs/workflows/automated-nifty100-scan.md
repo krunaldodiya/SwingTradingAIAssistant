@@ -309,7 +309,11 @@ run.
 
 BharatStock history is also assembled from a persisted per-session cache under
 `bharatstock-session-cache-v1`. Each record carries the session row, provider,
-price/volume basis, response digests, and retrieval time. A window uses cached
-sessions when valid and fetches only genuinely missing sessions; a corrupt or
-mismatched record falls back to the provider instead of entering a decision.
+price/volume basis, response digests, retrieval time, and a SHA-256 of the
+record itself. A window uses cached sessions when valid and fetches only
+genuinely missing sessions; a corrupt or mismatched record falls back to the
+provider instead of entering a decision. `--refresh` always re-fetches the
+terminal session, so corrections are still observed. Composed windows keep at
+most 64 distinct source responses; beyond that the full window is re-fetched
+and the cache is rewritten.
 

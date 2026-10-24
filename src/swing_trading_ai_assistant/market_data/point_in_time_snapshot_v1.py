@@ -690,7 +690,9 @@ def _parse_member_history(
     if type(raw_shas) is not list:
         raise PointInTimeSnapshotUnavailable("revision history invalid")
     sha_items = cast(list[object], raw_shas)
-    if not 1 <= len(sha_items) <= 8 or any(not _valid_digest(sha) for sha in sha_items):
+    if not 1 <= len(sha_items) <= 64 or any(
+        not _valid_digest(sha) for sha in sha_items
+    ):
         raise PointInTimeSnapshotUnavailable("revision history invalid")
     request_count = history["request_count"]
     if type(request_count) is not int or not 0 <= request_count <= 1_000_000:

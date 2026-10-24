@@ -4,7 +4,7 @@ from typing import Final
 
 CURRENT_RESEARCH_BINDING_RUNTIME_SOURCE_SHA256_V2: Final[dict[str, str]] = {
     "src/swing_trading_ai_assistant/market_data/adjusted_daily/service_v3.py": "c66ade0093744edd0cc600d8e8cb518f9276b76f9feba9644d79ef06a5b3d45f",
-    "src/swing_trading_ai_assistant/market_data/bharatstock.py": "2924ed4e35c8195029bb58ca711bb049d8d0a0d939f7a69146c19265c491ea52",
+    "src/swing_trading_ai_assistant/market_data/bharatstock.py": "3549dc75ae84f1ef41245c50d840541712ef562fd5a2bc955fbe8dcf471aadb5",
     "src/swing_trading_ai_assistant/market_data/current_research_binding_v2.py": "977e48cc06e5cfccb27fc6576d4f27a93fac7e6e6f815aceb9d07e028625a442",
     "src/swing_trading_ai_assistant/market_data/catalog.py": "ae17eac5475a39d5ff08173e9b2154c0cf33778f573e7d894656a2ba685294ac",
     "src/swing_trading_ai_assistant/market_data/instrument_snapshot.py": "f1c6da70dfce71bc19e4500198a88244d91163b0838795839c2651057e18132d",

@@ -5,9 +5,9 @@ from typing import Final
 SCAN_DECISION_OPPORTUNITY_GRADING_RUNTIME_SOURCE_SHA256_V1: Final[dict[str, str]] = {
     "src/swing_trading_ai_assistant/market_data/scan_decision_opportunity_grading.py": "b2e408f784192a6173cecaa274dfa0b22250c9277a2dc4c4cc057817cd69451a",
     "src/swing_trading_ai_assistant/market_data/scan_decision_evidence.py": "f2e630c9c2f71f1700e0d21eff89ed5d93f1c75854b00b502b52bf2ed9960289",
-    "src/swing_trading_ai_assistant/market_data/bharatstock.py": "2924ed4e35c8195029bb58ca711bb049d8d0a0d939f7a69146c19265c491ea52",
+    "src/swing_trading_ai_assistant/market_data/bharatstock.py": "3549dc75ae84f1ef41245c50d840541712ef562fd5a2bc955fbe8dcf471aadb5",
     "src/swing_trading_ai_assistant/market_data/bharatstock_capture.py": "9b529bb2f413ac58d5e14e545380409a18c10b797dd913cb24536a90f3f92d2a",
-    "src/swing_trading_ai_assistant/market_data/bharatstock_capture_runtime_identity_manifest.py": "22699d50c924d626288043a89fb51fbf0b5b067c5ef936f0e1f1ccaee5dd4132",
+    "src/swing_trading_ai_assistant/market_data/bharatstock_capture_runtime_identity_manifest.py": "52b6ea23caf00260b9e4ffd473df9e1eec31b4934c70493862b5b096b077c4d5",
     "src/swing_trading_ai_assistant/market_data/capture_forward_adjusted_ohlcv.py": "392431179a4ec08d18f117fc584c6c8b413e5646102f20618b8745bfa292b8b7",
     "src/swing_trading_ai_assistant/market_data/schedule_evidence.py": "2894a34356c7d12c71cf2a9cb133d0a5d7aaa83a83d7ac43549a13e7b9081801",
     "src/swing_trading_ai_assistant/market_data/storage_root_lease.py": "f93eac4f668dbdb0e236a3a54452a8d022c5700e91452536acafb1300b22f6ff",
@@ -16,5 +16,5 @@ SCAN_DECISION_OPPORTUNITY_GRADING_RUNTIME_SOURCE_SHA256_V1: Final[dict[str, str]
     "src/swing_trading_ai_assistant/market_data/stock_observations.py": "01e59ddaa39d3d0020c5e7ee51dfa5a88a0ffee6d5f950f88f2a3ceabe0d585e",
     "src/swing_trading_ai_assistant/market_data/current_stock_research.py": "1cb067767faa60dd6a35ff44e434b2cc2e071f3cfbb71cd371c6b8a781ba590e",
     "src/swing_trading_ai_assistant/market_data/signal_decisions_scan_v3.py": "586d1b7dd97094924bfd8cf5e2658e5af8c3b472190c356ba2c63ba7a76a8554",
-    "src/swing_trading_ai_assistant/market_data/signal_decisions_scan_v3_runtime_identity_manifest.py": "4048595b0a5e17c779499a6ef6dbf410a3ae1b96d4d7c69e0c510e94d04bd556",
+    "src/swing_trading_ai_assistant/market_data/signal_decisions_scan_v3_runtime_identity_manifest.py": "4cfcd9bf45c01b8daf3fa265be30b606e7a150921c976234daca7fecb1192d16",
 }

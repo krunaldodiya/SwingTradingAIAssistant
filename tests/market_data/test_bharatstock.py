@@ -409,6 +409,34 @@ def test_session_cache_refetches_corrupt_or_mismatched_records(tmp_path) -> None
     assert len(mismatch.urls) == 2
 
 
+def test_session_cache_refetches_geometry_valid_tamper(tmp_path) -> None:
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    BharatStockClient(
+        api_key="test-key",
+        transport=_Transport(_identity(), _page([_row("2026-08-27")])),
+        session_cache_root=cache,
+    ).history(_MEMBER, _START, _START)
+    cached = next(cache.rglob("session=2026-08-27.json"))
+    payload = json.loads(cached.read_text())
+    payload["close"] = "103"
+    cached.write_text(json.dumps(payload))
+    repair = _Transport(_identity(), _page([_row("2026-08-27")]))
+    BharatStockClient(
+        api_key="test-key", transport=repair, session_cache_root=cache
+    ).history(_MEMBER, _START, _START, expected_sessions=(_START,))
+    assert len(repair.urls) == 2
+
+    refresh = _Transport(_identity(), _page([_row("2026-08-27")]))
+    BharatStockClient(
+        api_key="test-key",
+        transport=refresh,
+        session_cache_root=cache,
+        refresh_terminal=True,
+    ).history(_MEMBER, _START, _START, expected_sessions=(_START,))
+    assert len(refresh.urls) == 2
+
+
 def test_session_cache_returns_available_rows_when_terminal_is_missing(
     tmp_path,
 ) -> None:

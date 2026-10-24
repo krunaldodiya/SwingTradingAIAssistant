@@ -482,7 +482,9 @@ def _capture_window(
 ) -> tuple[CaptureResultV2, CaptureRequestV2]:
     attempted: list[CaptureRequestV2] = []
     if price_client is None:
-        price_client = BharatStockClient(session_cache_root=root)
+        price_client = BharatStockClient(
+            session_cache_root=root, refresh_terminal=refresh
+        )
     try:
         result = legacy._prepare_capture(  # pyright: ignore[reportPrivateUsage]
             request,

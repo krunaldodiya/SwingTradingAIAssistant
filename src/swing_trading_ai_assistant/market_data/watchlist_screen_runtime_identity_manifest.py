@@ -11,5 +11,5 @@ WATCHLIST_SCREEN_RUNTIME_SOURCE_SHA256_V1: Final[dict[str, str]] = {
     "src/swing_trading_ai_assistant/volume_analysis/request.py": "241fa165aa3e684037499a187d18779f835997ce9c064a6a32a2c542dc6ecc97",
     "src/swing_trading_ai_assistant/volume_analysis/service.py": "3c23777c5825f2b4c46c6b5ff9de184826c25910688ef2ec432dfc86da096893",
     "src/swing_trading_ai_assistant/market_data/setup_screen.py": "448e32684c5dc3bd82511bcee224d347aadb9b9211f0cf215493050e194b7b38",
-    "src/swing_trading_ai_assistant/market_data/setup_screen_runtime_identity_manifest.py": "19eb7953a750e41bbcf141d6b14a9f713861ffd167d90e9521652896dff5b81f",
+    "src/swing_trading_ai_assistant/market_data/setup_screen_runtime_identity_manifest.py": "934cbae424562c7aed6afa6030e9d6c130101dc338bf5d73e9a7f4c30279a104",
 }

@@ -3,9 +3,9 @@
 from typing import Final
 
 CURRENT_STOCK_RESEARCH_RUNTIME_SOURCE_SHA256_V1: Final[dict[str, str]] = {
-    "src/swing_trading_ai_assistant/market_data/bharatstock.py": "2924ed4e35c8195029bb58ca711bb049d8d0a0d939f7a69146c19265c491ea52",
+    "src/swing_trading_ai_assistant/market_data/bharatstock.py": "3549dc75ae84f1ef41245c50d840541712ef562fd5a2bc955fbe8dcf471aadb5",
     "src/swing_trading_ai_assistant/market_data/bharatstock_capture.py": "9b529bb2f413ac58d5e14e545380409a18c10b797dd913cb24536a90f3f92d2a",
-    "src/swing_trading_ai_assistant/market_data/bharatstock_capture_runtime_identity_manifest.py": "22699d50c924d626288043a89fb51fbf0b5b067c5ef936f0e1f1ccaee5dd4132",
+    "src/swing_trading_ai_assistant/market_data/bharatstock_capture_runtime_identity_manifest.py": "52b6ea23caf00260b9e4ffd473df9e1eec31b4934c70493862b5b096b077c4d5",
     "src/swing_trading_ai_assistant/market_data/capture_forward_adjusted_ohlcv.py": "392431179a4ec08d18f117fc584c6c8b413e5646102f20618b8745bfa292b8b7",
     "src/swing_trading_ai_assistant/market_data/catalog.py": "ae17eac5475a39d5ff08173e9b2154c0cf33778f573e7d894656a2ba685294ac",
     "src/swing_trading_ai_assistant/market_data/cli.py": "4bd73e7a5ee79a61ac48d69664a5f19ac1421853c460a00d2b75735f291ffff6",

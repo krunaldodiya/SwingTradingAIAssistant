@@ -33,6 +33,7 @@ VOLUME_BASIS: Final = "SOURCE_REPORTED"
 _BASE: Final = "https://bharatstockapi.com/v1/stocks/"
 _PAGE_SIZE: Final = 1000
 _MAX_PAGES: Final = 40
+_MAX_RESPONSE_SOURCES: Final = 64
 _MAX_BODY: Final = 2 * 1024 * 1024
 _ISIN = re.compile(r"[A-Z]{2}[A-Z0-9]{9}[0-9]\Z")
 _SYMBOL = re.compile(r"[A-Z0-9][A-Z0-9&._-]{0,63}\Z")
@@ -183,7 +184,7 @@ class BharatStockHistory:
             or self.retrieved_at.utcoffset() != UTC.utcoffset(None)
             or type(self.response_sha256s) is not tuple
             or type(self.request_count) is not int
-            or not 2 <= self.request_count <= _MAX_PAGES + 1
+            or not 2 <= self.request_count <= _MAX_RESPONSE_SOURCES
             or self.request_count != len(self.response_sha256s)
             or any(
                 type(value) is not str or _DIGEST.fullmatch(value) is None
@@ -346,6 +347,7 @@ class BharatStockClient:
         transport: HttpTransport | None = None,
         max_requests: int = 2000,
         session_cache_root: Path | None = None,
+        refresh_terminal: bool = False,
     ) -> None:
         if type(max_requests) is not int or not 1 <= max_requests <= 2000:
             raise ValueError("invalid BharatStock request budget")
@@ -355,6 +357,7 @@ class BharatStockClient:
         self._transport = _transport() if transport is None else transport
         self._max_requests = max_requests
         self._session_cache_root = session_cache_root
+        self._refresh_terminal = refresh_terminal
         self._requests_used = 0
         self._shared_failure: str | None = None
 
@@ -538,6 +541,15 @@ class BharatStockClient:
         if type(payload) is not dict:
             return None
         value = cast(dict[str, object], payload)
+        record_sha = value.pop("record_sha256", None)
+        body = json.dumps(
+            value, ensure_ascii=True, sort_keys=True, separators=(",", ":")
+        ).encode()
+        if (
+            type(record_sha) is not str
+            or record_sha != hashlib.sha256(body).hexdigest()
+        ):
+            return None
         if (
             value.get("schema") != "bharatstock-session-cache@v1"
             or value.get("provider") != PROVIDER_SOURCE
@@ -618,6 +630,10 @@ class BharatStockClient:
                 "request_count": history.request_count,
                 "retrieved_at": history.retrieved_at.isoformat(),
             }
+            body = json.dumps(
+                payload, ensure_ascii=True, sort_keys=True, separators=(",", ":")
+            ).encode()
+            payload["record_sha256"] = hashlib.sha256(body).hexdigest()
             temporary = path.with_name(path.name + ".tmp")
             try:
                 path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -664,7 +680,7 @@ class BharatStockClient:
         missing: list[date] = []
         for session in sessions:
             record = self._read_cached_session(instrument, session)
-            if record is None:
+            if record is None or (self._refresh_terminal and session == sessions[-1]):
                 missing.append(session)
             else:
                 records.append(record)
@@ -705,6 +721,12 @@ class BharatStockClient:
                 if digest not in seen:
                     seen.add(digest)
                     digests.append(digest)
+        if len(digests) > _MAX_RESPONSE_SOURCES:
+            full = self._network_history(
+                instrument, sessions[0], sessions[-1], effect_guard=effect_guard
+            )
+            self._write_cached_sessions(instrument, full)
+            return full
         return BharatStockHistory(
             instrument,
             rows,
