@@ -299,6 +299,13 @@ To prevent capital risk from operator pump-and-dump schemes, newly listed volati
 | **Penny / Low-Priced Stocks** | Price $\ge \text{INR } 50.00$ | Rejects sub-50 operator-dominated penny stocks (`PENNY_STOCK_EXCLUDED`). |
 | **Illiquid Small-Caps** | 20-day Median Turnover $\ge \text{INR } 25.0\text{ Crore / day}$ | Rejects thinly traded small-caps prone to syndicates (`ILLIQUID_SMALLCAP_EXCLUDED`). |
 | **Circuit Band Buffer** | Distance to Upper/Lower Circuit $\ge 2.0\%$ | Rejects circuit-locked stocks where exits are trapped (`CIRCUIT_PROXIMITY`). |
+## Research delivery gate
+
+A scan is not a delivered research result until its private-ledger entry is
+written and synced (or the owner explicitly says skip). The answer must name the
+entry path and state which layers ran. Reporting candidates before persistence is
+a protocol violation.
+
 ## Performance
 
 The parsed instrument snapshot is cached in process memory by its immutable
