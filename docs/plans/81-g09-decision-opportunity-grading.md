@@ -27,7 +27,7 @@ No retained grading record or new namespace; no walk-forward/series aggregation;
 
 ## Read-only sources (all under `--storage-root`)
 
-- Page: `scan-decision-evidence-v1/<handle>.json`, re-admitted with `read_scan_decision_evidence_v1` (`scan-decision-evidence@v1`, `swing-trade-scan@v2`). The page's symbols, decisions, reasons, observation handles, scan timestamp, universe type, and row count are authoritative for its own scope.
+- Page: `scan-decision-evidence-v1/<handle>.json`, re-admitted with `read_scan_decision_evidence_v1` (`scan-decision-evidence@v1`, `swing-trade-scan@v2`/`@v3`). The page's symbols, decisions, reasons, observation handles, scan timestamp, universe type, and row count are authoritative for its own scope.
 - Official calendar: `calendar-schedules/sha256/<digest>.json`, content-addressed by the SHA-256 of the stored bytes; each record has `sessions` (`trade_date`, `kind`, `open_at`, `close_at`), `closures`, and a covered range. Read under the storage-root read lease; a record whose file name, bytes, canonical re-serialization, or digest disagree fails closed.
 - Capture bars: `bharatstock-capture-v3/revisions/<revision>.json`, enumerated under one borrowed read lease and re-admitted with `read_bharatstock_capture_revision_v2` before any bar is used. No raw-response, network, or provider path is imported or called.
 

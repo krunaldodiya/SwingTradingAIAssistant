@@ -32,7 +32,7 @@ from .stock_observations import (
     record_stock_observation_v1,
 )
 
-SCHEMA: Final = "swing-trade-scan@v2"
+SCHEMA: Final = "swing-trade-scan@v3"
 SCAN_SCHEMA: Final = SCHEMA
 BRIEF_SCHEMA: Final = "swing-trade-brief@v1"
 _SYMBOL: Final = re.compile(r"[A-Z0-9][A-Z0-9.&_-]{0,31}\Z")

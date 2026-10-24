@@ -16,13 +16,14 @@ from swing_trading_ai_assistant.market_data.scan_decision_evidence import (
     read_scan_decision_evidence_v1,
 )
 from swing_trading_ai_assistant.market_data.signal_decisions_scan_v3 import (
+    SCAN_SCHEMA,
     _runtime_identity,
 )
 
 
-def _scan() -> dict[str, object]:
+def _scan(schema: str = "swing-trade-scan@v2") -> dict[str, object]:
     value: dict[str, object] = {
-        "schema": "swing-trade-scan@v2",
+        "schema": schema,
         "scan_timestamp": "2026-10-17T00:00:00.000000Z",
         "storage_root_sha256": "a" * 64,
         "universe_type": "EXPLICIT",
@@ -148,6 +149,15 @@ def test_retained_terminal_unavailable_evidence_round_trips(tmp_path: Path) -> N
 
     assert result["decision_evidence_handle"] == handle
     assert result["scan"] == _scan()
+
+
+def test_current_v3_scan_is_admitted(tmp_path: Path) -> None:
+    scan = _scan(SCAN_SCHEMA)
+    handle = _record_scan_decision_evidence_v1(tmp_path, scan, _rows())
+
+    result = read_scan_decision_evidence_v1(tmp_path, handle)
+
+    assert result["scan"]["schema"] == SCAN_SCHEMA
 
 
 def test_tampered_evidence_fails_closed(tmp_path: Path) -> None:
