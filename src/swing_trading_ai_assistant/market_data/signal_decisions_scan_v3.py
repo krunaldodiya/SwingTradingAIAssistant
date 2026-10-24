@@ -476,7 +476,7 @@ def build_trade_brief(
             f"State the display projection's candidate age is {candidate_summary['age_completed_sessions']} completed session(s) (within the 1–5 freshness window); the canonical candidate age is in policy_decision.causal_evidence.",
             f"State candidate belongs to {candidate_summary.get('industry', 'NSE Equity')} industry.",
             f"State breakout price action status is {retest} ({dist} relative to breakout level).",
-            f"State the display projection's SMC demand-area support reference is INR {candidate_summary['supporting_stop_reference_inr']} with implied zone width INR {smc.get('demand_zone_width_inr')}.",
+            f"State the display projection's stop reference is INR {candidate_summary['supporting_stop_reference_inr']}; the displayed span to the broken high is INR {smc.get('demand_zone_width_inr')} and is not an order block or SMC zone.",
             f"State breakout volume expansion is {vol.get('volume_expansion')} with relative volume {vol.get('rvol')}.",
             f"State breakout candle quality is {pa.get('quality')} with body forming {pa.get('body_percent')} of range.",
             f"State 20-session relative strength vs Nifty benchmark is {rs.get('relative_strength')} ({rs.get('excess_return')}).",

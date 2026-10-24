@@ -183,7 +183,9 @@ def _lease(root: object, *, create: bool = False) -> StorageRootLease:
     return lease
 
 
-def _validate_scan(scan: object) -> dict[str, object]:
+def _validate_scan(
+    scan: object, *, require_current_runtime: bool = True
+) -> dict[str, object]:
     if type(scan) is not dict:
         raise ValueError("invalid scan")
     value = cast(dict[str, object], scan)
@@ -192,7 +194,10 @@ def _validate_scan(scan: object) -> dict[str, object]:
         raise ValueError("invalid scan schema")
     if set(value) != set(_SCAN_KEYS[schema]):
         raise ValueError("invalid scan schema")
-    if value.get("runtime_code_identity_sha256") != _scanner_runtime_identity():
+    runtime_identity = value.get("runtime_code_identity_sha256")
+    if type(runtime_identity) is not str or _DIGEST.fullmatch(runtime_identity) is None:
+        raise ValueError("invalid scanner runtime identity")
+    if require_current_runtime and runtime_identity != _scanner_runtime_identity():
         raise ValueError("scanner runtime mismatch")
     identity = value.get("result_identity_sha256")
     if type(identity) is not str or _DIGEST.fullmatch(identity) is None:
@@ -203,6 +208,26 @@ def _validate_scan(scan: object) -> dict[str, object]:
         raise ValueError("unadmitted scan")
     _validate_scan_shape(value)
     return value
+
+
+def admit_retained_scan_document_v1(raw: bytes) -> dict[str, object]:
+    """Admit a canonical retained scan document for historical analysis.
+
+    Identity, schema, shape and canonical bytes are verified. The scanner
+    runtime identity is recorded but not required to match the current code,
+    so older retained pages remain analyzable.
+    """
+    document = _closed(raw)
+    if set(document) == {"schema", "decision_evidence_handle", "scan"}:
+        if document.get("schema") != ENVELOPE_SCHEMA:
+            raise ValueError("invalid envelope schema")
+        handle = document.get("decision_evidence_handle")
+        if type(handle) is not str or _DIGEST.fullmatch(handle) is None:
+            raise ValueError("invalid decision evidence handle")
+        scan = document.get("scan")
+    else:
+        scan = document
+    return _validate_scan(scan, require_current_runtime=False)
 
 
 def _validate_scan_shape(scan: dict[str, object]) -> None:

@@ -299,6 +299,27 @@ To prevent capital risk from operator pump-and-dump schemes, newly listed volati
 | **Penny / Low-Priced Stocks** | Price $\ge \text{INR } 50.00$ | Rejects sub-50 operator-dominated penny stocks (`PENNY_STOCK_EXCLUDED`). |
 | **Illiquid Small-Caps** | 20-day Median Turnover $\ge \text{INR } 25.0\text{ Crore / day}$ | Rejects thinly traded small-caps prone to syndicates (`ILLIQUID_SMALLCAP_EXCLUDED`). |
 | **Circuit Band Buffer** | Distance to Upper/Lower Circuit $\ge 2.0\%$ | Rejects circuit-locked stocks where exits are trapped (`CIRCUIT_PROXIMITY`). |
+## Candidate analysis (post-scan)
+
+The scan remains the decision layer. The missing price-action/SMC facts are a
+separate, additive analysis artifact; they do not change candidate status or the
+scan schema:
+
+```bash
+doppler run -- swing-analysis \
+  --scan-json ~/daily-scan/scan-YYYY-MM-DD-research.json \
+  --output json
+```
+
+Per candidate it reports ATR20, event-session volume versus the prior 20-session
+average and median, completed-bar retest state, 252-session swing
+support/resistance clusters, weekly trend, a real last-bearish-candle demand
+zone, and explicit flags (`VOLUME_RATIO_BELOW_1`, `RETEST_NOT_CONFIRMED`,
+`WEEKLY_TREND_NOT_UP`, `DEMAND_ZONE_TESTED`, `EXTENSION_ABOVE_2_ATR`). It also
+labels whether the structural stop came from policy evidence or the display
+projection. Flags are for research filtering; they are not hard decision gates
+yet.
+
 ## Research delivery gate
 
 A scan is not a delivered research result until its private-ledger entry is

@@ -36,6 +36,7 @@ efficient-current-nifty100-adjusted-capture = "swing_trading_ai_assistant.entryp
 equity-data-download = "equity_data_downloader.cli:main"
 stock-observations = "swing_trading_ai_assistant.entrypoints.stock_observations:main"
 signal-decisions = "swing_trading_ai_assistant.entrypoints.signal_decisions:main"
+swing-analysis = "swing_trading_ai_assistant.market_data.swing_analysis_cli:main"
 stock-safety-evidence = "swing_trading_ai_assistant.entrypoints.stock_safety_evidence:main"
 point-in-time-snapshots = "swing_trading_ai_assistant.entrypoints.point_in_time_snapshots:main"
 
