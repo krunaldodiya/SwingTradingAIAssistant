@@ -348,7 +348,7 @@ def test_cli_scan_subcommand_json_and_table(
     )
     captured_json = capsys.readouterr()
     assert code_json == 0
-    assert "swing-trade-scan@v2" in captured_json.out
+    assert "swing-trade-scan@v3" in captured_json.out
     assert "BOOTSTRAP" not in captured_json.err
 
 
@@ -395,7 +395,7 @@ def test_cli_universe_scan_requires_retained_witness(
     captured = capsys.readouterr()
 
     assert code == 1
-    assert "swing-trade-scan@v2" in captured.out
+    assert "swing-trade-scan@v3" in captured.out
     assert "UNAVAILABLE" in captured.out
 
 

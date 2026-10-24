@@ -28,6 +28,7 @@ _MAX_LISTED_RECORDS: Final = 4096
 _MAX_DEPTH: Final = 64
 _SCAN_SCHEMA_V1: Final = "swing-trade-scan@v1"
 _SCAN_SCHEMA_V2: Final = "swing-trade-scan@v2"
+_SCAN_SCHEMA_V3: Final = "swing-trade-scan@v3"
 _SCAN_KEYS_V1: Final = frozenset(
     {
         "schema",
@@ -77,10 +78,14 @@ _SCAN_KEYS_V2: Final = frozenset(
 _SCAN_KEYS: Final = {
     _SCAN_SCHEMA_V1: _SCAN_KEYS_V1,
     _SCAN_SCHEMA_V2: _SCAN_KEYS_V2,
+    _SCAN_SCHEMA_V3: _SCAN_KEYS_V2,
 }
 _UNIVERSE_TYPES: Final = {
     _SCAN_SCHEMA_V1: frozenset({"EXPLICIT", "NIFTY_100_PRIORITY_NIFTY_500"}),
     _SCAN_SCHEMA_V2: frozenset(
+        {"EXPLICIT", "NIFTY_50", "NIFTY_NEXT_50", "NIFTY_100", "NIFTY_200"}
+    ),
+    _SCAN_SCHEMA_V3: frozenset(
         {"EXPLICIT", "NIFTY_50", "NIFTY_NEXT_50", "NIFTY_100", "NIFTY_200"}
     ),
 }

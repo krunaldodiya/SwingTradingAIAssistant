@@ -69,7 +69,7 @@ doppler run -- signal-decisions scan \
 ### C. Output Formats
 
 * `--output table` *(Default)*: Formatted ASCII/Unicode summary table for terminal display.
-* `--output json`: Compact canonical JSON adhering to `swing-trade-scan@v2` for automated ingestion.
+* `--output json`: Compact canonical JSON adhering to `swing-trade-scan@v3` for automated ingestion.
 * `--refresh`: Admit a new `CURRENT_STRUCTURE` observation for each symbol so the retained pair state can advance. Without it, an existing state is replayed (or a retained observation bootstraps the first seed); a scan never pairs stale data or invents a new predecessor.
 
 When no later completed session exists, the scan re-evaluates the stored
@@ -98,7 +98,7 @@ doppler run -- signal-decisions scan \
 ```
 
 The response is a `scan-decision-evidence-envelope@v1` containing the unchanged
-`swing-trade-scan@v2` result and a `decision_evidence_handle`. Read that exact
+`swing-trade-scan@v3` result and a `decision_evidence_handle`. Read that exact
 record later without a provider call:
 
 ```bash
