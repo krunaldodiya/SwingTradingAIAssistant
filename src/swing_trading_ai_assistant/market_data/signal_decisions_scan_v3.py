@@ -782,11 +782,18 @@ def _scan_stock(  # noqa: C901 - multi-family screening and anti-manipulation ga
                 bound_symbols.append(symbol)
             failure_reason = "OBSERVATION_PAIR_SEEDED_BOOTSTRAP"
         elif handle == state.current_observation_identity_sha256:
+            if state.previous_observation_identity_sha256 is None:
+                return _unavailable_result(
+                    symbol, "OBSERVATION_PAIR_AWAITING_NEXT_SESSION"
+                )
             policy_result = evaluate_signal_decision_from_records_v3(
-                storage_root, handle, handle
+                storage_root,
+                state.previous_observation_identity_sha256,
+                handle,
             )
         else:
             current_session = _structure_session(obs_result.packet)
+            stored = None
             try:
                 stored = read_stock_observation_v1(
                     storage_root, state.current_observation_identity_sha256
@@ -796,27 +803,37 @@ def _scan_stock(  # noqa: C901 - multi-family screening and anti-manipulation ga
                 stored_session = None
             if (
                 current_session is not None
+                and stored is not None
                 and stored_session is not None
                 and current_session <= stored_session
             ):
-                return _unavailable_result(
-                    symbol, "OBSERVATION_PAIR_AWAITING_NEXT_SESSION"
+                if state.previous_observation_identity_sha256 is None:
+                    return _unavailable_result(
+                        symbol, "OBSERVATION_PAIR_AWAITING_NEXT_SESSION"
+                    )
+                policy_result = evaluate_signal_decision_from_records_v3(
+                    storage_root,
+                    state.previous_observation_identity_sha256,
+                    state.current_observation_identity_sha256,
                 )
-            policy_result = evaluate_signal_decision_from_records_v3(
-                storage_root,
-                state.current_observation_identity_sha256,
-                handle,
-            )
-            advance_scanner_pair_state_v1(
-                storage_root,
-                symbol,
-                expected_current_observation_identity_sha256=(
-                    state.current_observation_identity_sha256
-                ),
-                new_current_observation_identity_sha256=handle,
-            )
-            if sessions_back and bound_symbols is not None:
-                bound_symbols.append(symbol)
+                obs_result = stored
+                handle = state.current_observation_identity_sha256
+            else:
+                policy_result = evaluate_signal_decision_from_records_v3(
+                    storage_root,
+                    state.current_observation_identity_sha256,
+                    handle,
+                )
+                advance_scanner_pair_state_v1(
+                    storage_root,
+                    symbol,
+                    expected_current_observation_identity_sha256=(
+                        state.current_observation_identity_sha256
+                    ),
+                    new_current_observation_identity_sha256=handle,
+                )
+                if sessions_back and bound_symbols is not None:
+                    bound_symbols.append(symbol)
     except ScannerPairStateUnavailableV1:
         return _unavailable_result(symbol, "OBSERVATION_PAIR_STATE_UNAVAILABLE")
     except Exception:

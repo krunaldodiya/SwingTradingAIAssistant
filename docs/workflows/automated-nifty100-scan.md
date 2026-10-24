@@ -72,6 +72,17 @@ doppler run -- signal-decisions scan \
 * `--output json`: Compact canonical JSON adhering to `swing-trade-scan@v2` for automated ingestion.
 * `--refresh`: Admit a new `CURRENT_STRUCTURE` observation for each symbol so the retained pair state can advance. Without it, an existing state is replayed (or a retained observation bootstraps the first seed); a scan never pairs stale data or invents a new predecessor.
 
+When no later completed session exists, the scan re-evaluates the stored
+previous→current pair without advancing state. Re-running on the same session
+therefore returns the same candidate result; `--refresh` on the same session
+also re-evaluates that pair and does not advance. Only a genuinely later
+observation advances the pair.
+
+The scan timestamp is a research-run label, not a market session. Runs on
+weekends and exchange holidays reuse the same last completed sessions, so their
+candidate facts must match the prior run on those sessions even though the
+research label differs.
+
 
 ### D. Retain exact decision evidence for later qualification
 
