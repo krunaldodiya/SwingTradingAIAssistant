@@ -259,11 +259,10 @@ def test_format_scan_table_renders_summary_and_candidates() -> None:
                     "supporting_stop_reference_inr": "1442.5",
                     "risk_per_share_inr": "315.6",
                     "invalidation_condition": "Daily close strictly below supporting stop reference",
-                    "smc_price_action": {
-                        "retest_state": "EXPANDING_ABOVE",
-                        "breakout_distance_percent": "+12.63%",
-                        "demand_zone_support_inr": "1442.5",
-                        "demand_zone_width_inr": "118.5",
+                    "breakout_distance": {
+                        "state": "ABOVE_BROKEN_HIGH",
+                        "percent": "+12.63%",
+                        "stop_span_inr": "118.5",
                     },
                     "industry": "Information Technology",
                     "volume_analysis": {"rvol": "1.25x", "volume_expansion": True},
@@ -1022,11 +1021,10 @@ def _candidate_display_summary_fixture() -> dict[str, object]:
         "supporting_stop_reference_inr": "3905.6",
         "risk_per_share_inr": "481.8",
         "invalidation_condition": "Daily close strictly below supporting stop reference",
-        "smc_price_action": {
-            "retest_state": "EXPANDING_ABOVE",
-            "breakout_distance_percent": "+4.87%",
-            "demand_zone_support_inr": "3905.6",
-            "demand_zone_width_inr": "118.5",
+        "breakout_distance": {
+            "state": "ABOVE_BROKEN_HIGH",
+            "percent": "+4.87%",
+            "stop_span_inr": "118.5",
         },
         "industry": "Information Technology",
         "volume_analysis": {"rvol": "1.25x", "volume_expansion": True},
@@ -1080,6 +1078,11 @@ def test_build_trade_brief_candidate_claims_attribute_display_anchors() -> None:
         "State the display projection's candidate age is 3 completed session(s) "
         "(within the 1–5 freshness window); the canonical candidate age is in "
         "policy_decision.causal_evidence."
+    )
+    assert claims[6] == (
+        "State the display projection's price is +4.87% from the broken high "
+        "(ABOVE_BROKEN_HIGH); this is a price-distance fact, not a "
+        "completed-bar retest."
     )
     assert claims[7] == (
         "State the display projection's stop reference is INR 3905.6; the "

@@ -332,14 +332,14 @@ def _build_candidate_summary(
         if broken_level > 0
         else Decimal("0")
     )
-    if broken_level <= current_price <= (broken_level * Decimal("1.015")):
-        retest_state = "TESTING_BROKEN_HIGH"
-    elif current_price > (broken_level * Decimal("1.015")):
-        retest_state = "EXPANDING_ABOVE"
+    if current_price < broken_level:
+        breakout_distance_state = "BELOW_BROKEN_HIGH"
+    elif current_price == broken_level:
+        breakout_distance_state = "AT_BROKEN_HIGH"
     else:
-        retest_state = "PULLBACK_BELOW_BREAKOUT"
+        breakout_distance_state = "ABOVE_BROKEN_HIGH"
 
-    demand_zone_width = broken_level - stop_price
+    stop_span = broken_level - stop_price
     volume_info, pa_info = _compute_breakout_analytics(bars, ev_date)
     rs_info = _compute_relative_strength(bars, benchmark_median_return)
 
@@ -354,11 +354,10 @@ def _build_candidate_summary(
         "risk_per_share_inr": _decimal_text(risk_per_share),
         "invalidation_condition": "Daily close strictly below supporting stop reference",
         "industry": industry,
-        "smc_price_action": {
-            "retest_state": retest_state,
-            "breakout_distance_percent": f"{dist_pct:+.2f}%",
-            "demand_zone_support_inr": _decimal_text(stop_price),
-            "demand_zone_width_inr": _decimal_text(demand_zone_width),
+        "breakout_distance": {
+            "state": breakout_distance_state,
+            "percent": f"{dist_pct:+.2f}%",
+            "stop_span_inr": _decimal_text(stop_span),
         },
         "volume_analysis": volume_info,
         "price_action_quality": pa_info,
@@ -462,12 +461,14 @@ def build_trade_brief(
     """
     is_candidate = decision == "RESEARCH_CANDIDATE" and candidate_summary is not None
     if is_candidate and candidate_summary is not None:
-        smc = cast(dict[str, object], candidate_summary.get("smc_price_action", {}))
+        breakout = cast(
+            dict[str, object], candidate_summary.get("breakout_distance", {})
+        )
         vol = cast(dict[str, object], candidate_summary.get("volume_analysis", {}))
         pa = cast(dict[str, object], candidate_summary.get("price_action_quality", {}))
         rs = cast(dict[str, object], candidate_summary.get("relative_strength", {}))
-        retest = str(smc.get("retest_state", ""))
-        dist = str(smc.get("breakout_distance_percent", ""))
+        breakout_state = str(breakout.get("state", ""))
+        dist = str(breakout.get("percent", ""))
         allowed_claims = [
             f"State the display projection shows a {candidate_summary['setup_event']} setup at level INR {candidate_summary['broken_high_level_inr']} on session {candidate_summary['event_session']}; the canonical pair-policy result and evidence remain authoritative in policy_decision.",
             f"State current quote price is INR {candidate_summary['current_price_inr']}.",
@@ -475,8 +476,8 @@ def build_trade_brief(
             f"State the display-implied risk per share is INR {candidate_summary['risk_per_share_inr']} (current price minus the display stop reference).",
             f"State the display projection's candidate age is {candidate_summary['age_completed_sessions']} completed session(s) (within the 1–5 freshness window); the canonical candidate age is in policy_decision.causal_evidence.",
             f"State candidate belongs to {candidate_summary.get('industry', 'NSE Equity')} industry.",
-            f"State breakout price action status is {retest} ({dist} relative to breakout level).",
-            f"State the display projection's stop reference is INR {candidate_summary['supporting_stop_reference_inr']}; the displayed span to the broken high is INR {smc.get('demand_zone_width_inr')} and is not an order block or SMC zone.",
+            f"State the display projection's price is {dist} from the broken high ({breakout_state}); this is a price-distance fact, not a completed-bar retest.",
+            f"State the display projection's stop reference is INR {candidate_summary['supporting_stop_reference_inr']}; the displayed span to the broken high is INR {breakout.get('stop_span_inr')} and is not an order block or SMC zone.",
             f"State breakout volume expansion is {vol.get('volume_expansion')} with relative volume {vol.get('rvol')}.",
             f"State breakout candle quality is {pa.get('quality')} with body forming {pa.get('body_percent')} of range.",
             f"State 20-session relative strength vs Nifty benchmark is {rs.get('relative_strength')} ({rs.get('excess_return')}).",
@@ -1314,7 +1315,7 @@ def format_scan_table(scan_result: dict[str, object]) -> str:
     if candidates:
         lines.append("CONFIRMED RESEARCH CANDIDATES (FULL 7-FAMILY INTEGRATION):")
         lines.append(
-            f"{'SYMBOL':<9} {'INDUSTRY':<22} {'PRICE':<10} {'SETUP':<9} {'AGE':<4} {'RVOL':<7} {'PA BODY':<8} {'REL STR':<15} {'STOP REF':<10} {'RETEST STATE'}"
+            f"{'SYMBOL':<9} {'INDUSTRY':<22} {'PRICE':<10} {'SETUP':<9} {'AGE':<4} {'RVOL':<7} {'PA BODY':<8} {'REL STR':<15} {'STOP REF':<10} {'BREAK DISTANCE'}"
         )
         lines.append("-" * 125)
         for c in candidates:
@@ -1325,7 +1326,7 @@ def format_scan_table(scan_result: dict[str, object]) -> str:
                 if type(summary_value) is dict
                 else {}
             )
-            smc = cast(dict[str, object], summary.get("smc_price_action", {}))
+            breakout = cast(dict[str, object], summary.get("breakout_distance", {}))
             vol = cast(dict[str, object], summary.get("volume_analysis", {}))
             pa = cast(dict[str, object], summary.get("price_action_quality", {}))
             rs = cast(dict[str, object], summary.get("relative_strength", {}))
@@ -1341,10 +1342,12 @@ def format_scan_table(scan_result: dict[str, object]) -> str:
             rs_status = str(rs.get("relative_strength", ""))
             rel_str = f"{rs_status[:4]} ({rs.get('excess_return', '')})"
             stop = f"INR {summary.get('supporting_stop_reference_inr', '')}"
-            retest = f"{smc.get('retest_state', '')} ({smc.get('breakout_distance_percent', '')})"
+            breakout_text = (
+                f"{breakout.get('state', '')} ({breakout.get('percent', '')})"
+            )
 
             lines.append(
-                f"{sym:<9} {ind:<22} {price:<10} {setup:<9} {age:<4} {rvol:<7} {body:<8} {rel_str:<15} {stop:<10} {retest}"
+                f"{sym:<9} {ind:<22} {price:<10} {setup:<9} {age:<4} {rvol:<7} {body:<8} {rel_str:<15} {stop:<10} {breakout_text}"
             )
         lines.append("-" * 125)
     else:
