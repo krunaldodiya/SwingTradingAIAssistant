@@ -1423,12 +1423,21 @@ def _member_result(  # noqa: C901 - explicit provider and evidence boundaries
     if effect_guard is not None:
         effect_guard()
     try:
-        history = client.history(
-            member,
-            request.sessions[0],
-            request.sessions[-1],
-            effect_guard=effect_guard,
-        )
+        if getattr(client, "_session_cache_root", None) is not None:
+            history = client.history(
+                member,
+                request.sessions[0],
+                request.sessions[-1],
+                effect_guard=effect_guard,
+                expected_sessions=tuple(request.sessions),
+            )
+        else:
+            history = client.history(
+                member,
+                request.sessions[0],
+                request.sessions[-1],
+                effect_guard=effect_guard,
+            )
     except BharatStockError as error:
         if effect_guard is not None:
             effect_guard()
