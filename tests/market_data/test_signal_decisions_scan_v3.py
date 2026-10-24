@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from datetime import date, timedelta
@@ -1519,3 +1520,43 @@ def test_scan_probe_skips_unreadable_pair_state(
     assert result["unknown_count"] == 1
     rows = cast(list[dict[str, object]], result["other_stocks"])
     assert rows[0]["failed_rule"] == "OBSERVATION_PAIR_STATE_UNAVAILABLE"
+
+
+def _write_industry_mapping(root: Path, count: int = 200) -> dict[str, str]:
+    directory = root / ".nifty200-industry-mapping-v1"
+    directory.mkdir(mode=0o700)
+    lines = ["Company Name,Industry,Symbol,Series,ISIN Code"]
+    expected: dict[str, str] = {}
+    for index in range(count):
+        symbol = f"SYM{index:03d}"
+        industry = "Financial Services"
+        expected[symbol] = industry
+        lines.append(f"Company {index},{industry},{symbol},EQ,INE000000{index:03d}")
+    raw = ("\n".join(lines) + "\n").encode()
+    digest = hashlib.sha256(raw).hexdigest()
+    (directory / f"raw-{digest}.csv").write_bytes(raw)
+    (directory / "manifest.json").write_text(
+        json.dumps(
+            {
+                "schema": "nifty200-industry-mapping@v1",
+                "source_url": "https://nsearchives.nseindia.com/content/indices/ind_nifty200list.csv",
+                "retrieved_at": "2026-10-24T00:00:00Z",
+                "sha256": digest,
+                "row_count": count,
+            }
+        )
+    )
+    return expected
+
+
+def test_nifty200_industry_mapping_is_preferred(tmp_path: Path) -> None:
+    expected = _write_industry_mapping(tmp_path)
+    mapping = scan_module._load_industry_mapping(tmp_path)
+    assert mapping == expected
+
+
+def test_nifty200_industry_mapping_rejects_tampering(tmp_path: Path) -> None:
+    _write_industry_mapping(tmp_path)
+    raw = next((tmp_path / ".nifty200-industry-mapping-v1").glob("raw-*.csv"))
+    raw.write_bytes(b"tampered\n")
+    assert scan_module._load_industry_mapping(tmp_path) == {}

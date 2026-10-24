@@ -310,6 +310,17 @@ To prevent capital risk from operator pump-and-dump schemes, newly listed volati
 | **Penny / Low-Priced Stocks** | Price $\ge \text{INR } 50.00$ | Rejects sub-50 operator-dominated penny stocks (`PENNY_STOCK_EXCLUDED`). |
 | **Illiquid Small-Caps** | 20-day Median Turnover $\ge \text{INR } 25.0\text{ Crore / day}$ | Rejects thinly traded small-caps prone to syndicates (`ILLIQUID_SMALLCAP_EXCLUDED`). |
 | **Circuit Band Buffer** | Distance to Upper/Lower Circuit $\ge 2.0\%$ | Rejects circuit-locked stocks where exits are trapped (`CIRCUIT_PROXIMITY`). |
+
+Industry labels for the scan come from the retained
+`.nifty200-industry-mapping-v1` artifact: a closed manifest with the official
+NSE source URL, retrieval time, SHA-256, and exactly 200 rows, plus the raw CSV.
+The loader requires a regular file opened without following symlinks, bounds the
+read, verifies the hash, the exact CSV header, symbol syntax/uniqueness, and
+non-empty bounded industry labels before use. It falls back to the older Nifty
+100 mapping only when the Nifty 200 artifact is absent or invalid, and verifies
+that fallback file's content-addressed hash too. Missing or invalid labels remain
+`Unknown`; industry is context and never changes a candidate decision.
+
 ## Candidate analysis (post-scan)
 
 The scan remains the decision layer. The missing price-action/SMC facts are a
