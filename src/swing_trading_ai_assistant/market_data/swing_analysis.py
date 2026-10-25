@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
-from typing import Final, cast
+from typing import Any, Final, cast
 
 from .bharatstock import (
     BharatStockClient,
@@ -33,6 +33,8 @@ from .bharatstock import (
     BharatStockInstrument,
 )
 from .scan_decision_evidence import admit_retained_scan_document_v1
+from .scanner_observation_pair_state_v1 import read_scanner_pair_state_v1
+from .stock_observations import read_stock_observation_v1
 
 SCHEMA: Final = "swing-analysis@v2"
 POLICY_SCHEMA: Final = "swing-analysis-policy@v1"
@@ -518,6 +520,297 @@ def _policy_summary(members: Sequence[dict[str, object]]) -> dict[str, object]:
     }
 
 
+LIFECYCLE_SCHEMA: Final = "swing-lifecycle@v1"
+_LIFECYCLE_STATUSES: Final = frozenset(
+    {
+        "PASS",
+        "FAIL",
+        "UNKNOWN",
+        "INSUFFICIENT",
+        "NOT_EVALUATED",
+        "NOT_APPLICABLE",
+        "NOT_REACHED",
+    }
+)
+_ANALYSIS_STAGE_STATUS: Final = {
+    "QUALIFIED": "PASS",
+    "NOT_QUALIFIED": "FAIL",
+    "INSUFFICIENT": "INSUFFICIENT",
+    "WATCH": "UNKNOWN",
+}
+_ANALYSIS_OUTCOMES: Final = frozenset(_ANALYSIS_STAGE_STATUS)
+_MAX_ANALYSIS_BYTES: Final = 4 * 1024 * 1024
+
+
+def _lifecycle_stage(stage_id: str, status: str, observed: object) -> dict[str, object]:
+    return {"id": stage_id, "status": status, "observed": observed}
+
+
+def _observation_structure(observation: object) -> dict[str, object] | None:
+    try:
+        packet = cast(Any, observation).packet
+        for member in packet.members:
+            for feature in member.features:
+                if (
+                    feature.feature == "MARKET_STRUCTURE"
+                    and feature.availability == "OBSERVED"
+                ):
+                    fact = feature.fact
+                    calculation = fact.calculation
+                    events = getattr(calculation, "events", ())
+                    latest = events[-1] if events else None
+                    return {
+                        "trend": str(getattr(calculation, "trend", "")),
+                        "structure": str(getattr(calculation, "structure_state", "")),
+                        "pivots": len(getattr(calculation, "pivots", ())),
+                        "latest_event": (
+                            {
+                                "event": str(getattr(latest, "event", "")),
+                                "direction": str(getattr(latest, "direction", "")),
+                                "session": str(getattr(latest, "session", "")),
+                            }
+                            if latest is not None
+                            else None
+                        ),
+                    }
+    except Exception:  # noqa: BLE001 - display-only lifecycle projection
+        return None
+    return None
+
+
+def _safety_status(value: object) -> str:
+    return {
+        "ELIGIBLE": "PASS",
+        "INELIGIBLE": "FAIL",
+        "UNKNOWN": "UNKNOWN",
+    }.get(str(value), "UNKNOWN")
+
+
+def _read_analysis_bytes(path: Path) -> bytes:
+    descriptor = os.open(
+        path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
+    )
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode) or info.st_size > _MAX_ANALYSIS_BYTES:
+            raise ValueError("invalid analysis artifact")
+        raw = os.read(descriptor, _MAX_ANALYSIS_BYTES + 1)
+        if len(raw) != info.st_size:
+            raise ValueError("invalid analysis artifact")
+        return raw
+    finally:
+        os.close(descriptor)
+
+
+def _analysis_outcomes(  # noqa: C901 - closed report binding
+    path: Path, scan: dict[str, object]
+) -> tuple[dict[str, str], str]:
+    if not path.is_absolute():
+        raise ValueError("invalid analysis path")
+    value = json.loads(_read_analysis_bytes(path))
+    if type(value) is not dict:
+        raise ValueError("invalid analysis report")
+    report = cast(dict[str, object], value)
+    if report.get("schema") != SCHEMA:
+        raise ValueError("invalid analysis schema")
+    if report.get("scan_result_identity_sha256") != scan.get("result_identity_sha256"):
+        raise ValueError("analysis scan identity mismatch")
+    claimed = report.get("report_identity_sha256")
+    unsigned = dict(report)
+    unsigned.pop("report_identity_sha256", None)
+    if type(claimed) is not str or claimed != _identity(unsigned):
+        raise ValueError("invalid analysis identity")
+    outcomes: dict[str, str] = {}
+    for member_value in cast(list[object], report.get("members") or []):
+        if type(member_value) is not dict:
+            raise ValueError("invalid analysis member")
+        member_row = cast(dict[str, object], member_value)
+        symbol = member_row.get("symbol")
+        policy_value = member_row.get("policy")
+        if type(symbol) is not str or type(policy_value) is not dict:
+            raise ValueError("invalid analysis member")
+        outcome = cast(dict[str, object], policy_value).get("outcome")
+        if type(outcome) is not str or outcome not in _ANALYSIS_OUTCOMES:
+            raise ValueError("invalid analysis outcome")
+        if symbol in outcomes:
+            raise ValueError("duplicate analysis member")
+        outcomes[symbol] = outcome
+    return outcomes, claimed
+
+
+def analyze_lifecycle(  # noqa: C901 - complete stage projection
+    scan_path: Path,
+    storage_root: Path,
+    analysis_path: Path | None = None,
+) -> dict[str, object]:
+    """Project every scan member through its actual fail-closed lifecycle.
+
+    Read-only: no provider call and no state mutation.
+    """
+    if not scan_path.is_absolute() or not storage_root.is_absolute():
+        raise ValueError("invalid lifecycle path")
+    scan = admit_retained_scan_document_v1(_read_scan_bytes(scan_path))
+    selected_rows = cast(list[dict[str, object]], scan.get("candidates") or [])
+    other_rows = cast(list[dict[str, object]], scan.get("other_stocks") or [])
+    rows = [*selected_rows, *other_rows]
+    origins = ["SELECTED"] * len(selected_rows) + ["OTHER"] * len(other_rows)
+    evaluated_value = scan.get("evaluated_symbols")
+    if type(evaluated_value) is not list:
+        raise ValueError("invalid evaluated symbols")
+    evaluated = cast(list[object], evaluated_value)
+    row_symbols: list[str] = []
+    for row in rows:
+        symbol = row.get("symbol")
+        if type(symbol) is not str or not symbol:
+            raise ValueError("invalid scan member")
+        row_symbols.append(symbol)
+    if (
+        len(row_symbols) != len(evaluated)
+        or len(set(row_symbols)) != len(row_symbols)
+        or set(row_symbols) != set(cast(list[str], evaluated))
+    ):
+        raise ValueError("scan member coverage mismatch")
+    analysis_outcomes: dict[str, str] = {}
+    analysis_report_identity: str | None = None
+    if analysis_path is not None:
+        analysis_outcomes, analysis_report_identity = _analysis_outcomes(
+            analysis_path, scan
+        )
+        candidate_symbols = {
+            cast(str, row.get("symbol"))
+            for row in selected_rows
+            if row.get("decision") == "RESEARCH_CANDIDATE"
+        }
+        if set(analysis_outcomes) != candidate_symbols:
+            raise ValueError("analysis candidate coverage mismatch")
+    members: list[dict[str, object]] = []
+    for row, origin in zip(rows, origins, strict=True):
+        symbol_text = cast(str, row.get("symbol"))
+        safety_value = row.get("safety_status")
+        if safety_value is None:
+            safety_eligibility = row.get("safety_eligibility")
+            if type(safety_eligibility) is dict:
+                safety_value = cast(dict[str, object], safety_eligibility).get("status")
+        reason = row.get("failed_rule")
+        decision = row.get("decision")
+        decision_text = decision if type(decision) is str else "UNKNOWN"
+        safety_status = _safety_status(safety_value)
+        observation: object | None = None
+        data_status = "INSUFFICIENT"
+        try:
+            state = read_scanner_pair_state_v1(storage_root, symbol_text)
+            if state is not None:
+                observation = read_stock_observation_v1(
+                    storage_root, state.current_observation_identity_sha256
+                )
+                if getattr(observation, "status", None) == "READY":
+                    data_status = "PASS"
+        except Exception:  # noqa: BLE001 - per-symbol lifecycle boundary
+            data_status = "INSUFFICIENT"
+        structure: dict[str, object] | None = None
+        if data_status == "PASS" and safety_status == "PASS":
+            structure = _observation_structure(observation)
+        structure_status = "NOT_EVALUATED"
+        if data_status == "PASS" and safety_status == "PASS":
+            if (
+                structure is not None
+                and structure.get("trend") != "INSUFFICIENT_STRUCTURE"
+                and structure.get("structure") != "INSUFFICIENT_STRUCTURE"
+            ):
+                structure_status = "PASS"
+            else:
+                structure_status = "INSUFFICIENT"
+        terminal = data_status != "PASS" or safety_status != "PASS"
+        policy_status = "NOT_EVALUATED"
+        candidate_status = "NOT_EVALUATED"
+        basket_status = "NOT_EVALUATED"
+        outcome = analysis_outcomes.get(symbol_text) if origin == "SELECTED" else None
+        candidate_observed: dict[str, object] = {"outcome": outcome}
+        basket_observed: dict[str, object] = {
+            "basis": "candidate_analysis_outcome",
+            "outcome": outcome,
+        }
+        if not terminal:
+            policy_status = "UNKNOWN" if decision_text == "UNKNOWN" else "PASS"
+            if decision_text == "RESEARCH_CANDIDATE":
+                if origin == "OTHER":
+                    candidate_status = "NOT_APPLICABLE"
+                    basket_status = "NOT_REACHED"
+                    candidate_observed = {
+                        "basis": "not_selected",
+                        "reason": reason or "BASKET_CAPACITY_OR_NIFTY100_PRIORITY",
+                    }
+                    basket_observed = {
+                        "basis": "not_selected",
+                        "reason": reason or "BASKET_CAPACITY_OR_NIFTY100_PRIORITY",
+                    }
+                else:
+                    candidate_status = (
+                        "NOT_EVALUATED"
+                        if outcome is None
+                        else _ANALYSIS_STAGE_STATUS[outcome]
+                    )
+                    if outcome is None:
+                        basket_status = "NOT_EVALUATED"
+                    elif outcome == "QUALIFIED":
+                        basket_status = "PASS"
+                    elif outcome in {"NOT_QUALIFIED", "INSUFFICIENT"}:
+                        basket_status = "FAIL"
+                    else:
+                        basket_status = "UNKNOWN"
+            else:
+                candidate_status = "NOT_APPLICABLE"
+                basket_status = "NOT_REACHED"
+        stages = [
+            _lifecycle_stage(
+                "UNIVERSE", "PASS", {"membership": scan.get("universe_type")}
+            ),
+            _lifecycle_stage("DATA", data_status, {"status": data_status}),
+            _lifecycle_stage(
+                "SAFETY",
+                safety_status,
+                {"status": safety_value, "reason": reason},
+            ),
+            _lifecycle_stage("STRUCTURE", structure_status, structure or {}),
+            _lifecycle_stage(
+                "POLICY",
+                policy_status,
+                {"decision": decision_text, "reason": reason},
+            ),
+            _lifecycle_stage(
+                "CANDIDATE_ANALYSIS",
+                candidate_status,
+                candidate_observed,
+            ),
+            _lifecycle_stage(
+                "BASKET",
+                basket_status,
+                basket_observed,
+            ),
+        ]
+        if any(stage["status"] not in _LIFECYCLE_STATUSES for stage in stages):
+            raise ValueError("invalid lifecycle stage status")
+        member: dict[str, object] = {
+            "symbol": symbol_text,
+            "industry": row.get("industry"),
+            "decision": decision_text,
+            "stages": stages,
+        }
+        member["lifecycle_identity_sha256"] = _identity(member)
+        members.append(member)
+    report: dict[str, object] = {
+        "schema": LIFECYCLE_SCHEMA,
+        "scan_result_identity_sha256": scan.get("result_identity_sha256"),
+        "scan_timestamp": scan.get("scan_timestamp"),
+        "universe_type": scan.get("universe_type"),
+        "scan_runtime_code_identity_sha256": scan.get("runtime_code_identity_sha256"),
+        "analysis_report_identity_sha256": analysis_report_identity,
+        "members": members,
+    }
+    report["report_identity_sha256"] = _identity(report)
+    return report
+
+
 def _identity(value: object) -> str:
     return hashlib.sha256(
         json.dumps(
@@ -913,4 +1206,4 @@ def analyze_scan(scan_path: Path) -> dict[str, object]:
     return report
 
 
-__all__ = ["SCHEMA", "analyze_scan"]
+__all__ = ["LIFECYCLE_SCHEMA", "SCHEMA", "analyze_lifecycle", "analyze_scan"]

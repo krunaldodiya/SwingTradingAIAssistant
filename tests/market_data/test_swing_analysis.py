@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import json
 from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
+from typing import cast
+
+import pytest
 
 from swing_trading_ai_assistant.market_data import swing_analysis as module
 from swing_trading_ai_assistant.market_data.bharatstock import BharatStockDailyPrice
@@ -402,3 +406,169 @@ def test_analyze_scan_preserves_provider_and_identity_failures(
     assert members[1]["flags"] == ["INVALID_SCAN_INPUT"]
     assert members[0]["policy"]["outcome"] == "INSUFFICIENT"
     assert members[1]["policy"]["outcome"] == "INSUFFICIENT"
+
+
+def test_lifecycle_reports_every_stage_status(tmp_path: Path, monkeypatch) -> None:
+    scan = {
+        "universe_type": "NIFTY_200",
+        "scan_timestamp": "2026-10-24T00:00:00Z",
+        "result_identity_sha256": "a" * 64,
+        "evaluated_symbols": ["UNIONBANK", "BAD", "UNK", "ELIG", "BASKETC"],
+        "candidates": [
+            {
+                "symbol": "UNIONBANK",
+                "decision": "RESEARCH_CANDIDATE",
+                "safety_eligibility": {"status": "ELIGIBLE"},
+                "failed_rule": None,
+            }
+        ],
+        "other_stocks": [
+            {
+                "symbol": "BAD",
+                "decision": "NO_TRADE",
+                "safety_status": "INELIGIBLE",
+                "failed_rule": "PENNY_STOCK_EXCLUDED",
+            },
+            {
+                "symbol": "UNK",
+                "decision": "UNKNOWN",
+                "safety_status": "UNKNOWN",
+                "failed_rule": "PROVIDER_OBSERVABLE_HISTORY",
+            },
+            {
+                "symbol": "ELIG",
+                "decision": "NO_TRADE",
+                "safety_status": "ELIGIBLE",
+                "failed_rule": "CAUSAL_EVENT_CONTINUITY_UNAVAILABLE",
+            },
+            {
+                "symbol": "BASKETC",
+                "decision": "RESEARCH_CANDIDATE",
+                "safety_status": "ELIGIBLE",
+                "failed_rule": "BASKET_CAPACITY_OR_NIFTY100_PRIORITY",
+            },
+        ],
+    }
+    analysis_value: dict[str, object] = {
+        "schema": module.SCHEMA,
+        "scan_result_identity_sha256": "a" * 64,
+        "members": [
+            {
+                "symbol": "UNIONBANK",
+                "policy": {"outcome": "NOT_QUALIFIED"},
+            }
+        ],
+    }
+    analysis_value["report_identity_sha256"] = module._identity(  # pyright: ignore[reportPrivateUsage]
+        analysis_value
+    )
+    analysis_path = tmp_path / "analysis.json"
+    analysis_path.write_text(json.dumps(analysis_value))
+    monkeypatch.setattr(module, "_read_scan_bytes", lambda path: b"scan")
+    monkeypatch.setattr(module, "admit_retained_scan_document_v1", lambda raw: scan)
+    monkeypatch.setattr(
+        module,
+        "read_scanner_pair_state_v1",
+        lambda root, symbol: type(
+            "State", (), {"current_observation_identity_sha256": "h"}
+        )(),
+    )
+    monkeypatch.setattr(
+        module,
+        "read_stock_observation_v1",
+        lambda root, handle: type("Obs", (), {"status": "READY"})(),
+    )
+    monkeypatch.setattr(
+        module,
+        "_observation_structure",
+        lambda observation: {
+            "trend": "UPTREND",
+            "structure": "CONFIRMED",
+            "pivots": 4,
+            "latest_event": {"event": "BOS", "direction": "UP"},
+        },
+    )
+
+    report = module.analyze_lifecycle(  # pyright: ignore[reportPrivateUsage]
+        tmp_path / "scan.json", tmp_path, analysis_path
+    )
+    members = cast(list[dict[str, object]], report["members"])
+    assert [m["symbol"] for m in members] == [
+        "UNIONBANK",
+        "BAD",
+        "UNK",
+        "ELIG",
+        "BASKETC",
+    ]
+    by_symbol = {str(m["symbol"]): m for m in members}
+    candidate_stages = {
+        stage["id"]: stage["status"]
+        for stage in cast(list[dict[str, object]], by_symbol["UNIONBANK"]["stages"])
+    }
+    assert candidate_stages["SAFETY"] == "PASS"
+    assert candidate_stages["CANDIDATE_ANALYSIS"] == "FAIL"
+    assert candidate_stages["BASKET"] == "FAIL"
+    candidate_stage_rows = {
+        stage["id"]: stage
+        for stage in cast(list[dict[str, object]], by_symbol["UNIONBANK"]["stages"])
+    }
+    assert (
+        candidate_stage_rows["CANDIDATE_ANALYSIS"]["observed"]["outcome"]
+        == "NOT_QUALIFIED"
+    )
+    ineligible = {
+        stage["id"]: stage["status"]
+        for stage in cast(list[dict[str, object]], by_symbol["BAD"]["stages"])
+    }
+    assert ineligible["SAFETY"] == "FAIL"
+    assert ineligible["CANDIDATE_ANALYSIS"] == "NOT_EVALUATED"
+    unknown = {
+        stage["id"]: stage["status"]
+        for stage in cast(list[dict[str, object]], by_symbol["UNK"]["stages"])
+    }
+    assert unknown["SAFETY"] == "UNKNOWN"
+    assert unknown["BASKET"] == "NOT_EVALUATED"
+    eligible = {
+        stage["id"]: stage["status"]
+        for stage in cast(list[dict[str, object]], by_symbol["ELIG"]["stages"])
+    }
+    assert eligible["SAFETY"] == "PASS"
+    assert eligible["POLICY"] == "PASS"
+    assert eligible["CANDIDATE_ANALYSIS"] == "NOT_APPLICABLE"
+    assert eligible["BASKET"] == "NOT_REACHED"
+    other_candidate = {
+        stage["id"]: stage["status"]
+        for stage in cast(list[dict[str, object]], by_symbol["BASKETC"]["stages"])
+    }
+    assert other_candidate["CANDIDATE_ANALYSIS"] == "NOT_APPLICABLE"
+    assert other_candidate["BASKET"] == "NOT_REACHED"
+    assert (
+        report["analysis_report_identity_sha256"]
+        == analysis_value["report_identity_sha256"]
+    )
+
+    without_analysis = module.analyze_lifecycle(  # pyright: ignore[reportPrivateUsage]
+        tmp_path / "scan.json", tmp_path
+    )
+    without_members = {
+        str(member["symbol"]): member
+        for member in cast(list[dict[str, object]], without_analysis["members"])
+    }
+    without_stages = {
+        stage["id"]: stage["status"]
+        for stage in cast(
+            list[dict[str, object]], without_members["UNIONBANK"]["stages"]
+        )
+    }
+    assert without_stages["CANDIDATE_ANALYSIS"] == "NOT_EVALUATED"
+    assert without_stages["BASKET"] == "NOT_EVALUATED"
+
+    analysis_value["scan_result_identity_sha256"] = "b" * 64
+    analysis_value["report_identity_sha256"] = module._identity(  # pyright: ignore[reportPrivateUsage]
+        {k: v for k, v in analysis_value.items() if k != "report_identity_sha256"}
+    )
+    analysis_path.write_text(json.dumps(analysis_value))
+    with pytest.raises(ValueError):
+        module.analyze_lifecycle(  # pyright: ignore[reportPrivateUsage]
+            tmp_path / "scan.json", tmp_path, analysis_path
+        )

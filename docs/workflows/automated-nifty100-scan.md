@@ -368,6 +368,34 @@ to improve a trading outcome. The report preserves every scan candidate and
 reports outcome and gate counts; it does not suppress, reorder, or reclassify
 the scan candidate set. Flags remain available for research filtering.
 
+### Full per-stock lifecycle
+
+To project every scan member through the actual lifecycle, run:
+
+```bash
+swing-analysis --lifecycle \
+  --scan-json /absolute/scan.json \
+  --storage-root /absolute/storage-root \
+  --analysis-json /absolute/swing-analysis.json \
+  --output json
+```
+
+The artifact schema is `swing-lifecycle@v1`. Each member carries ordered stages:
+`UNIVERSE`, `DATA`, `SAFETY`, `STRUCTURE`, `POLICY`, `CANDIDATE_ANALYSIS`, and
+`BASKET`. Statuses are `PASS`, `FAIL`, `UNKNOWN`, `INSUFFICIENT`,
+`NOT_EVALUATED`, `NOT_APPLICABLE`, or `NOT_REACHED` as applicable.
+
+The command is read-only: it reads the retained scan and pair-state
+observations, makes no provider call, and mutates no state. A safety or data
+stop is recorded as terminal; later stages are `NOT_EVALUATED` and are not
+fabricated. Candidate analysis is attached only for policy candidates in the
+scan's selected candidate list; qualified candidates retained in `other_stocks`
+because of basket capacity are `NOT_APPLICABLE` / `NOT_REACHED`. Omitting
+`--analysis-json` leaves selected candidates at `NOT_EVALUATED`.
+
+When `--analysis-json` is supplied, the report is bound to the exact scan result
+identity, its report identity is recomputed and recorded, and its candidate
+coverage must match the selected candidate set.
 
 ## Research delivery gate
 
