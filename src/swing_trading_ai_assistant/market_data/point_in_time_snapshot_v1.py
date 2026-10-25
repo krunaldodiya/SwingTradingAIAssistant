@@ -51,7 +51,7 @@ from .storage_root_lease import StorageRootLease
 CONTRACT_VERSION: Final = "point-in-time-research-evidence-snapshot@v1"
 SNAPSHOT_SCHEMA: Final = "point-in-time-research-evidence-snapshot-schema@v1"
 REPORT_SCHEMA: Final = "point-in-time-research-evidence-snapshot-report@v1"
-STRUCTURE_SCHEMA: Final = "point-in-time-research-structure@v1"
+STRUCTURE_SCHEMA: Final = "point-in-time-research-structure@v2"
 _NAMESPACE: Final = "point-in-time-evidence-snapshots-v1"
 
 _CAPTURE_NAMESPACE: Final = "bharatstock-capture-v3"
@@ -1825,6 +1825,35 @@ def _build_point_in_time_structure_v1(  # noqa: C901 - complete structure projec
         "schema": STRUCTURE_SCHEMA,
         "snapshot_handle": snapshot_handle,
         "snapshot_identity_sha256": snapshot_handle,
+        "policy_feasibility": {
+            "status": "UNAVAILABLE",
+            "reason": "HISTORICAL_SAFETY_EVIDENCE_UNAVAILABLE",
+            "market_state": "HISTORICAL_DECISION_DAY",
+            "why_not_reconstructable": (
+                "Same-session quote, circuit, book-depth and corporate-action "
+                "snapshots were not retained for these dates; later provider "
+                "data cannot establish what was knowable at the historical cutoff."
+            ),
+            "earliest_valid_observation_point": (
+                "Before each decision date's same-session close; no retained "
+                "same-session safety observation exists."
+            ),
+            "blocked_policy": "supported-signal-safety-policy@v1",
+            "blocked_rules": [
+                "CURRENT_UPSTOX_QUOTE_BINDING",
+                "CURRENT_QUOTE_FRESHNESS_AND_INTEGRITY",
+                "LOW_PRICE_AND_CIRCUIT_DISTANCE",
+                "CURRENT_BOOK_LIQUIDITY",
+                "SUPPORTED_CORPORATE_ACTION_BLACKOUT",
+            ],
+            "required_evidence": [
+                "same_session_quote",
+                "circuit_band",
+                "book_depth",
+                "corporate_action",
+            ],
+            "scope": "ALL_DECISION_DATES",
+        },
         "decision_dates": dates,
     }
     report["report_identity_sha256"] = _digest(_line(report))

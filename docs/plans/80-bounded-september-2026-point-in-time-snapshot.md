@@ -125,13 +125,18 @@ admitted decision date/member from exactly its 21 window bars:
   structured insufficiency mapping and missing sessions are preserved;
 - blocked/uncertified dates retain `certified`, availability counts, coverage,
   and insufficiency counts; they are never flattened to an empty date;
-- output schema is `point-in-time-research-structure@v1`, with report identity,
+- output schema is `point-in-time-research-structure@v2`, with report identity,
   bar/member/pivot/event identities, trend, structure state, pivots and events.
 
 The September 2026 run produced 5 decision dates × 100 members with 100/100
-structure results per date; report identity `126669cb9257…` for the retained
-snapshot `f4f164d22261…`. No provider, clock, network, or storage mutation is
-used.
+structure results per date. Slice-2 v1 report identity was `126669cb9257…`; the
+v2 boundary run identity is `c3f1ac6a47c1…` for retained snapshot
+`f4f164d22261…`. No provider, clock, network, or storage mutation is used.
+
+The v2 `policy_feasibility` block names the blocked policy
+(`supported-signal-safety-policy@v1`), the missing evidence classes and rules,
+why they cannot be reconstructed, the earliest valid observation point, and the
+blocked scope. It is covered by `report_identity_sha256`.
 
 Non-goals remain: policy decisions, candidate pairs, returns, walk-forward,
 costs, AI evaluation, and any relabelling of later-known facts.
