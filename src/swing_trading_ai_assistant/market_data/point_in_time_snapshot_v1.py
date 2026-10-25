@@ -28,6 +28,11 @@ from decimal import Decimal, DecimalException
 from pathlib import Path
 from typing import Final, Literal, TypeAlias, cast
 
+from ..market_structure.current_live import (
+    MarketStructureMathBarV1,
+    MarketStructureMathMemberInputV1,
+    evaluate_market_structure_math_member_v1,
+)
 from . import bharatstock_capture as capture_store
 from . import capture_forward_adjusted_ohlcv as private_store
 from . import current_stock_research as legacy
@@ -46,6 +51,7 @@ from .storage_root_lease import StorageRootLease
 CONTRACT_VERSION: Final = "point-in-time-research-evidence-snapshot@v1"
 SNAPSHOT_SCHEMA: Final = "point-in-time-research-evidence-snapshot-schema@v1"
 REPORT_SCHEMA: Final = "point-in-time-research-evidence-snapshot-report@v1"
+STRUCTURE_SCHEMA: Final = "point-in-time-research-structure@v1"
 _NAMESPACE: Final = "point-in-time-evidence-snapshots-v1"
 
 _CAPTURE_NAMESPACE: Final = "bharatstock-capture-v3"
@@ -1640,3 +1646,200 @@ def read_point_in_time_snapshot_v1(root: Path, handle: str) -> dict[str, object]
         raise
     except Exception as error:  # noqa: BLE001 - redacted public read boundary
         raise PointInTimeSnapshotUnavailable("SNAPSHOT_STORE_UNAVAILABLE") from error
+
+
+def _build_point_in_time_structure_v1(  # noqa: C901 - complete structure projection
+    root: Path, snapshot_handle: str
+) -> dict[str, object]:
+    """Compute Market Structure facts from one retained point-in-time snapshot.
+
+    Read-only: no provider, clock, network, or storage mutation.
+    """
+    snapshot = read_point_in_time_snapshot_v1(root, snapshot_handle)
+    if (
+        type(snapshot.get("members")) is not list
+        or type(snapshot.get("decision_dates")) is not list
+    ):
+        raise ValueError("invalid snapshot shape")
+    bars_by_symbol: dict[str, dict[str, dict[str, object]]] = {}
+    for member_value in cast(list[object], snapshot.get("members") or []):
+        if type(member_value) is not dict:
+            continue
+        member = cast(dict[str, object], member_value)
+        symbol = member.get("symbol")
+        if type(symbol) is not str:
+            continue
+        bars = cast(list[object], member.get("bars") or [])
+        bars_by_symbol[symbol] = {
+            str(cast(dict[str, object], bar).get("session")): cast(
+                dict[str, object], bar
+            )
+            for bar in bars
+            if type(bar) is dict
+        }
+    exchange_by_isin: dict[str, str] = {}
+    for member_value in cast(
+        list[object],
+        cast(dict[str, object], snapshot.get("cohort") or {}).get("members") or [],
+    ):
+        if type(member_value) is not dict:
+            continue
+        cohort_member = cast(dict[str, object], member_value)
+        isin = cohort_member.get("isin")
+        exchange = cohort_member.get("exchange")
+        if type(isin) is str and type(exchange) is str:
+            exchange_by_isin[isin] = exchange
+    dates: list[dict[str, object]] = []
+    for date_value in cast(list[object], snapshot.get("decision_dates") or []):
+        if type(date_value) is not dict:
+            continue
+        date_row = cast(dict[str, object], date_value)
+        decision_session = str(date_row.get("decision_session"))
+        window = [
+            str(item)
+            for item in cast(list[object], date_row.get("window_sessions") or [])
+        ]
+        member_rows: list[dict[str, object]] = []
+        for member_value in cast(list[object], date_row.get("members") or []):
+            if type(member_value) is not dict:
+                continue
+            member_row = cast(dict[str, object], member_value)
+            symbol = str(member_row.get("symbol", ""))
+            isin = str(member_row.get("isin", ""))
+            availability = str(member_row.get("availability") or "INSUFFICIENT")
+            structure: dict[str, object] | None = None
+            insufficiency = member_row.get("insufficiency")
+            missing_sessions = [
+                str(item)
+                for item in cast(list[object], member_row.get("missing_sessions") or [])
+            ]
+            if availability != "AVAILABLE":
+                pass
+            else:
+                records = [
+                    bars_by_symbol.get(symbol, {}).get(session) for session in window
+                ]
+                missing_sessions = [
+                    session
+                    for session, record in zip(window, records, strict=True)
+                    if record is None
+                ]
+                if missing_sessions:
+                    insufficiency = {"INSUFFICIENT_WINDOW_BARS": missing_sessions}
+                else:
+                    try:
+                        math_bars = tuple(
+                            MarketStructureMathBarV1(
+                                session=date.fromisoformat(str(record["session"])),
+                                open=Decimal(str(record["open"])),
+                                high=Decimal(str(record["high"])),
+                                low=Decimal(str(record["low"])),
+                                close=Decimal(str(record["close"])),
+                                volume=int(str(record["volume"])),
+                                source_bar_identity_sha256=_digest(_line(record)),
+                            )
+                            for record in cast(list[dict[str, object]], records)
+                        )
+                        result = evaluate_market_structure_math_member_v1(
+                            MarketStructureMathMemberInputV1(
+                                isin=isin,
+                                exchange=exchange_by_isin.get(isin, "NSE"),
+                                effective_symbol=symbol,
+                                bars=math_bars,
+                            )
+                        )
+                        structure = {
+                            "trend": str(result.trend),
+                            "structure_state": str(result.structure_state),
+                            "input_bar_identities_sha256": list(
+                                result.input_bar_identities_sha256
+                            ),
+                            "member_identity_sha256": result.member_identity_sha256,
+                            "pivots": [
+                                {
+                                    "kind": str(pivot.kind),
+                                    "position": pivot.position,
+                                    "session": pivot.session.isoformat(),
+                                    "confirmation_session": (
+                                        pivot.confirmation_session.isoformat()
+                                    ),
+                                    "price": str(pivot.price),
+                                    "relation": (
+                                        str(pivot.relation)
+                                        if pivot.relation is not None
+                                        else None
+                                    ),
+                                    "source_bar_identity_sha256": (
+                                        pivot.source_bar_identity_sha256
+                                    ),
+                                    "pivot_identity_sha256": (
+                                        pivot.pivot_identity_sha256
+                                    ),
+                                }
+                                for pivot in result.pivots
+                            ],
+                            "events": [
+                                {
+                                    "event": str(event.event),
+                                    "direction": str(event.direction),
+                                    "position": event.position,
+                                    "session": event.session.isoformat(),
+                                    "close": str(event.close),
+                                    "broken_level": str(event.broken_level),
+                                    "broken_pivot_identity_sha256": (
+                                        event.broken_pivot_identity_sha256
+                                    ),
+                                    "event_identity_sha256": event.event_identity_sha256,
+                                }
+                                for event in result.events
+                            ],
+                        }
+                    except (ValueError, DecimalException):
+                        insufficiency = cast(
+                            dict[str, object],
+                            {"STRUCTURE_EVALUATION_UNAVAILABLE": []},
+                        )
+            member_rows.append(
+                {
+                    "symbol": symbol,
+                    "isin": isin,
+                    "availability": availability,
+                    "structure": structure,
+                    "insufficiency": insufficiency,
+                    "missing_sessions": missing_sessions,
+                }
+            )
+        dates.append(
+            {
+                "decision_session": decision_session,
+                "certified": date_row.get("certified"),
+                "members_available": date_row.get("members_available"),
+                "members_unavailable": date_row.get("members_unavailable"),
+                "coverage_bps": date_row.get("coverage_bps"),
+                "insufficiency_counts": date_row.get("insufficiency_counts"),
+                "window_sessions": window,
+                "members": member_rows,
+            }
+        )
+    report: dict[str, object] = {
+        "schema": STRUCTURE_SCHEMA,
+        "snapshot_handle": snapshot_handle,
+        "snapshot_identity_sha256": snapshot_handle,
+        "decision_dates": dates,
+    }
+    report["report_identity_sha256"] = _digest(_line(report))
+    return report
+
+
+def build_point_in_time_structure_v1(
+    root: Path, snapshot_handle: str
+) -> dict[str, object]:
+    """Public read-only structure projection with a typed fail-closed boundary."""
+    try:
+        return _build_point_in_time_structure_v1(root, snapshot_handle)
+    except PointInTimeSnapshotUnavailable:
+        raise
+    except (KeyError, TypeError, ValueError, DecimalException) as error:
+        raise PointInTimeSnapshotUnavailable(
+            "STRUCTURE_PROJECTION_UNAVAILABLE"
+        ) from error

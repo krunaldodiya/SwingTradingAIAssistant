@@ -25,6 +25,9 @@ from swing_trading_ai_assistant.market_data import (
 from swing_trading_ai_assistant.market_data import (
     point_in_time_snapshot_v1 as snapshot_module,
 )
+from swing_trading_ai_assistant.market_data import (
+    point_in_time_snapshot_v1_cli as snapshot_cli,
+)
 from swing_trading_ai_assistant.market_data import schedule_evidence
 from swing_trading_ai_assistant.market_data.bharatstock import (
     BharatStockDailyPrice,
@@ -1249,3 +1252,182 @@ def test_selection_url_lock_is_enforced(tmp_path: Path) -> None:
     ):
         build_point_in_time_snapshot_v1(root, _request())
     assert not (root / _NAMESPACE).exists()
+
+
+def test_structure_projection_from_retained_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sessions = [date(2026, 9, 1) + timedelta(days=index) for index in range(21)]
+    bars = [
+        {
+            "session": session.isoformat(),
+            "open": "100",
+            "high": "102",
+            "low": "99",
+            "close": "101",
+            "volume": 1000,
+            "adjusted_close": "101",
+            "adjustment_factor": "1",
+            "retrieved_at": "2026-09-26T10:00:00Z",
+            "response_sha256s": ["a" * 64],
+            "source_indices": [0],
+        }
+        for session in sessions
+    ]
+    snapshot: dict[str, object] = {
+        "members": [
+            {
+                "symbol": "DEMO",
+                "isin": "INE000000001",
+                "bars": bars,
+            }
+        ],
+        "decision_dates": [
+            {
+                "decision_session": sessions[-1].isoformat(),
+                "window_sessions": [session.isoformat() for session in sessions],
+                "members": [
+                    {
+                        "symbol": "DEMO",
+                        "isin": "INE000000001",
+                        "availability": "AVAILABLE",
+                        "insufficiency": None,
+                    }
+                ],
+            }
+        ],
+    }
+    monkeypatch.setattr(
+        snapshot_module,
+        "read_point_in_time_snapshot_v1",
+        lambda root, handle: snapshot,
+    )
+    report = snapshot_module.build_point_in_time_structure_v1(
+        Path("/private"), "a" * 64
+    )
+    member = report["decision_dates"][0]["members"][0]
+    assert member["availability"] == "AVAILABLE"
+    assert member["structure"] is not None
+    assert "trend" in member["structure"]
+    assert member["structure"]["member_identity_sha256"]
+    assert member["structure"]["input_bar_identities_sha256"]
+    assert report["report_identity_sha256"]
+
+
+def test_structure_projection_reports_missing_window_bars(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sessions = [date(2026, 9, 1) + timedelta(days=index) for index in range(21)]
+    bars = [
+        {
+            "session": session.isoformat(),
+            "open": "100",
+            "high": "102",
+            "low": "99",
+            "close": "101",
+            "volume": 1000,
+            "adjusted_close": "101",
+            "adjustment_factor": "1",
+            "retrieved_at": "2026-09-26T10:00:00Z",
+            "response_sha256s": ["a" * 64],
+            "source_indices": [0],
+        }
+        for session in sessions[:-1]
+    ]
+    snapshot: dict[str, object] = {
+        "members": [{"symbol": "DEMO", "isin": "INE000000001", "bars": bars}],
+        "decision_dates": [
+            {
+                "decision_session": sessions[-1].isoformat(),
+                "window_sessions": [session.isoformat() for session in sessions],
+                "members": [
+                    {
+                        "symbol": "DEMO",
+                        "isin": "INE000000001",
+                        "availability": "AVAILABLE",
+                        "insufficiency": None,
+                    }
+                ],
+            }
+        ],
+    }
+    monkeypatch.setattr(
+        snapshot_module,
+        "read_point_in_time_snapshot_v1",
+        lambda root, handle: snapshot,
+    )
+    report = snapshot_module.build_point_in_time_structure_v1(
+        Path("/private"), "a" * 64
+    )
+    member = report["decision_dates"][0]["members"][0]
+    assert member["structure"] is None
+    assert member["insufficiency"] == {
+        "INSUFFICIENT_WINDOW_BARS": [sessions[-1].isoformat()]
+    }
+    assert member["missing_sessions"] == [sessions[-1].isoformat()]
+
+
+def test_cli_structure_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(
+        snapshot_cli,
+        "build_point_in_time_structure_v1",
+        lambda root, handle: {"schema": "test", "handle": handle},
+    )
+    code = snapshot_cli.main(
+        [
+            "--storage-root",
+            str(tmp_path),
+            "--structure",
+            "a" * 64,
+            "--output",
+            "json",
+        ]
+    )
+    assert code == 0
+    assert '"handle":"' + "a" * 64 + '"' in capsys.readouterr().out
+
+
+def test_structure_projection_preserves_blocked_date_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    snapshot: dict[str, object] = {
+        "members": [],
+        "decision_dates": [
+            {
+                "decision_session": "2026-09-21",
+                "certified": False,
+                "members_available": 0,
+                "members_unavailable": 100,
+                "coverage_bps": 0,
+                "insufficiency_counts": {"WINDOW_NOT_CERTIFIED": 100},
+                "window_sessions": [],
+                "members": [],
+            }
+        ],
+    }
+    monkeypatch.setattr(
+        snapshot_module,
+        "read_point_in_time_snapshot_v1",
+        lambda root, handle: snapshot,
+    )
+    report = snapshot_module.build_point_in_time_structure_v1(
+        Path("/private"), "a" * 64
+    )
+    date_row = report["decision_dates"][0]
+    assert date_row["certified"] is False
+    assert date_row["members_unavailable"] == 100
+    assert date_row["insufficiency_counts"] == {"WINDOW_NOT_CERTIFIED": 100}
+
+
+def test_structure_projection_rejects_malformed_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        snapshot_module,
+        "read_point_in_time_snapshot_v1",
+        lambda root, handle: {"members": "bad", "decision_dates": []},
+    )
+    with pytest.raises(PointInTimeSnapshotUnavailable):
+        snapshot_module.build_point_in_time_structure_v1(Path("/private"), "a" * 64)

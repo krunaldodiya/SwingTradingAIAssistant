@@ -17,6 +17,7 @@ from .point_in_time_snapshot_v1 import (
     PointInTimeSnapshotRequestV1,
     PointInTimeSnapshotUnavailable,
     build_point_in_time_snapshot_v1,
+    build_point_in_time_structure_v1,
     parse_point_in_time_snapshot_request_v1,
     read_point_in_time_snapshot_v1,
 )
@@ -33,6 +34,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--storage-root", required=True, type=Path)
     parser.add_argument("--request-file")
     parser.add_argument("--read")
+    parser.add_argument("--structure")
     parser.add_argument("--output", choices=("json",), required=True)
     return parser
 
@@ -43,28 +45,44 @@ def _emit(value: object) -> None:
 
 def _admit_arguments(
     argv: list[str] | None,
-) -> tuple[Path, PointInTimeSnapshotRequestV1 | None, str | None]:
+) -> tuple[
+    Path,
+    PointInTimeSnapshotRequestV1 | None,
+    str | None,
+    str | None,
+]:
     arguments = _parser().parse_args(argv)
     root = arguments.storage_root
     if not isinstance(root, Path) or not root.is_absolute():
         raise ValueError("invalid arguments")
-    handle = arguments.read
-    if handle is not None:
-        if not isinstance(handle, str):
+    read_handle = arguments.read
+    structure_handle = arguments.structure
+    modes = sum(
+        item is not None
+        for item in (arguments.request_file, read_handle, structure_handle)
+    )
+    if modes != 1:
+        raise ValueError("invalid arguments")
+    if structure_handle is not None:
+        if not isinstance(structure_handle, str):
             raise ValueError("invalid arguments")
-        return root, None, handle
+        return root, None, None, structure_handle
+    if read_handle is not None:
+        if not isinstance(read_handle, str):
+            raise ValueError("invalid arguments")
+        return root, None, read_handle, None
     request_file = arguments.request_file
     if not isinstance(request_file, str):
         raise ValueError("invalid arguments")
     request = parse_point_in_time_snapshot_request_v1(
         read_private_request(request_file, MAX_REQUEST_BYTES)
     )
-    return root, request, None
+    return root, request, None, None
 
 
 def _run(argv: list[str] | None) -> int:
     try:
-        root, request, handle = _admit_arguments(argv)
+        root, request, handle, structure_handle = _admit_arguments(argv)
     except (OSError, ValueError):
         sys.stderr.write("request_invalid\n")
         return 2
@@ -75,6 +93,14 @@ def _run(argv: list[str] | None) -> int:
             sys.stderr.write("unavailable\n")
             return 1
         _emit(report)
+        return 0
+    if structure_handle is not None:
+        try:
+            structure = build_point_in_time_structure_v1(root, structure_handle)
+        except (PointInTimeSnapshotUnavailable, ValueError):
+            sys.stderr.write("unavailable\n")
+            return 1
+        _emit(structure)
         return 0
     if handle is None:
         sys.stderr.write("request_invalid\n")

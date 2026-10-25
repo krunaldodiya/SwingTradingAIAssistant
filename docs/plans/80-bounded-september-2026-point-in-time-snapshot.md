@@ -105,6 +105,37 @@ Result: snapshot identity `f4f164d22261e14e2b45291d4af7abd569ef8fd3dea17b5445934
 
 The independent R3 functional review held matrix row 11 against the realized artifact. Row 11 now states the enforced behavior explicitly: bar sessions inconsistent across members of one revision, or outside the revision request's declared sessions, are a typed refusal with no partial snapshot, while revisions whose session lies outside the requested decision windows are recorded as sources and counted as `sources_outside_window` — they can never supply a window cell. The declared cohort size is now cross-checked against the resolved cohort member count (typed refusal on mismatch). Re-running the frozen request after these corrections returned the identical retained snapshot identity and no new file or rewrite; only the report's `revision_counts` gained the `sources_outside_window` key (`2`).
 
+## Slice 2 — Market Structure projection (2026-10-25)
+
+Status: implemented as a report-only projection under Future #139. No new
+retained artifact and no policy/decision/return claim.
+
+The `point-in-time-snapshots --structure <snapshot_handle>` command re-admits
+one retained evidence snapshot and computes Market Structure facts for every
+admitted decision date/member from exactly its 21 window bars:
+
+- bars are matched by member symbol and official window session; a missing bar
+  yields `INSUFFICIENT_WINDOW_BARS`;
+- every bar's source identity is the SHA-256 of its canonical retained bar
+  record;
+- the existing provider-neutral
+  `evaluate_market_structure_math_member_v1` calculation is reused; no second
+  structure engine;
+- a member unavailable in the evidence snapshot remains unavailable; its
+  structured insufficiency mapping and missing sessions are preserved;
+- blocked/uncertified dates retain `certified`, availability counts, coverage,
+  and insufficiency counts; they are never flattened to an empty date;
+- output schema is `point-in-time-research-structure@v1`, with report identity,
+  bar/member/pivot/event identities, trend, structure state, pivots and events.
+
+The September 2026 run produced 5 decision dates × 100 members with 100/100
+structure results per date; report identity `126669cb9257…` for the retained
+snapshot `f4f164d22261…`. No provider, clock, network, or storage mutation is
+used.
+
+Non-goals remain: policy decisions, candidate pairs, returns, walk-forward,
+costs, AI evaluation, and any relabelling of later-known facts.
+
 ## Acceptance evidence
 
 - Focused behavior and adversarial tests for every matrix row.
