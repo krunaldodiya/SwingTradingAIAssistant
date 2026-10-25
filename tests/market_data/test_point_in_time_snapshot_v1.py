@@ -1311,7 +1311,20 @@ def test_structure_projection_from_retained_snapshot(
     assert "trend" in member["structure"]
     assert member["structure"]["member_identity_sha256"]
     assert member["structure"]["input_bar_identities_sha256"]
+    assert report["schema"] == "point-in-time-research-structure@v2"
+    feasibility = report["policy_feasibility"]
+    assert feasibility["status"] == "UNAVAILABLE"
+    assert feasibility["reason"] == "HISTORICAL_SAFETY_EVIDENCE_UNAVAILABLE"
+    assert feasibility["blocked_policy"] == "supported-signal-safety-policy@v1"
+    assert feasibility["earliest_valid_observation_point"]
+    assert feasibility["why_not_reconstructable"]
     assert report["report_identity_sha256"]
+    altered = {**report, "policy_feasibility": {**feasibility, "scope": "ALTERED"}}
+    altered.pop("report_identity_sha256")
+    assert (
+        snapshot_module._digest(snapshot_module._line(altered))
+        != report["report_identity_sha256"]
+    )
 
 
 def test_structure_projection_reports_missing_window_bars(
