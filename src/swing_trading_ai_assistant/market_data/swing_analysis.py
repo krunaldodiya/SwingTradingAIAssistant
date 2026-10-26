@@ -90,15 +90,11 @@ def _pivots(
     for index in range(radius, len(rows) - radius):
         high = rows[index].high
         low = rows[index].low
-        if (
-            all(high > rows[index + offset].high for offset in (-2, -1, 1, 2))
-            and radius == 2
-        ):
-            found.append((index, "SWING_HIGH", high))
-        elif radius == 2 and all(
-            low < rows[index + offset].low for offset in (-2, -1, 1, 2)
-        ):
-            found.append((index, "SWING_LOW", low))
+        if radius == 2:
+            if all(high > rows[index + offset].high for offset in (-2, -1, 1, 2)):
+                found.append((index, "SWING_HIGH", high))
+            elif all(low < rows[index + offset].low for offset in (-2, -1, 1, 2)):
+                found.append((index, "SWING_LOW", low))
         elif radius == 1:
             if high > rows[index - 1].high and high > rows[index + 1].high:
                 found.append((index, "SWING_HIGH", high))
