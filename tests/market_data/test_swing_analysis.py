@@ -572,3 +572,18 @@ def test_lifecycle_reports_every_stage_status(tmp_path: Path, monkeypatch) -> No
         module.analyze_lifecycle(  # pyright: ignore[reportPrivateUsage]
             tmp_path / "scan.json", tmp_path, analysis_path
         )
+
+
+def test_radius_one_pivots_do_not_read_radius_two_offsets() -> None:
+    rows = _bars(5)
+    peak = rows[3]
+    rows[3] = _row(
+        peak.session,
+        str(peak.open),
+        "999",
+        str(peak.low),
+        str(peak.close),
+        peak.volume,
+    )
+    pivots = module._pivots(module._bars(rows), 1)  # pyright: ignore[reportPrivateUsage]
+    assert (3, "SWING_HIGH", Decimal("999")) in pivots
