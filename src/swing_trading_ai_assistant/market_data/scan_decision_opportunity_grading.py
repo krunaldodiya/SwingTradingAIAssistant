@@ -53,9 +53,14 @@ _DECIMAL_CONTEXT: Final = Context(prec=64, rounding=ROUND_HALF_EVEN)
 _DIGEST: Final = re.compile(r"[0-9a-f]{64}\Z")
 _INSTANT: Final = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z\Z")
 _MAX_ROWS: Final = 500
-_MAX_SCHEDULE_RECORDS: Final = 4096
 _MAX_SCHEDULE_BYTES: Final = 4 * 1024 * 1024
 _MAX_SCHEDULE_TOTAL_BYTES: Final = 64 * 1024 * 1024
+# The calendar namespace is append-only: each scan or capture admits one
+# content-addressed full-calendar snapshot (about 4.6 KB), so a healthy store's
+# entry count rises monotonically and a low count limit is not a corruption
+# signal. Derive the count guard from the byte budget with a conservative 4 KiB
+# per-record floor, so the total-byte guard stays the binding resource limit.
+_MAX_SCHEDULE_RECORDS: Final = _MAX_SCHEDULE_TOTAL_BYTES // 4096
 _MAX_REVISION_FILES: Final = 20000
 _MAX_REVISION_BYTES: Final = 8 * 1024 * 1024
 _MAX_INDEX_ROWS: Final = 1_000_000

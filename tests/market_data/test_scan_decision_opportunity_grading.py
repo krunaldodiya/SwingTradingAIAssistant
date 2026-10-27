@@ -1116,10 +1116,33 @@ def test_calendar_read_rejects_malformed_records(
 def test_calendar_read_bounds_record_count(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _store_context(monkeypatch, names=["x"] * 4097, files={})
+    limit = grading._MAX_SCHEDULE_TOTAL_BYTES // 4096
+    _store_context(monkeypatch, names=["x"] * (limit + 1), files={})
     with pytest.raises(grading.DecisionOpportunityUnavailable) as raised:
         grading._read_calendar(STORE)
     assert raised.value.code == "OPPORTUNITY_STORAGE_UNAVAILABLE"
+
+
+def test_calendar_record_count_guard_stays_above_the_byte_guard() -> None:
+    # The calendar namespace grows by one snapshot per scan or capture, so the
+    # count guard must never trip on a store that still fits the byte budget.
+    assert grading._MAX_SCHEDULE_RECORDS * 4096 >= grading._MAX_SCHEDULE_TOTAL_BYTES
+    assert grading._MAX_SCHEDULE_RECORDS > 4499  # retained production count
+
+
+def test_calendar_read_admits_a_store_past_the_former_record_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Regression for #385: 4,500 retained snapshots is a healthy store.
+    files: dict[str, bytes] = {}
+    for index in range(4500):
+        record = _record([DECISION, date(2000, 1, 1) + timedelta(days=index)])
+        raw = json.dumps(record).encode()
+        files[f"{hashlib.sha256(raw).hexdigest()}.json"] = raw
+    _store_context(monkeypatch, names=sorted(files), files=files)
+    calendar = grading._read_calendar(STORE)
+    assert calendar.sessions[DECISION] == _at(DECISION)
+    assert len(calendar.coverage) == 4500
 
 
 def test_revision_index_bounds_file_count(
