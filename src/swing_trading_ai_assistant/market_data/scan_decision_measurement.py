@@ -17,6 +17,7 @@ from .scan_decision_evidence import (
 from .scan_decision_evidence import (
     ScanDecisionEvidenceUnavailable,
     list_scan_decision_evidence_handles_v1,
+    read_scan_decision_evidence_metadata_v1,
     read_scan_decision_evidence_v1,
 )
 from .scan_decision_measurement_runtime_identity_manifest import (
@@ -220,7 +221,13 @@ def _metrics(records: Sequence[dict[str, object]]) -> dict[str, object]:
 
 
 def _evidence_block(
-    records: Sequence[dict[str, object]], handles: Sequence[str]
+    records: Sequence[dict[str, object]],
+    handles: Sequence[str],
+    *,
+    since: str | None,
+    dedupe_by_day: bool,
+    superseded: Sequence[str],
+    excluded: Sequence[str],
 ) -> dict[str, object]:
     timestamps = [_timestamp(record) for record in records]
     runtime: set[str] = set()
@@ -233,6 +240,14 @@ def _evidence_block(
         "contract_version": EVIDENCE_CONTRACT_VERSION,
         "record_count": len(records),
         "handles": list(handles),
+        "selection_since": since,
+        "dedupe_by_day": dedupe_by_day,
+        "superseded_handles": list(superseded),
+        "excluded_handles": list(excluded),
+        "selection_note": (
+            "superseded and excluded handles are metadata-only; they are not "
+            "admitted and contribute no measured value"
+        ),
         "scan_timestamp_first": min(timestamps) if timestamps else None,
         "scan_timestamp_last": max(timestamps) if timestamps else None,
         "runtime_code_identity_sha256": sorted(runtime),
@@ -276,11 +291,13 @@ def _qualification(execution_convention: str | None) -> dict[str, object]:
     }
 
 
-def measure_scan_decision_evidence_v1(
+def measure_scan_decision_evidence_v1(  # noqa: C901 - segment, dedupe and measurement
     root: Path,
     *,
     split_at: str | None = None,
     execution_convention: str | None = None,
+    since: str | None = None,
+    dedupe_by_day: bool = False,
 ) -> dict[str, object]:
     """Aggregate retained, admitted scanner decision evidence for G09 review.
 
@@ -293,6 +310,12 @@ def measure_scan_decision_evidence_v1(
         type(split_at) is not str or _INSTANT.fullmatch(split_at) is None
     ):
         raise ValueError("invalid split instant")
+    if since is not None and (
+        type(since) is not str or _INSTANT.fullmatch(since) is None
+    ):
+        raise ValueError("invalid since instant")
+    if type(dedupe_by_day) is not bool:
+        raise ValueError("invalid dedupe flag")
     if execution_convention is not None and (
         type(execution_convention) is not str
         or not 1 <= len(execution_convention) <= _MAX_CONVENTION_CHARS
@@ -301,9 +324,43 @@ def measure_scan_decision_evidence_v1(
     handles = list_scan_decision_evidence_handles_v1(root)
     if len(handles) > _MAX_RECORDS:
         raise ScanDecisionEvidenceUnavailable("DECISION_EVIDENCE_UNAVAILABLE")
+    selected = list(handles)
+    superseded: list[str] = []
+    excluded: list[str] = []
+    if since is not None or dedupe_by_day:
+        metadata = {
+            handle: read_scan_decision_evidence_metadata_v1(root, handle)
+            for handle in handles
+        }
+        if since is not None:
+            excluded = [
+                handle
+                for handle in selected
+                if str(metadata[handle]["scan_timestamp"]) < since
+            ]
+            selected = [handle for handle in selected if handle not in excluded]
+        if dedupe_by_day:
+            latest: dict[str, tuple[str, str]] = {}
+            for handle in selected:
+                timestamp = str(metadata[handle]["scan_timestamp"])
+                day = timestamp[:10]
+                current = latest.get(day)
+                if current is None or (timestamp, handle) > current:
+                    if current is not None:
+                        superseded.append(current[1])
+                    latest[day] = (timestamp, handle)
+                else:
+                    superseded.append(handle)
+            selected = sorted(
+                (entry[1] for entry in latest.values()),
+                key=lambda handle: (
+                    str(metadata[handle]["scan_timestamp"]),
+                    handle,
+                ),
+            )
     records: list[dict[str, object]] = []
     try:
-        records = [read_scan_decision_evidence_v1(root, handle) for handle in handles]
+        records = [read_scan_decision_evidence_v1(root, handle) for handle in selected]
         records.sort(
             key=lambda record: (
                 _timestamp(record),
@@ -318,7 +375,14 @@ def measure_scan_decision_evidence_v1(
         ) from error
     report: dict[str, object] = {
         "schema": SCHEMA,
-        "evidence": _evidence_block(records, handles),
+        "evidence": _evidence_block(
+            records,
+            selected,
+            since=since,
+            dedupe_by_day=dedupe_by_day,
+            superseded=superseded,
+            excluded=excluded,
+        ),
         "totals": _metrics(records),
         "time_splits": _time_splits(records, split_at),
         "execution_assumptions": list(_EXECUTION_ASSUMPTIONS),

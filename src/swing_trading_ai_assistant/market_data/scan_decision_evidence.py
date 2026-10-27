@@ -23,6 +23,7 @@ CONTRACT_VERSION: Final = "scan-decision-evidence@v1"
 ENVELOPE_SCHEMA: Final = "scan-decision-evidence-envelope@v1"
 _NAMESPACE: Final = "scan-decision-evidence-v1"
 _DIGEST: Final = re.compile(r"[0-9a-f]{64}\Z")
+_INSTANT: Final = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z\Z")
 _MAX_BYTES: Final = 4 * 1024 * 1024
 _MAX_LISTED_RECORDS: Final = 4096
 _MAX_DEPTH: Final = 64
@@ -504,6 +505,57 @@ def read_scan_decision_evidence_v1(root: Path, handle: str) -> dict[str, object]
             "schema": ENVELOPE_SCHEMA,
             "decision_evidence_handle": handle,
             "scan": scan,
+        }
+    except Exception:  # noqa: BLE001 - redacted public read boundary
+        raise ScanDecisionEvidenceUnavailable("DECISION_EVIDENCE_UNAVAILABLE") from None
+
+
+def read_scan_decision_evidence_metadata_v1(
+    root: Path, handle: str
+) -> dict[str, object]:
+    """Read only the timestamp/schema of one immutable evidence record.
+
+    Used for explicit segment selection before current-runtime admission.
+    """
+    try:
+        if type(handle) is not str or _DIGEST.fullmatch(handle) is None:
+            raise ValueError("invalid evidence handle")
+        with _lease(root) as lease, ExitStack() as stack:
+            operation = stack.enter_context(lease.read_operation(root))
+            directory = stack.enter_context(
+                private_store._open_private_directory(  # pyright: ignore[reportPrivateUsage]
+                    operation, operation.descriptor, _NAMESPACE, create=False
+                )
+            )
+            raw = private_store.read_exact_capture_file(
+                operation, directory, f"{handle}.json", _MAX_BYTES
+            )
+            directory.ensure_live()
+        saved = _closed(raw)
+        if (
+            hashlib.sha256(raw).hexdigest() != handle
+            or set(saved)
+            != {
+                "contract_version",
+                "scan",
+                "scan_result_identity_sha256",
+                "symbol_evidence",
+            }
+            or saved["contract_version"] != CONTRACT_VERSION
+            or type(saved["scan"]) is not dict
+        ):
+            raise ValueError("unsupported evidence record")
+        scan = cast(dict[str, object], saved["scan"])
+        schema = scan.get("schema")
+        timestamp = scan.get("scan_timestamp")
+        if type(schema) is not str or schema not in _SCAN_KEYS:
+            raise ValueError("invalid scan schema")
+        if type(timestamp) is not str or _INSTANT.fullmatch(timestamp) is None:
+            raise ValueError("invalid scan timestamp")
+        return {
+            "decision_evidence_handle": handle,
+            "scan_schema": schema,
+            "scan_timestamp": timestamp,
         }
     except Exception:  # noqa: BLE001 - redacted public read boundary
         raise ScanDecisionEvidenceUnavailable("DECISION_EVIDENCE_UNAVAILABLE") from None

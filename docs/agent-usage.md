@@ -279,7 +279,8 @@ decisions.
 **`signal-decisions read-decision-evidence` / `measure-decision-evidence`** —
 retained scan decision evidence.
 - `read` returns one immutable evidence record by handle; `measure` aggregates
-  retained evidence (`--split-at`, `--execution-convention`).
+  retained evidence (`--split-at`, `--execution-convention`,
+  `--since`, `--dedupe-by-day`).
 - Exits: `0`/`1`; `2` invalid.
 
 **`signal-decisions grade-decision-evidence`** — report-only G09 opportunity

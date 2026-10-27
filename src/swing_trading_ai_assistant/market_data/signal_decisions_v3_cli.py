@@ -101,6 +101,8 @@ class _MeasureDecisionEvidenceRequest:
     storage_root: Path
     split_at: str | None
     execution_convention: str | None
+    since: str | None
+    dedupe_by_day: bool
 
 
 @dataclass(frozen=True)
@@ -149,6 +151,8 @@ def _parser() -> argparse.ArgumentParser:
     measure_evidence.add_argument("--storage-root", type=Path, required=True)
     measure_evidence.add_argument("--split-at", default=None)
     measure_evidence.add_argument("--execution-convention", default=None)
+    measure_evidence.add_argument("--since", default=None)
+    measure_evidence.add_argument("--dedupe-by-day", action="store_true")
     measure_evidence.add_argument("--output", choices=("json",), required=True)
     grade_evidence = commands.add_parser("grade-decision-evidence")
     grade_evidence.add_argument("--storage-root", type=Path, required=True)
@@ -254,6 +258,14 @@ def _valid_request(  # noqa: C901 - command-specific closed request validation
     if command == "measure-decision-evidence":
         split_at: object = getattr(args, "split_at", None)
         convention: object = getattr(args, "execution_convention", None)
+        since: object = getattr(args, "since", None)
+        dedupe_by_day: object = getattr(args, "dedupe_by_day", False)
+        if since is not None and (
+            type(since) is not str or MEASUREMENT_INSTANT.fullmatch(since) is None
+        ):
+            raise ValueError("invalid since instant")
+        if type(dedupe_by_day) is not bool:
+            raise ValueError("invalid dedupe flag")
         if split_at is not None and (
             type(split_at) is not str or MEASUREMENT_INSTANT.fullmatch(split_at) is None
         ):
@@ -262,7 +274,13 @@ def _valid_request(  # noqa: C901 - command-specific closed request validation
             type(convention) is not str or not 1 <= len(convention) <= 200
         ):
             raise ValueError("invalid execution convention")
-        return _MeasureDecisionEvidenceRequest(storage_root, split_at, convention)
+        return _MeasureDecisionEvidenceRequest(
+            storage_root,
+            split_at,
+            convention,
+            since,
+            dedupe_by_day,
+        )
     if command == "grade-decision-evidence":
         handles_raw: object = getattr(args, "decision_evidence", None)
         if handles_raw is not None and type(handles_raw) is not list:
@@ -499,6 +517,8 @@ def _run_measure_decision_evidence(
                 request.storage_root,
                 split_at=request.split_at,
                 execution_convention=request.execution_convention,
+                since=request.since,
+                dedupe_by_day=request.dedupe_by_day,
             )
         )
         return 0

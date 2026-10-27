@@ -122,7 +122,11 @@ signal-decisions measure-decision-evidence \
 
 Optional `--split-at <instant>` partitions retained scans into earlier/later
 subsets with an explicit no-future-leakage guard; optional
-`--execution-convention` records the caller-named execution assumption. The
+`--execution-convention` records the caller-named execution assumption.
+`--since <instant>` selects an explicit runtime segment; records before the
+boundary are reported as metadata-only `excluded_handles` and never admitted.
+`--dedupe-by-day` keeps the latest page per scan date and reports older pages
+as metadata-only `superseded_handles`. The
 report measures the mandatory policy independently from optional context,
 performs no AI evaluation, and always lists the external prerequisites that
 remain hard final-qualification gates (per-decision-date historical backfill,
