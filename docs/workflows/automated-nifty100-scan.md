@@ -41,10 +41,12 @@ is eligible, and the price has not moved more than one structural risk unit
 this behavior is `supported-signal-decision-policy@v2`.
 
 **Timing.** Scans and research commands may be run at any time. The scheduled
-nightly runner (`~/daily-scan/run.sh`) carries an 08:00–19:59 IST skip so the
-diary does not capture intraday or not-yet-published data; that guard applies to
-the scheduled job only and does not restrict on-demand scans or `market-data`
-research commands.
+nightly runner (`scripts/daily_after_close_scan.sh`; installed as
+`~/daily-scan/run.sh`) carries an 08:00–19:59 IST skip, a weekend skip, a
+retained-calendar NSE closure skip, and a duplicate same-day page skip so the
+diary does not capture intraday, not-yet-published, or duplicate data. Those
+guards apply to the scheduled job only and do not restrict on-demand scans or
+`market-data` research commands.
 
 ```bash
 doppler run -- signal-decisions scan \
