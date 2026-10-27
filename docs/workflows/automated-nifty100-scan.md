@@ -158,6 +158,24 @@ complete, and no single-page report is a pass/fail, profitability, or advice
 claim. The frozen contract, bounds, and interpretation notes are in
 [Plan 81](../plans/81-g09-decision-opportunity-grading.md).
 
+Aggregate the single-page reports over an explicit segment without changing the
+recipe or inventing a completed window:
+
+```bash
+.venv/bin/python scripts/g09_series_report.py \
+  --storage-root /absolute/path/to/SwingTradingAIAssistantData \
+  --since 2026-10-24T00:00:00.000000Z \
+  --dedupe-by-day \
+  --output json
+```
+
+The series report selects retained pages by `scan_timestamp`, keeps the newest
+page per decision day when `--dedupe-by-day` is set, and grades each selected
+page with the same grader. It is read-only and reports `series_state` as
+`COMPLETE` only when every selected page has a completed ten-session window;
+otherwise it is `PENDING`. `UNAVAILABLE` pages are reported separately. It does
+not turn a partial series into a pass/fail, profitability, or advice claim.
+
 ### E. Retained pair state and daily progression
 
 The scanner persists at most one new admitted pair transition per symbol per
