@@ -238,3 +238,33 @@ single-page scope.
    runtime inventory changes the identity field only; measurement numbers and
    semantics are unchanged. This identity closure is required by the read-only
    lease correction and is exempt from the Plan's measurement-output non-goal.
+
+## Amendment 3 (calendar record-count guard, proposed 2026-10-27)
+
+Governing defect: [Issue #385](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/385).
+This amendment supersedes only Amendment 1 item 2's schedule-record count limit.
+Frozen recipe numbers, arithmetic, window, denominator, adjustment handling, and
+single-page scope are unchanged.
+
+1. **Observed defect.** On 2026-10-27 the production store retained 4,499
+   content-addressed calendar snapshots (20.7 MB) against a 4,096 count limit, so
+   `grade-decision-evidence` refused every page with `OPPORTUNITY_STORAGE_UNAVAILABLE`.
+   The limit treated a healthy append-only store as corrupt.
+2. **Correction.** `_MAX_SCHEDULE_RECORDS` is now derived from the byte budget,
+   `_MAX_SCHEDULE_TOTAL_BYTES // 4096` (16,384 at the current 64 MiB budget). The
+   calendar namespace gains one full snapshot per scan or capture (about 4.6 KB),
+   so a fixed low count can only ever fail closed as history accumulates. The
+   total-byte guard remains the binding resource limit; the count guard is an
+   allocation sanity check that cannot trip before it.
+3. **Unchanged refusals.** Per-record 4 MiB, total 64 MiB, canonical depth 64,
+   report 8 MiB, revision and index bounds, calendar digest/integrity checks,
+   conflict precedence, and every report field.
+4. **Residual risk (recorded, not fixed here).** The byte budget binds at about
+   14,000 retained snapshots. Approaching it needs a separate governed slice for
+   retention or compaction of superseded calendar snapshots; this amendment adds
+   no retention model, index, or persistence change. Until then the failure
+   remains closed, never wrong.
+5. **Evidence.** After the correction, grading the newest retained page on the
+   production store returns a valid report (`ed5be825…`, `NIFTY_200`, 200 rows,
+   decision session 2026-10-26, `window.state = PENDING`, 2 pending candidates,
+   exit `1` for the pending data state).
