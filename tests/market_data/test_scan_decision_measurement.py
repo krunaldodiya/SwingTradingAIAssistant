@@ -487,3 +487,41 @@ def test_measurement_cli_rejects_invalid_split_instant(
     assert code == 2
     assert captured.err == "request_invalid\n"
     assert captured.out == ""
+
+
+def test_measurement_segment_and_daily_dedupe(tmp_path: Path) -> None:
+    other = [_other("DEMO")]
+    rows = [_row("DEMO", "UNKNOWN", "UNKNOWN", None)]
+    older = _evidence(
+        tmp_path,
+        timestamp="2026-10-24T10:00:00.000000Z",
+        candidates=[],
+        other=other,
+        rows=rows,
+    )
+    earlier = _evidence(
+        tmp_path,
+        timestamp="2026-10-26T15:34:26.000000Z",
+        candidates=[],
+        other=other,
+        rows=rows,
+    )
+    latest = _evidence(
+        tmp_path,
+        timestamp="2026-10-26T15:45:01.000000Z",
+        candidates=[],
+        other=other,
+        rows=rows,
+    )
+    report = measure_scan_decision_evidence_v1(
+        tmp_path,
+        since="2026-10-26T00:00:00.000000Z",
+        dedupe_by_day=True,
+    )
+    evidence = cast(dict[str, object], report["evidence"])
+    assert evidence["handles"] == [latest]
+    assert evidence["record_count"] == 1
+    superseded = cast(list[object], evidence["superseded_handles"])
+    assert set(superseded) == {earlier}
+    excluded = cast(list[object], evidence["excluded_handles"])
+    assert set(excluded) == {older}
