@@ -63,7 +63,7 @@ def _run(
         "SWING_DATE_OVERRIDE": date,
         "SWING_DRY_RUN": "1",
     }
-    return subprocess.run(
+    return subprocess.run(  # noqa: S603 - trusted repository test script
         [str(script)], env=env, capture_output=True, text=True, check=False
     )
 
