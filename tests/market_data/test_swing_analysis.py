@@ -587,3 +587,90 @@ def test_radius_one_pivots_do_not_read_radius_two_offsets() -> None:
     )
     pivots = module._pivots(module._bars(rows), 1)  # pyright: ignore[reportPrivateUsage]
     assert (3, "SWING_HIGH", Decimal("999")) in pivots
+
+
+def _sweep_rows(
+    lows: list[str], highs: list[str], opens: list[str], closes: list[str]
+) -> list[BharatStockDailyPrice]:
+    start = date(2026, 1, 1)
+    return [
+        _row(
+            start + timedelta(days=index),
+            opens[index],
+            highs[index],
+            lows[index],
+            closes[index],
+            1000,
+        )
+        for index in range(len(lows))
+    ]
+
+
+def test_liquidity_sweep_bullish_reclaim() -> None:
+    rows = _sweep_rows(
+        ["105", "103", "100", "103", "105", "104", "99", "102", "104", "106"],
+        ["107", "105", "102", "105", "107", "106", "106", "104", "106", "108"],
+        ["106", "104", "101", "104", "106", "105", "101", "103", "105", "107"],
+        ["106", "104", "101", "104", "106", "105", "102", "103", "105", "107"],
+    )
+    bars = module._bars(rows)  # pyright: ignore[reportPrivateUsage]
+    pivots = module._pivots(bars, module._PIVOT_RADIUS)  # pyright: ignore[reportPrivateUsage]
+    sweep = module._liquidity_sweep(bars, pivots)  # pyright: ignore[reportPrivateUsage]
+    assert sweep["state"] == "BULLISH_SWEEP_RECLAIM"
+    assert sweep["side"] == "BULLISH"
+    assert sweep["level_inr"] == "100.00"
+    assert sweep["session"] == "2026-01-07"
+    assert sweep["age_sessions"] == 3
+
+
+def test_liquidity_sweep_bearish_reclaim() -> None:
+    rows = _sweep_rows(
+        ["103", "105", "108", "105", "103", "104", "105", "106", "104", "102"],
+        ["105", "107", "110", "107", "105", "106", "111", "108", "106", "104"],
+        ["104", "106", "109", "106", "104", "105", "109", "107", "105", "103"],
+        ["104", "106", "109", "106", "104", "105", "108", "107", "105", "103"],
+    )
+    bars = module._bars(rows)  # pyright: ignore[reportPrivateUsage]
+    pivots = module._pivots(bars, module._PIVOT_RADIUS)  # pyright: ignore[reportPrivateUsage]
+    sweep = module._liquidity_sweep(bars, pivots)  # pyright: ignore[reportPrivateUsage]
+    assert sweep["state"] == "BEARISH_SWEEP_RECLAIM"
+    assert sweep["side"] == "BEARISH"
+    assert sweep["level_inr"] == "110.00"
+
+
+def test_liquidity_sweep_none_without_wick_reclaim() -> None:
+    bars = module._bars(_bars(10))  # pyright: ignore[reportPrivateUsage]
+    pivots = module._pivots(bars, module._PIVOT_RADIUS)  # pyright: ignore[reportPrivateUsage]
+    sweep = module._liquidity_sweep(bars, pivots)  # pyright: ignore[reportPrivateUsage]
+    assert sweep["state"] == "NONE"
+    assert sweep["reason"] == "NO_RECENT_SWEEP"
+
+
+def test_liquidity_sweep_ignores_unconfirmed_pivot() -> None:
+    rows = _sweep_rows(
+        ["105", "103", "101", "103", "105", "104", "99", "102", "104", "106"],
+        ["107", "105", "103", "105", "107", "106", "106", "104", "106", "108"],
+        ["106", "104", "102", "104", "106", "105", "101", "103", "105", "107"],
+        ["106", "104", "102", "104", "106", "105", "102", "103", "105", "107"],
+    )
+    bars = module._bars(rows)  # pyright: ignore[reportPrivateUsage]
+    # Pivot at index 5 would not be confirmed until index 7; the sweep at index 6
+    # must not use it.
+    pivots = ((5, "SWING_LOW", Decimal("100")),)
+    sweep = module._liquidity_sweep(bars, pivots)  # pyright: ignore[reportPrivateUsage]
+    assert sweep["state"] == "NONE"
+
+
+def test_liquidity_sweep_ignores_sweep_before_event() -> None:
+    rows = _sweep_rows(
+        ["105", "103", "100", "103", "105", "104", "99", "102", "104", "106"],
+        ["107", "105", "102", "105", "107", "106", "106", "104", "106", "108"],
+        ["106", "104", "101", "104", "106", "105", "101", "103", "105", "107"],
+        ["106", "104", "101", "104", "106", "105", "102", "103", "105", "107"],
+    )
+    bars = module._bars(rows)  # pyright: ignore[reportPrivateUsage]
+    pivots = module._pivots(bars, module._PIVOT_RADIUS)  # pyright: ignore[reportPrivateUsage]
+    sweep = module._liquidity_sweep(  # pyright: ignore[reportPrivateUsage]
+        bars, pivots, event_index=7
+    )
+    assert sweep["state"] == "NONE"

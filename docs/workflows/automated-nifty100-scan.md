@@ -357,12 +357,16 @@ doppler run -- swing-analysis \
   --output json
 ```
 
-The artifact schema is `swing-analysis@v2`. Per candidate it reports ATR20,
+The artifact schema is `swing-analysis@v3`. Per candidate it reports ATR20,
 ATR-percent, event-session volume versus the prior 20-session average and
 median, completed-bar retest state, 252-session swing support/resistance
 clusters with nearest levels and ATR distances, weekly trend, a real
-last-bearish-candle demand zone, ATR-normalized extension and risk, and explicit
-flags.
+last-bearish-candle demand zone, ATR-normalized extension and risk, a bounded
+liquidity sweep/reclaim fact, and explicit flags. The sweep fact is additive: it
+reports `BULLISH_SWEEP_RECLAIM`, `BEARISH_SWEEP_RECLAIM`, `NONE`, or `UNKNOWN`
+with the swept confirmed swing level, session, and age in completed sessions over
+the latest 10 sessions at or after the candidate event session. Pre-event sweeps
+are excluded. It never changes candidate status or a policy gate.
 
 It also evaluates `swing-analysis-policy@v1` and returns a deterministic
 `members[].policy.outcome` (with report-level `policy.outcome_counts` and

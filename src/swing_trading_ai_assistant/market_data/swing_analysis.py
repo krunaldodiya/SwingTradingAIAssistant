@@ -36,7 +36,7 @@ from .scan_decision_evidence import admit_retained_scan_document_v1
 from .scanner_observation_pair_state_v1 import read_scanner_pair_state_v1
 from .stock_observations import read_stock_observation_v1
 
-SCHEMA: Final = "swing-analysis@v2"
+SCHEMA: Final = "swing-analysis@v3"
 POLICY_SCHEMA: Final = "swing-analysis-policy@v1"
 _MAX_SESSIONS: Final = 252
 _LOOKBACK_DAYS: Final = 420
@@ -47,6 +47,7 @@ _MIN_HISTORY: Final = 60
 _VOLUME_MIN_RATIO: Final = Decimal("1.5")
 _EXTENSION_MAX_ATR: Final = Decimal("2")
 _CANDLE_BODY_MIN_PERCENT: Final = Decimal("60")
+_SWEEP_LOOKBACK_BARS: Final = 10
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,6 +102,74 @@ def _pivots(
             elif low < rows[index - 1].low and low < rows[index + 1].low:
                 found.append((index, "SWING_LOW", low))
     return tuple(found)
+
+
+def _liquidity_sweep(
+    rows: Sequence[AnalysisBar],
+    pivots: Sequence[tuple[int, str, Decimal]],
+    *,
+    event_index: int | None = None,
+) -> dict[str, object]:
+    """Report a recent confirmed-swing wick sweep with body reclaim.
+
+    A swing is usable only after its confirmation radius. The fact is additive:
+    it never changes a decision, gate, score, or flag.
+    """
+    if not rows or len(rows) <= _PIVOT_RADIUS * 2:
+        return {
+            "state": "UNKNOWN",
+            "side": None,
+            "level_inr": None,
+            "session": None,
+            "age_sessions": None,
+            "lookback_sessions": _SWEEP_LOOKBACK_BARS,
+            "reason": "INSUFFICIENT_HISTORY",
+        }
+    events: list[tuple[int, str, Decimal, str]] = []
+    start = max(0, len(rows) - _SWEEP_LOOKBACK_BARS)
+    if event_index is not None:
+        start = max(start, event_index)
+    for index in range(start, len(rows)):
+        row = rows[index]
+        confirmed = [pivot for pivot in pivots if pivot[0] + _PIVOT_RADIUS <= index]
+        if not confirmed:
+            continue
+        latest_low = next(
+            (pivot for pivot in reversed(confirmed) if pivot[1] == "SWING_LOW"),
+            None,
+        )
+        if latest_low is not None:
+            level = latest_low[2]
+            if row.low < level and row.close > level and row.open > level:
+                events.append((index, "BULLISH", level, "SWING_LOW"))
+        latest_high = next(
+            (pivot for pivot in reversed(confirmed) if pivot[1] == "SWING_HIGH"),
+            None,
+        )
+        if latest_high is not None:
+            level = latest_high[2]
+            if row.high > level and row.close < level and row.open < level:
+                events.append((index, "BEARISH", level, "SWING_HIGH"))
+    if not events:
+        return {
+            "state": "NONE",
+            "side": None,
+            "level_inr": None,
+            "session": None,
+            "age_sessions": None,
+            "lookback_sessions": _SWEEP_LOOKBACK_BARS,
+            "reason": "NO_RECENT_SWEEP",
+        }
+    index, side, level, _ = events[-1]
+    return {
+        "state": f"{side}_SWEEP_RECLAIM",
+        "side": side,
+        "level_inr": str(level.quantize(Decimal("0.01"))),
+        "session": rows[index].session.isoformat(),
+        "age_sessions": len(rows) - 1 - index,
+        "lookback_sessions": _SWEEP_LOOKBACK_BARS,
+        "reason": "RECENT_SWEEP_CONFIRMED",
+    }
 
 
 def _clusters(
@@ -607,7 +676,7 @@ def _analysis_outcomes(  # noqa: C901 - closed report binding
     if type(value) is not dict:
         raise ValueError("invalid analysis report")
     report = cast(dict[str, object], value)
-    if report.get("schema") != SCHEMA:
+    if report.get("schema") not in {SCHEMA, "swing-analysis@v2"}:
         raise ValueError("invalid analysis schema")
     if report.get("scan_result_identity_sha256") != scan.get("result_identity_sha256"):
         raise ValueError("analysis scan identity mismatch")
@@ -1046,6 +1115,7 @@ def _analyze_member(
         else None,
         "volume": volume,
         "retest": retest,
+        "liquidity_sweep": _liquidity_sweep(bars, pivots, event_index=event_index),
         "levels": {
             "broken_high": str(broken_high),
             "structural_stop": str(stop) if stop is not None else None,
