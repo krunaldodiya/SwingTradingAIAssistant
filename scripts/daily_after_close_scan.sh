@@ -176,7 +176,14 @@ if [ -n "${SWING_LEDGER_ROOT:-}" ]; then
   [ -f "$RESEARCH" ] && ledger_args+=(--command "market-data research-run-current --contract-version v2")
   "$REPO/.venv/bin/python" "$REPO/scripts/write_scan_ledger_entry.py" \
     "${ledger_args[@]}" > "$LOG/ledger-$STAMP.log" 2>&1
-  echo "$(date -Is) ledger_exit=$? $(cat "$LOG/ledger-$STAMP.log")" >> "$LOG/scan-$STAMP.err"
+  ledger_code=$?
+  echo "$(date -Is) ledger_exit=$ledger_code $(cat "$LOG/ledger-$STAMP.log")" \
+    >> "$LOG/scan-$STAMP.err"
+  # A real pass that cannot record itself has not satisfied the delivery gate,
+  # so the unit must report failure instead of a silent success.
+  if [ "$ledger_code" -ne 0 ]; then
+    exit "$ledger_code"
+  fi
 
   # Push the new entry off-device immediately. The hourly timer is a fallback for
   # manual writes; it must not be the only path between a pass and its backup.
@@ -186,12 +193,19 @@ if [ -n "${SWING_LEDGER_ROOT:-}" ]; then
     "$RCLONE" copy "$SWING_LEDGER_ROOT" "$LEDGER_REMOTE" --update \
       --log-file "${SWING_SYNC_LOG_DIR:-$HOME/.local/state/rclone}/research-ledger.log" \
       >> "$LOG/ledger-sync-$STAMP.log" 2>&1
-    echo "$(date -Is) ledger_sync_exit=$?" >> "$LOG/scan-$STAMP.err"
+    sync_code=$?
+    echo "$(date -Is) ledger_sync_exit=$sync_code" >> "$LOG/scan-$STAMP.err"
+    # A ledger that never left the device is still single-copy; report it.
+    if [ "$sync_code" -ne 0 ]; then
+      exit "$sync_code"
+    fi
   else
-    echo "$(date -Is) ledger sync skipped: $RCLONE not executable" >> "$LOG/scan-$STAMP.err"
+    echo "$(date -Is) ledger sync failed: $RCLONE not executable" >> "$LOG/scan-$STAMP.err"
+    exit 1
   fi
 else
-  echo "$(date -Is) ledger skipped: SWING_LEDGER_ROOT is not set" >> "$LOG/scan-$STAMP.err"
+  echo "$(date -Is) ledger failed: SWING_LEDGER_ROOT is not set" >> "$LOG/scan-$STAMP.err"
+  exit 1
 fi
 
 exit 0

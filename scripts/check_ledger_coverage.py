@@ -15,33 +15,28 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import sys
 from collections import defaultdict
 from datetime import date
 from pathlib import Path
 from typing import cast
 
-Json = dict[str, object]
-
-DEGENERATE_MARKERS = frozenset(
-    {
-        "OBSERVATION_STRUCTURE_NOT_READY",
-        "OBSERVATION_OR_PROVIDER_UNAVAILABLE",
-        "OBSERVATION_PAIR_STATE_UNAVAILABLE",
-        "QUESTION_NOT_READY",
-    }
+# Share the page classification and session resolution with the writer so the
+# checker can never demand an entry the writer refuses, or group a page under a
+# different day than the writer files it under.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from write_scan_ledger_entry import (  # noqa: E402
+    completed_session,
+    degenerate_reason,
 )
+
+Json = dict[str, object]
 
 
 def _mapping(value: object) -> Json:
     if not isinstance(value, dict):
         return {}
     return {str(key): item for key, item in cast(dict[object, object], value).items()}
-
-
-def _rows(value: object) -> list[Json]:
-    if not isinstance(value, list):
-        return []
-    return [_mapping(item) for item in cast(list[object], value)]
 
 
 def _count(value: object) -> int:
@@ -54,27 +49,27 @@ def _text(value: object) -> str | None:
 
 def page_state(scan: Json) -> str:
     """Classify one retained page as a real pass or an upstream failure."""
-    total = _count(scan.get("total_stocks_scanned"))
-    candidates = _count(scan.get("candidate_count"))
-    eligible = _count(scan.get("eligible_count"))
-    ineligible = _count(scan.get("ineligible_count"))
-    if not total or candidates or eligible or ineligible:
-        return "real"
-    rules = {
-        rule
-        for row in [*_rows(scan.get("candidates")), *_rows(scan.get("other_stocks"))]
-        if (rule := _text(row.get("failed_rule")))
-    }
-    return "degenerate" if rules <= DEGENERATE_MARKERS else "real"
+    return "degenerate" if degenerate_reason(scan) else "real"
 
 
-def _ledger_days(root: Path) -> dict[str, list[Path]]:
-    days: dict[str, list[Path]] = defaultdict(list)
+def _ledger_entries(root: Path) -> list[tuple[str, Path, str]]:
+    """Return (day, path, text) for every ledger entry."""
+    entries: list[tuple[str, Path, str]] = []
     for path in sorted(root.glob("entries/*/*.md")):
         match = re.match(r"(\d{4}-\d{2}-\d{2})", path.name)
-        if match:
-            days[match.group(1)].append(path)
-    return days
+        if not match:
+            continue
+        entries.append((match.group(1), path, path.read_text(errors="replace")))
+    return entries
+
+
+def _cites(text: str, handle: str) -> bool:
+    """True when the entry names this exact retained page.
+
+    A date alone is not evidence: an unrelated note for the same day must not
+    satisfy the check.
+    """
+    return bool(handle) and handle in text
 
 
 def _pages(evidence: Path) -> dict[str, list[Json]]:
@@ -85,10 +80,8 @@ def _pages(evidence: Path) -> dict[str, list[Json]]:
         except (OSError, ValueError):
             continue
         scan = _mapping(payload.get("scan")) or payload
-        stamp = (
-            _text(scan.get("latest_completed_session"))
-            or (_text(scan.get("scan_timestamp")) or "")[:10]
-        )
+        session, _basis = completed_session(scan)
+        stamp = session or (_text(scan.get("scan_timestamp")) or "")[:10]
         if not stamp:
             continue
         pages[stamp[:10]].append(
@@ -104,14 +97,33 @@ def _pages(evidence: Path) -> dict[str, list[Json]]:
 def build_report(
     *, storage_root: Path, ledger_root: Path, since: date | None
 ) -> list[Json]:
+    """Report every real research day and whether its pages are cited.
+
+    Coverage is per retained page, not per calendar day: a page counts as
+    recorded only when some ledger entry names its exact handle. Entries are
+    filed under the date the research ran, while a page can bind an earlier
+    completed session, so the check searches the whole ledger rather than
+    assuming one filing convention.
+    """
     pages = _pages(storage_root / "scan-decision-evidence-v1")
-    ledger = _ledger_days(ledger_root)
+    corpus = "\n".join(text for _, _, text in _ledger_entries(ledger_root))
     report: list[Json] = []
     for stamp in sorted(pages):
         if since is not None and date.fromisoformat(stamp) < since:
             continue
         real = [page for page in pages[stamp] if page["state"] == "real"]
-        entries = ledger.get(stamp, [])
+        uncited = [
+            page["handle"] for page in real if not _cites(corpus, str(page["handle"]))
+        ]
+        # Same-session reruns are one research pass, so one cited page records the
+        # day. Date-only or unrelated entries never satisfy the check because
+        # `_cites` requires the retained handle itself.
+        if not real:
+            state = "DEGENERATE_ONLY"
+        elif len(uncited) == len(real):
+            state = "MISSING"
+        else:
+            state = "OK"
         report.append(
             {
                 "session": stamp,
@@ -120,10 +132,8 @@ def build_report(
                 "candidates": max(
                     (_count(page["candidates"]) for page in pages[stamp]), default=0
                 ),
-                "ledger_entries": [str(path) for path in entries],
-                "state": "OK"
-                if entries
-                else ("MISSING" if real else "DEGENERATE_ONLY"),
+                "uncited_handles": uncited,
+                "state": state,
             }
         )
     return report
@@ -137,11 +147,12 @@ def _render(report: list[Json]) -> int:
             f"{row['degenerate_pages']!s:>5s} {row['candidates']!s:>4s}  {row['state']}"
         )
     missing = [row for row in report if row["state"] == "MISSING"]
-    print(f"\nmissing ledger entries: {len(missing)}")
+    print(f"\nunrecorded research days: {len(missing)}")
     for row in missing:
+        uncited = len(cast(list[str], row["uncited_handles"]))
         print(
             f"  {row['session']} ({row['real_pages']} real page(s), "
-            f"{row['candidates']} candidate(s))"
+            f"{row['candidates']} candidate(s), {uncited} uncited handle(s))"
         )
     return 1 if missing else 0
 

@@ -61,7 +61,8 @@ for exactly those candidates, writing `analysis-YYYY-MM-DD.json` and
 alter the scan page or its decision, and a post-scan failure is logged in the
 matching `.err` file without failing the scan. The guards apply to the scheduled
 job only and do not restrict on-demand scans or `market-data` research commands.
-Interpretation, prior-candidate tracking, and ledger writes remain manual.
+Interpretation and prior-candidate tracking remain manual; the ledger entry and
+its off-device copy are written by the runner.
 
 ```bash
 doppler run -- signal-decisions scan \
@@ -477,8 +478,15 @@ python scripts/check_ledger_coverage.py \
   --since 2026-10-19
 ```
 
-It exits `1` and lists every session that has a real retained page but no ledger
-entry; `DEGENERATE_ONLY` days are reported separately and do not fail the check.
+It exits `1` and lists every session with a real retained page that no ledger
+entry cites. Coverage is per retained page, matched by its exact handle, so a
+same-day note that shares only the date does not count; same-session reruns are
+one pass, so one cited page records the day. `DEGENERATE_ONLY` days are reported
+separately and do not fail the check.
+
+A pass fails, rather than reporting success, when the entry cannot be written or
+the off-device copy fails. An unset `SWING_LEDGER_ROOT` is a configuration
+failure for a scheduled run.
 Backfill a missing day from its retained page without rerunning research:
 
 ```bash

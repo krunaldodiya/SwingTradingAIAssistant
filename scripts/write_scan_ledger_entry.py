@@ -73,12 +73,45 @@ def _load(path: str | None) -> Json | None:
 
 
 def _resolved_handle(envelope: Json, scan_json: str | None) -> str:
-    """Return the retained handle carried by the envelope or its file name."""
+    """Return a stable key for this exact page.
+
+    Preference: the retained handle, then the file name of a retained page, then
+    the scan result identity. The key is used both for de-duplication and for the
+    file name, so two runs over the same page can never write two entries.
+    """
     handle = _text(envelope.get("decision_evidence_handle"))
     if handle and len(handle) == 64:
         return handle
     stem = Path(scan_json).stem if scan_json else ""
-    return stem if len(stem) == 64 else ""
+    if len(stem) == 64:
+        return stem
+    identity = _text(_scan_section(envelope).get("result_identity_sha256"))
+    return f"result-{identity}" if identity else ""
+
+
+def completed_session(scan: Json) -> tuple[str | None, str]:
+    """Return the admitted completed session and how it was established.
+
+    ``swing-trade-scan@v3`` projects no top-level session field, so the run
+    timestamp is only a research-run label. The safety ledger of an admitted
+    candidate does carry the session the evidence was bound to. Without one,
+    the session stays unestablished rather than being inferred from the label.
+    """
+    direct = _text(scan.get("latest_completed_session"))
+    if direct:
+        return direct[:10], "scan_field"
+    observed: set[str] = set()
+    for candidate in _rows(scan.get("candidates")):
+        safety = _mapping(candidate.get("safety_eligibility"))
+        for entry in _rows(safety.get("explanation_ledger")):
+            measurements = _mapping(entry.get("derived_measurements"))
+            for key in ("latest_completed_session", "retained_completed_session"):
+                value = _text(measurements.get(key))
+                if value:
+                    observed.add(value[:10])
+    if len(observed) == 1:
+        return observed.pop(), "candidate_safety_ledger"
+    return None, "unestablished"
 
 
 def _scan_section(envelope: Json) -> Json:
@@ -224,10 +257,11 @@ def _candidate_lines(
     return lines
 
 
-def _sample_lines(scan: Json, session: str) -> list[str]:
+def _sample_lines(scan: Json, session: str | None, session_basis: str) -> list[str]:
     regime = _mapping(scan.get("market_regime"))
     return [
-        f"- Scan bound session {session} at {_text(scan.get('scan_timestamp'))}.",
+        f"- Completed session {session or 'unestablished'}; basis `{session_basis}`. "
+        f"Research-run label {_text(scan.get('scan_timestamp'))}.",
         f"- Members evaluated once: {_count(scan.get('total_stocks_scanned'))}.",
         f"- Safety: {_count(scan.get('eligible_count'))} eligible, "
         f"{_count(scan.get('ineligible_count'))} ineligible, "
@@ -304,11 +338,9 @@ def build_entry(
     """Render the complete Markdown entry for one pass."""
     scan = _scan_section(scan_envelope)
     evidence_handle = handle or "not retained"
-    session = (
-        _text(scan.get("latest_completed_session"))
-        or _text(scan.get("scan_timestamp"))
-        or "unknown"
-    )
+    session, session_basis = completed_session(scan)
+    run_label = (_text(scan.get("scan_timestamp")) or "unknown")[:10]
+    scope_session = session or f"unestablished (research-run label {run_label})"
     policies = _policy_by_symbol(analysis)
     dossiers = _dossier_by_symbol(research)
     candidates = _rows(scan.get("candidates"))
@@ -317,7 +349,7 @@ def build_entry(
         "---",
         f"date: {now.strftime('%Y-%m-%d %H:%M')} IST",
         "type: scan-review",
-        f"scope: Nifty 200 exact universe (200 members) - completed session {session[:10]}",
+        f"scope: Nifty 200 exact universe (200 members) - completed session {scope_session}",
         "sources: Official Nifty 200 membership; Upstox quote/circuit/corporate-action "
         "safety evidence; BharatStock daily history",
         f"evidence: decision-evidence handle {evidence_handle}; scan schema "
@@ -335,7 +367,7 @@ def build_entry(
         "",
         "## Data used",
         "",
-        *_sample_lines(scan, session[:10]),
+        *_sample_lines(scan, session, session_basis),
         "## Method",
         "",
         *(
@@ -383,8 +415,26 @@ def build_entry(
 
 
 def resolve_target(ledger_root: Path, stamp: str, handle: str) -> Path:
-    slug = handle[:8] if handle else "nohandle"
-    return ledger_root / "entries" / stamp[:4] / f"{stamp}-{slug}-nifty200-scan.md"
+    """Return a path whose name is unique for this exact handle.
+
+    An eight-character prefix is readable but not collision-free. On a clash the
+    suffix grows until it is unique, so a second same-session page can never be
+    suppressed as an existing entry.
+    """
+    directory = ledger_root / "entries" / stamp[:4]
+    slug = handle or "nohandle"
+    for width in (8, 16, 32, len(slug)):
+        candidate = directory / f"{stamp}-{slug[:width]}-nifty200-scan.md"
+        if not candidate.exists():
+            return candidate
+        if handle and handle in candidate.read_text(errors="replace"):
+            return candidate
+    index = 2
+    while True:
+        candidate = directory / f"{stamp}-{slug}-{index}-nifty200-scan.md"
+        if not candidate.exists():
+            return candidate
+        index += 1
 
 
 def existing_entry(ledger_root: Path, stamp: str, handle: str) -> Path | None:
@@ -392,7 +442,10 @@ def existing_entry(ledger_root: Path, stamp: str, handle: str) -> Path | None:
     if not directory.is_dir():
         return None
     for path in sorted(directory.glob(f"{stamp}-*-nifty200-scan.md")):
-        if handle and handle in path.read_text(errors="replace"):
+        text = path.read_text(errors="replace")
+        if handle and handle in text:
+            return path
+        if not handle and path.name == f"{stamp}-nohandle-nifty200-scan.md":
             return path
     return None
 
@@ -402,8 +455,8 @@ def _write_entry(
 ) -> int:
     ledger_root = Path(args.ledger_root)
     if not ledger_root.is_dir():
-        print("ledger_entry_skipped: ledger root unavailable", file=sys.stderr)
-        return 0
+        print("ledger_entry_failed: ledger root unavailable", file=sys.stderr)
+        return 2
     prior = existing_entry(ledger_root, stamp, handle) if stamp else None
     if prior is not None:
         print(f"ledger_entry_exists: {prior}")
@@ -433,7 +486,18 @@ def _write_entry(
     except FileExistsError:
         print(f"ledger_entry_exists: {target}")
         return 0
-    os.chmod(target, 0o600)
+    except OSError as error:
+        print(
+            f"ledger_entry_failed: {error.strerror or 'write error'}", file=sys.stderr
+        )
+        return 2
+    try:
+        os.chmod(target, 0o600)
+    except OSError as error:
+        print(
+            f"ledger_entry_failed: {error.strerror or 'chmod error'}", file=sys.stderr
+        )
+        return 2
     print(f"ledger_entry_written: {target}")
     return 0
 
@@ -462,8 +526,8 @@ def main(argv: list[str] | None = None) -> int:
 
     envelope = _load(str(args.scan_json))
     if envelope is None:
-        print("ledger_entry_skipped: unreadable scan artifact", file=sys.stderr)
-        return 0
+        print("ledger_entry_failed: unreadable scan artifact", file=sys.stderr)
+        return 2
     scan = _scan_section(envelope)
     reason = degenerate_reason(scan)
     if reason and not args.allow_degenerate:
@@ -471,11 +535,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     # A retained page file is named by its own handle; the envelope carries it too.
     handle = _resolved_handle(envelope, str(args.scan_json))
-    stamp = (
-        _text(scan.get("latest_completed_session"))
-        or _text(scan.get("scan_timestamp"))
-        or ""
-    )[:10]
+    session, _ = completed_session(scan)
+    stamp = session or (_text(scan.get("scan_timestamp")) or "")[:10]
     return _write_entry(args=args, envelope=envelope, handle=handle, stamp=stamp)
 
 

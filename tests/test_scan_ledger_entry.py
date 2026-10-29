@@ -188,7 +188,9 @@ def test_checker_reports_missing_and_ignores_degenerate(
     states = {row["session"]: row["state"] for row in report}
     assert states == {"2026-10-28": "DEGENERATE_ONLY", "2026-10-29": "MISSING"}
 
-    (ledger / "entries" / "2026" / "2026-10-29-manual.md").write_text("entry")
+    (ledger / "entries" / "2026" / "2026-10-29-manual.md").write_text(
+        f"evidence: decision-evidence handle {'a' * 64}"
+    )
     report = checker.build_report(storage_root=storage, ledger_root=ledger, since=None)
     states = {row["session"]: row["state"] for row in report}
     assert states["2026-10-29"] == "OK"
@@ -211,3 +213,53 @@ def test_schedule_installer_tracks_every_unit() -> None:
         assert unit in installer
     for placeholder in ("@REPO@", "@STORE@", "@LEDGER@", "@LOGDIR@"):
         assert placeholder in installer
+
+
+def test_completed_session_stays_unestablished_without_admitted_evidence() -> None:
+    """The run timestamp is a label, not the market session."""
+    scan = _scan_payload()["scan"]
+    scan.pop("latest_completed_session", None)
+    scan.pop("candidates")
+    assert writer.completed_session(scan) == (None, "unestablished")
+
+
+def test_completed_session_comes_from_candidate_safety_ledger() -> None:
+    scan = _scan_payload()["scan"]
+    scan.pop("latest_completed_session", None)
+    candidate = scan["candidates"][0]
+    candidate["safety_eligibility"] = {
+        "status": "ELIGIBLE",
+        "explanation_ledger": [
+            {"derived_measurements": {"latest_completed_session": "2026-10-28"}}
+        ],
+    }
+    assert writer.completed_session(scan) == ("2026-10-28", "candidate_safety_ledger")
+
+
+def test_entry_never_labels_run_timestamp_as_completed_session() -> None:
+    scan = _scan_payload()["scan"]
+    scan.pop("latest_completed_session", None)
+    scan.pop("candidates")
+    text = writer.build_entry(
+        scan_envelope={"scan": scan},
+        analysis=None,
+        research=None,
+        lifecycle=None,
+        now=datetime(2026, 10, 29, 20, 45, tzinfo=IST),
+        status="recorded",
+        commands=[],
+    )
+    assert "completed session unestablished (research-run label 2026-10-29)" in text
+
+
+def test_ledger_filename_disambiguates_a_shared_prefix(tmp_path: Path) -> None:
+    """Two handles sharing an eight-character prefix must not collide."""
+    ledger = tmp_path / "ledger"
+    (ledger / "entries" / "2026").mkdir(parents=True)
+    first = "a" * 8 + "0" * 56
+    second = "a" * 8 + "1" * 56
+    one = writer.resolve_target(ledger, "2026-10-29", first)
+    one.write_text(f"handle {first}")
+    two = writer.resolve_target(ledger, "2026-10-29", second)
+    assert two != one
+    assert two.name.endswith("-nifty200-scan.md")
