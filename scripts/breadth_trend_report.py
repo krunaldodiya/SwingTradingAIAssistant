@@ -25,6 +25,12 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import cast
 
+from swing_trading_ai_assistant.market_data.scan_decision_evidence import (
+    ScanDecisionEvidenceUnavailable,
+    list_scan_decision_evidence_handles_v1,
+    read_scan_decision_evidence_completed_session_v1,
+)
+
 Json = dict[str, object]
 
 # A change smaller than this over the whole window is reported as flat rather
@@ -83,49 +89,32 @@ def _admits_market_facts(scan: Json) -> bool:
     )
 
 
-def _session_of(scan: Json) -> str | None:
-    """Return the completed session this page was bound to, when established.
-
-    ``swing-trade-scan@v3`` projects no session field, so the admitted candidate
-    safety ledger is the only in-page evidence of the bound session. Falling back
-    to the run label would misdate a page that bound an earlier close.
-    """
-    direct = _text(scan.get("latest_completed_session"))
-    if direct:
-        return direct[:10]
-    observed: set[str] = set()
-    for candidate in _rows(scan.get("candidates")):
-        safety = _mapping(candidate.get("safety_eligibility"))
-        for entry in _rows(safety.get("explanation_ledger")):
-            measurements = _mapping(entry.get("derived_measurements"))
-            for key in ("latest_completed_session", "retained_completed_session"):
-                value = _text(measurements.get(key))
-                if value:
-                    observed.add(value[:10])
-    if len(observed) == 1:
-        return observed.pop()
-    return None
-
-
-def _pages(evidence: Path) -> dict[str, Json]:
-    """Latest admitting page per completed session."""
+def _pages(storage_root: Path) -> tuple[dict[str, Json], int]:
+    """Latest re-admitted page per session and unavailable-record count."""
     chosen: dict[str, Json] = {}
-    for path in sorted(evidence.glob("*.json")):
+    unavailable = 0
+    for handle in list_scan_decision_evidence_handles_v1(storage_root):
         try:
-            payload = _mapping(json.loads(path.read_text()))
-        except (OSError, ValueError):
+            record = read_scan_decision_evidence_completed_session_v1(
+                storage_root, handle
+            )
+        except ScanDecisionEvidenceUnavailable:
+            unavailable += 1
             continue
-        scan = _mapping(payload.get("scan")) or payload
+        scan = _mapping(record.get("scan"))
         if not _admits_market_facts(scan):
             continue
-        session = _session_of(scan)
+        session = _text(record.get("completed_session"))
         if session is None:
-            continue
+            raise ScanDecisionEvidenceUnavailable("DECISION_EVIDENCE_UNAVAILABLE")
         stamp = _text(scan.get("scan_timestamp")) or ""
         prior = chosen.get(session)
-        if prior is None or stamp > (_text(prior.get("scan_timestamp")) or ""):
-            chosen[session] = scan
-    return chosen
+        if prior is None or (stamp, handle) > (
+            _text(prior.get("scan_timestamp")) or "",
+            _text(prior.get("decision_evidence_handle")) or "",
+        ):
+            chosen[session] = {**scan, "decision_evidence_handle": handle}
+    return chosen, unavailable
 
 
 def _slope(values: Sequence[Decimal]) -> Decimal:
@@ -164,8 +153,22 @@ def _trend(values: Sequence[Decimal]) -> tuple[str, Decimal, Decimal]:
     return "FLAT", fitted, slope
 
 
+def _endpoint_change(
+    rows: Sequence[Json], key: str
+) -> tuple[str | None, str | None, str | None]:
+    """Return the reported endpoints and their actual percentage-point delta."""
+    if not rows:
+        return None, None, None
+    first = _text(rows[0].get(key))
+    last = _text(rows[-1].get(key))
+    first_value, last_value = _percent(first), _percent(last)
+    if first_value is None or last_value is None:
+        return first, last, None
+    return first, last, str(round(last_value - first_value, 2))
+
+
 def build_report(*, storage_root: Path, sessions: int, since: date | None) -> Json:
-    pages = _pages(storage_root / "scan-decision-evidence-v1")
+    pages, unavailable_evidence_records = _pages(storage_root)
     ordered = sorted(pages)
     if since is not None:
         ordered = [day for day in ordered if date.fromisoformat(day) >= since]
@@ -197,8 +200,8 @@ def build_report(*, storage_root: Path, sessions: int, since: date | None) -> Js
         for row in rows
         if (value := _percent(row["downtrend_percent"])) is not None
     ]
-    up_trend, up_delta, up_slope = _trend(uptrends)
-    down_trend, down_delta, down_slope = _trend(downtrends)
+    up_trend, up_fitted_change, up_slope = _trend(uptrends)
+    down_trend, down_fitted_change, down_slope = _trend(downtrends)
     # Uptrend share is the headline for a long-only screen: it is the pool a
     # breakout must come from. The downtrend share is reported alongside, and
     # confluence states only whether the two agree.
@@ -210,16 +213,34 @@ def build_report(*, storage_root: Path, sessions: int, since: date | None) -> Js
     else:
         confluence = "CONFLICTING"
 
+    (
+        uptrend_first_percent,
+        uptrend_last_percent,
+        uptrend_endpoint_change_pp,
+    ) = _endpoint_change(rows, "uptrend_percent")
+    (
+        downtrend_first_percent,
+        downtrend_last_percent,
+        downtrend_endpoint_change_pp,
+    ) = _endpoint_change(rows, "downtrend_percent")
+
     return {
         "schema": "market-breadth-trend@v1",
         "caveat": CAVEAT,
         "sessions_observed": len(rows),
+        "unavailable_evidence_records": unavailable_evidence_records,
         "window": {
             "first": rows[0]["session"] if rows else None,
             "last": rows[-1]["session"] if rows else None,
         },
-        "uptrend_fitted_change_pp": str(round(up_delta, 2)),
-        "downtrend_fitted_change_pp": str(round(down_delta, 2)),
+        "uptrend_first_percent": uptrend_first_percent,
+        "uptrend_last_percent": uptrend_last_percent,
+        "uptrend_endpoint_change_pp": uptrend_endpoint_change_pp,
+        "downtrend_first_percent": downtrend_first_percent,
+        "downtrend_last_percent": downtrend_last_percent,
+        "downtrend_endpoint_change_pp": downtrend_endpoint_change_pp,
+        "uptrend_fitted_change_pp": str(round(up_fitted_change, 2)),
+        "downtrend_fitted_change_pp": str(round(down_fitted_change, 2)),
         "uptrend_slope_pp_per_session": str(round(up_slope, 3)),
         "downtrend_slope_pp_per_session": str(round(down_slope, 3)),
         "trend": breadth_trend,
@@ -252,11 +273,17 @@ def _render(report: Json) -> int:
         f"trend {report['trend']}"
     )
     print(
-        f"  uptrend: fitted change {report['uptrend_fitted_change_pp']} pp, "
+        f"  uptrend: {report['uptrend_first_percent']} -> "
+        f"{report['uptrend_last_percent']} "
+        f"({report['uptrend_endpoint_change_pp']} pp endpoint); fitted change "
+        f"{report['uptrend_fitted_change_pp']} pp, "
         f"slope {report['uptrend_slope_pp_per_session']} pp/session"
     )
     print(
-        f"  downtrend: fitted change {report['downtrend_fitted_change_pp']} pp, "
+        f"  downtrend: {report['downtrend_first_percent']} -> "
+        f"{report['downtrend_last_percent']} "
+        f"({report['downtrend_endpoint_change_pp']} pp endpoint); fitted change "
+        f"{report['downtrend_fitted_change_pp']} pp, "
         f"slope {report['downtrend_slope_pp_per_session']} pp/session; "
         f"confluence {report['confluence']}"
     )
@@ -285,7 +312,20 @@ def main(argv: list[str] | None = None) -> int:
         print("market_breadth_invalid: since must be YYYY-MM-DD", file=sys.stderr)
         return 2
 
-    report = build_report(storage_root=root, sessions=args.sessions, since=since)
+    try:
+        report = build_report(storage_root=root, sessions=args.sessions, since=since)
+    except ScanDecisionEvidenceUnavailable:
+        print(
+            "market_breadth_unavailable: retained decision evidence unavailable",
+            file=sys.stderr,
+        )
+        return 1
+    if report["unavailable_evidence_records"]:
+        print(
+            "market_breadth_excluded: "
+            f"{report['unavailable_evidence_records']} retained page(s) unavailable",
+            file=sys.stderr,
+        )
     if args.output == "json":
         print(json.dumps(report, indent=1))
         return 0

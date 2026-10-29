@@ -447,11 +447,12 @@ python scripts/breadth_trend_report.py \
 
 It reads retained scan pages only: no provider call, no credential, no network.
 Per completed session it reports the scanned universe's uptrend share, downtrend
-share, regime label, cohort size and candidate count, then labels the window
-`IMPROVING`, `DETERIORATING`, `FLAT`, or `INSUFFICIENT_HISTORY` from the
-least-squares change in uptrend share. Endpoint-to-endpoint comparison is not
-used: a series that peaked mid-window and has fallen since would otherwise read
-as flat. `confluence` states whether the downtrend share moved the same way.
+share, regime label, cohort size and candidate count. It reports the first and
+last shares plus their endpoint deltas, then labels the window `IMPROVING`,
+`DETERIORATING`, `FLAT`, or `INSUFFICIENT_HISTORY` from the least-squares change
+in uptrend share. Endpoint deltas are contextual facts, not the label criterion:
+a series that peaked mid-window and has fallen since would otherwise read as
+flat. `confluence` states whether the downtrend share moved the same way.
 
 Two limits are stated in the output itself:
 

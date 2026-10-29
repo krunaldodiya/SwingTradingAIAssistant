@@ -177,49 +177,8 @@ def test_runner_runs_analysis_and_research_for_candidates(tmp_path: Path) -> Non
 
 
 def test_runner_writes_breadth_trend_artifact(tmp_path: Path) -> None:
-    """Each pass leaves a provider-free breadth trend so a dry week is explainable."""
+    """The scheduled runner writes parseable output without accepting raw pages."""
     script = Path(__file__).parents[1] / "scripts" / "daily_after_close_scan.sh"
-    _schedule(tmp_path, closed=None)
-    evidence = tmp_path / "scan-decision-evidence-v1"
-    evidence.mkdir()
-    (evidence / "page.json").write_text(
-        json.dumps(
-            {
-                "schema": "scan-decision-evidence-envelope@v1",
-                "scan": {
-                    "schema": "swing-trade-scan@v3",
-                    "scan_timestamp": "2026-10-23T14:30:00Z",
-                    "total_stocks_scanned": 200,
-                    "candidate_count": 1,
-                    "eligible_count": 170,
-                    "ineligible_count": 12,
-                    "unknown_count": 17,
-                    "market_regime": {
-                        "regime": "RANGE_OR_TRANSITION",
-                        "uptrend_percent": "13.0%",
-                        "downtrend_percent": "31.5%",
-                        "total_cohort_size": 200,
-                    },
-                    "candidates": [
-                        {
-                            "symbol": "AAA",
-                            "safety_eligibility": {
-                                "status": "ELIGIBLE",
-                                "explanation_ledger": [
-                                    {
-                                        "derived_measurements": {
-                                            "latest_completed_session": "2026-10-22"
-                                        }
-                                    }
-                                ],
-                            },
-                        }
-                    ],
-                    "other_stocks": [],
-                },
-            }
-        )
-    )
     log = tmp_path / "log"
     log.mkdir()
     source = tmp_path / "scan-source.json"
@@ -247,5 +206,5 @@ def test_runner_writes_breadth_trend_artifact(tmp_path: Path) -> None:
     assert result.returncode == 0
     report = json.loads((log / "breadth-2026-10-23.json").read_text())
     assert report["schema"] == "market-breadth-trend@v1"
-    assert report["sessions_observed"] == 1
+    assert report["sessions_observed"] == 0
     assert "not an index" in report["caveat"]
