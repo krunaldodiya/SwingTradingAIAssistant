@@ -479,14 +479,16 @@ python scripts/check_ledger_coverage.py \
 ```
 
 It exits `1` and lists every session with a real retained page that no ledger
-entry cites. Coverage is per retained page, matched by its exact handle, so a
-same-day note that shares only the date does not count; same-session reruns are
-one pass, so one cited page records the day. `DEGENERATE_ONLY` days are reported
+entry cites. Coverage is per retained page and matched by its exact handle: a
+same-day note that shares only the date does not count, and every page that
+admitted market facts needs its own entry. `DEGENERATE_ONLY` days are reported
 separately and do not fail the check.
 
 A pass fails, rather than reporting success, when the entry cannot be written or
 the off-device copy fails. An unset `SWING_LEDGER_ROOT` is a configuration
-failure for a scheduled run.
+failure for a scheduled run. Writers serialise on a lock outside the vault, and
+a partially written or wrongly-permissioned entry is removed rather than left to
+be mistaken for a record.
 Backfill a missing day from its retained page without rerunning research:
 
 ```bash

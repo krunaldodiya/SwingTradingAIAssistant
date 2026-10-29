@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import subprocess
+import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -263,3 +265,49 @@ def test_ledger_filename_disambiguates_a_shared_prefix(tmp_path: Path) -> None:
     two = writer.resolve_target(ledger, "2026-10-29", second)
     assert two != one
     assert two.name.endswith("-nifty200-scan.md")
+
+
+def test_concurrent_writers_record_one_entry(tmp_path: Path) -> None:
+    """Two simultaneous passes over the same page must not duplicate entries."""
+    ledger = tmp_path / "ledger"
+    (ledger / "entries" / "2026").mkdir(parents=True)
+    scan_path = tmp_path / "scan.json"
+    scan_path.write_text(json.dumps(_scan_payload()))
+    script = Path(__file__).parents[1] / "scripts" / "write_scan_ledger_entry.py"
+    command = [
+        sys.executable,
+        str(script),
+        "--scan-json",
+        str(scan_path),
+        "--ledger-root",
+        str(ledger),
+        "--status",
+        "recorded",
+    ]
+    procs = [
+        subprocess.Popen(  # noqa: S603 - trusted repository script under test
+            command, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+        )
+        for _ in range(4)
+    ]
+    for proc in procs:
+        proc.communicate(timeout=60)
+        assert proc.returncode == 0
+    entries = sorted((ledger / "entries" / "2026").glob("*.md"))
+    assert len(entries) == 1
+
+
+def test_writer_discards_partial_entry_on_failure(tmp_path: Path, monkeypatch) -> None:
+    """A half-written or wrongly-permissioned entry must not survive."""
+    ledger = tmp_path / "ledger"
+    (ledger / "entries" / "2026").mkdir(parents=True)
+    scan_path = tmp_path / "scan.json"
+    scan_path.write_text(json.dumps(_scan_payload()))
+
+    def fail_chmod(*_args: object, **_kwargs: object) -> None:
+        raise OSError(13, "Permission denied")
+
+    monkeypatch.setattr(writer.os, "chmod", fail_chmod)
+    code = writer.main(["--scan-json", str(scan_path), "--ledger-root", str(ledger)])
+    assert code == 2
+    assert list((ledger / "entries" / "2026").glob("*.md")) == []

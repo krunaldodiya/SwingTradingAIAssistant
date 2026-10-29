@@ -115,12 +115,11 @@ def build_report(
         uncited = [
             page["handle"] for page in real if not _cites(corpus, str(page["handle"]))
         ]
-        # Same-session reruns are one research pass, so one cited page records the
-        # day. Date-only or unrelated entries never satisfy the check because
-        # `_cites` requires the retained handle itself.
+        # Every real retained page is its own pass and must be cited by its exact
+        # handle. A date-only or unrelated entry never satisfies the check.
         if not real:
             state = "DEGENERATE_ONLY"
-        elif len(uncited) == len(real):
+        elif uncited:
             state = "MISSING"
         else:
             state = "OK"

@@ -17,9 +17,14 @@ credentials, storage paths, raw provider payloads or raw bars.
 from __future__ import annotations
 
 import argparse
+import fcntl
+import hashlib
 import json
 import os
 import sys
+import tempfile
+from collections.abc import Generator
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import cast
@@ -414,6 +419,25 @@ def build_entry(
     return "\n".join(lines)
 
 
+@contextmanager
+def _write_lock(ledger_root: Path) -> Generator[Path]:
+    """Serialise writers for this ledger across processes.
+
+    The lock lives outside the vault so it never appears in the ledger or its
+    off-device mirror. It makes the existence check and the exclusive create one
+    critical section, so two concurrent writers cannot both miss an entry that
+    already records their handle.
+    """
+    key = hashlib.sha256(str(ledger_root.resolve()).encode()).hexdigest()[:16]
+    path = Path(tempfile.gettempdir()) / f"swing-ledger-write-{key}.lock"
+    with open(path, "a+", encoding="utf-8") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield path
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
 def resolve_target(ledger_root: Path, stamp: str, handle: str) -> Path:
     """Return a path whose name is unique for this exact handle.
 
@@ -450,6 +474,18 @@ def existing_entry(ledger_root: Path, stamp: str, handle: str) -> Path | None:
     return None
 
 
+def _discard(path: Path) -> None:
+    """Remove a partially written entry so it cannot be mistaken for a record."""
+    try:
+        path.unlink(missing_ok=True)
+    except OSError as error:
+        # Report rather than hide: a surviving partial file needs operator action.
+        print(
+            f"ledger_cleanup_failed: {path} ({error.strerror or 'unlink error'})",
+            file=sys.stderr,
+        )
+
+
 def _write_entry(
     *, args: argparse.Namespace, envelope: Json, handle: str, stamp: str
 ) -> int:
@@ -480,24 +516,45 @@ def _write_entry(
     )
     target = resolve_target(ledger_root, stamp, handle)
     target.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        with open(target, "x", encoding="utf-8") as destination:
-            destination.write(text)
-    except FileExistsError:
-        print(f"ledger_entry_exists: {target}")
-        return 0
-    except OSError as error:
-        print(
-            f"ledger_entry_failed: {error.strerror or 'write error'}", file=sys.stderr
-        )
-        return 2
-    try:
-        os.chmod(target, 0o600)
-    except OSError as error:
-        print(
-            f"ledger_entry_failed: {error.strerror or 'chmod error'}", file=sys.stderr
-        )
-        return 2
+    with _write_lock(ledger_root):
+        # Re-check under the lock: a concurrent writer may have recorded this
+        # handle between our earlier check and now.
+        prior = existing_entry(ledger_root, stamp, handle) if stamp else None
+        if prior is not None:
+            print(f"ledger_entry_exists: {prior}")
+            return 0
+        target = resolve_target(ledger_root, stamp, handle)
+        try:
+            with open(target, "x", encoding="utf-8") as destination:
+                destination.write(text)
+        except FileExistsError:
+            # Another writer won this exact path. Only accept it when it really
+            # records our handle; otherwise keep looking for a free name.
+            if handle and handle in target.read_text(errors="replace"):
+                print(f"ledger_entry_exists: {target}")
+                return 0
+            print(
+                "ledger_entry_failed: path already held by another entry",
+                file=sys.stderr,
+            )
+            return 2
+        except OSError as error:
+            _discard(target)
+            print(
+                f"ledger_entry_failed: {error.strerror or 'write error'}",
+                file=sys.stderr,
+            )
+            return 2
+        try:
+            os.chmod(target, 0o600)
+        except OSError as error:
+            # An entry with wrong permissions is not a usable record.
+            _discard(target)
+            print(
+                f"ledger_entry_failed: {error.strerror or 'chmod error'}",
+                file=sys.stderr,
+            )
+            return 2
     print(f"ledger_entry_written: {target}")
     return 0
 
