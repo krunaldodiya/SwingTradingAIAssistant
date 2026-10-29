@@ -368,8 +368,6 @@ def test_runner_syncs_ledger_off_device_after_write(tmp_path: Path) -> None:
         "STUB_LOG": str(stub_log),
         "STUB_SOURCE": str(source),
         "SWING_LEDGER_ROOT": str(ledger_root),
-        # No real rclone on CI, and the sync stage is fatal by design.
-        "SWING_RCLONE_BIN": "/bin/true",
         "LEDGER_CALL_LOG": str(tmp_path / "ledger.log"),
         "SWING_RCLONE_BIN": str(rclone),
         "SWING_SYNC_LOG_DIR": str(tmp_path),
@@ -414,8 +412,6 @@ def test_runner_fails_when_ledger_write_fails(tmp_path: Path) -> None:
         "STUB_LOG": str(stub_log),
         "STUB_SOURCE": str(source),
         "SWING_LEDGER_ROOT": str(ledger_root),
-        # No real rclone on CI, and the sync stage is fatal by design.
-        "SWING_RCLONE_BIN": "/bin/true",
         "SWING_RCLONE_BIN": "/bin/true",
         "LEDGER_CALL_LOG": str(tmp_path / "ledger.log"),
     }
@@ -453,8 +449,6 @@ def test_runner_fails_when_off_device_sync_fails(tmp_path: Path) -> None:
         "STUB_LOG": str(stub_log),
         "STUB_SOURCE": str(source),
         "SWING_LEDGER_ROOT": str(ledger_root),
-        # No real rclone on CI, and the sync stage is fatal by design.
-        "SWING_RCLONE_BIN": "/bin/true",
         "SWING_RCLONE_BIN": str(rclone),
         "SWING_SYNC_LOG_DIR": str(tmp_path),
         "LEDGER_CALL_LOG": str(tmp_path / "ledger.log"),
