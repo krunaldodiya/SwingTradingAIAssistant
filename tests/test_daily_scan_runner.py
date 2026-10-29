@@ -85,3 +85,92 @@ def test_runner_skips_duplicate_page(tmp_path: Path) -> None:
     result = _run(script, tmp_path, log, "2026-10-23")
     assert result.returncode == 0
     assert result.stdout.strip() == "SKIP duplicate"
+
+
+def _page(path: Path, candidates: list[str]) -> None:
+    path.write_text(
+        json.dumps(
+            {
+                "decision_evidence_handle": "0" * 64,
+                "schema": "scan-decision-evidence-envelope@v1",
+                "scan": {
+                    "schema": "swing-trade-scan@v3",
+                    "scan_timestamp": "2026-10-23T15:00:00.000000Z",
+                    "candidates": [{"symbol": symbol} for symbol in candidates],
+                },
+            }
+        )
+    )
+
+
+def _stub_doppler(path: Path, log: Path, page: Path) -> None:
+    """Record calls and replay the page for the scan stage only."""
+    path.write_text(
+        "#!/usr/bin/env bash\n"
+        'printf "%s\\n" "$*" >> "$STUB_LOG"\n'
+        'case "$*" in\n'
+        '  *" scan "*) cat "$STUB_SOURCE" ;;\n'
+        "  *) echo '{}' ;;\n"
+        "esac\n"
+    )
+    path.chmod(0o755)
+    log.write_text("")
+
+
+def _run_full(
+    script: Path, root: Path, log: Path, doppler: Path, stub_log: Path, source: Path
+) -> subprocess.CompletedProcess[str]:
+    env = os.environ | {
+        "SWING_STORAGE_ROOT": str(root),
+        "SWING_LOG_DIR": str(log),
+        "SWING_DATE_OVERRIDE": "2026-10-23",
+        "SWING_ALLOW_OVERWRITE": "1",
+        "SWING_REPO": str(script.parents[1]),
+        "DOPPLER_BIN": str(doppler),
+        "STUB_LOG": str(stub_log),
+        "STUB_SOURCE": str(source),
+    }
+    return subprocess.run(  # noqa: S603 - trusted repository test script
+        [str(script)], env=env, capture_output=True, text=True, check=False
+    )
+
+
+def test_runner_skips_analysis_without_candidates(tmp_path: Path) -> None:
+    script = Path(__file__).parents[1] / "scripts" / "daily_after_close_scan.sh"
+    _schedule(tmp_path, closed=None)
+    log = tmp_path / "log"
+    log.mkdir()
+    source = tmp_path / "scan-source.json"
+    _page(source, [])
+    _page(log / "scan-2026-10-23.json", [])
+    doppler = tmp_path / "doppler"
+    stub_log = tmp_path / "calls.log"
+    _stub_doppler(doppler, stub_log, log / "scan-2026-10-23.json")
+    result = _run_full(script, tmp_path, log, doppler, stub_log, source)
+    assert result.returncode == 0
+    assert not (log / "analysis-2026-10-23.json").exists()
+    assert not (log / "research-2026-10-23.json").exists()
+    assert "analysis skipped" in (log / "scan-2026-10-23.err").read_text()
+
+
+def test_runner_runs_analysis_and_research_for_candidates(tmp_path: Path) -> None:
+    script = Path(__file__).parents[1] / "scripts" / "daily_after_close_scan.sh"
+    _schedule(tmp_path, closed=None)
+    log = tmp_path / "log"
+    log.mkdir()
+    source = tmp_path / "scan-source.json"
+    _page(source, ["AAA", "BBB"])
+    _page(log / "scan-2026-10-23.json", ["AAA", "BBB"])
+    doppler = tmp_path / "doppler"
+    stub_log = tmp_path / "calls.log"
+    _stub_doppler(doppler, stub_log, log / "scan-2026-10-23.json")
+    result = _run_full(script, tmp_path, log, doppler, stub_log, source)
+    assert result.returncode == 0
+    assert (log / "analysis-2026-10-23.json").exists()
+    assert (log / "research-2026-10-23.json").exists()
+    calls = stub_log.read_text().splitlines()
+    assert any("scan" in call for call in calls)
+    assert any("swing-analysis" in call for call in calls)
+    research = next(call for call in calls if "research-run-current" in call)
+    assert "--symbol AAA" in research
+    assert "--symbol BBB" in research

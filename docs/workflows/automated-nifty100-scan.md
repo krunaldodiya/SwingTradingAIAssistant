@@ -44,9 +44,15 @@ this behavior is `supported-signal-decision-policy@v2`.
 nightly runner (`scripts/daily_after_close_scan.sh`; installed as
 `~/daily-scan/run.sh`) carries an 08:00–19:59 IST skip, a weekend skip, a
 retained-calendar NSE closure skip, and a duplicate same-day page skip so the
-diary does not capture intraday, not-yet-published, or duplicate data. Those
-guards apply to the scheduled job only and do not restrict on-demand scans or
-`market-data` research commands.
+diary does not capture intraday, not-yet-published, or duplicate data. After a
+successful scan with at least one candidate it also runs the deterministic
+`swing-analysis` artifact and `market-data research-run-current --contract-version v2`
+for exactly those candidates, writing `analysis-YYYY-MM-DD.json` and
+`research-YYYY-MM-DD.json` beside the scan page. Those post-scan stages never
+alter the scan page or its decision, and a post-scan failure is logged in the
+matching `.err` file without failing the scan. The guards apply to the scheduled
+job only and do not restrict on-demand scans or `market-data` research commands.
+Interpretation, prior-candidate tracking, and ledger writes remain manual.
 
 ```bash
 doppler run -- signal-decisions scan \
