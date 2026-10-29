@@ -452,3 +452,21 @@ terminal session, so corrections are still observed. Composed windows keep at
 most 64 distinct source responses; beyond that the full window is re-fetched
 and the cache is rewritten.
 
+For a deliberate historical gap, `scripts/backfill_bharatstock_gap.py` fills only
+the requested range through the same cache path. It is sequential, sleeps
+between symbols, writes a checkpoint after each symbol, and stops immediately on
+`RATE_LIMITED` so it can be resumed. It refuses to overwrite existing records,
+skips fully covered symbols, and reports remaining gaps. Example:
+
+```bash
+doppler run -- .venv/bin/python scripts/backfill_bharatstock_gap.py \
+  --storage-root /absolute/path/to/SwingTradingAIAssistantData \
+  --universe-snapshot /absolute/path/to/universe_snapshots/nifty-universe-v3.json \
+  --start 2026-08-01 --end 2026-09-21 \
+  --checkpoint /absolute/path/to/backfill-checkpoint.json \
+  --delay 2.0
+```
+
+This is a data-acquisition tool, not a scan or research decision. It does not
+reconstruct as-published point-in-time history across corporate actions.
+
