@@ -44,9 +44,15 @@ this behavior is `supported-signal-decision-policy@v2`.
 nightly runner (`scripts/daily_after_close_scan.sh`; installed as
 `~/daily-scan/run.sh`) carries an 08:00–19:59 IST skip, a weekend skip, a
 retained-calendar NSE closure skip, and a duplicate same-day page skip so the
-diary does not capture intraday, not-yet-published, or duplicate data. Those
-guards apply to the scheduled job only and do not restrict on-demand scans or
-`market-data` research commands.
+diary does not capture intraday, not-yet-published, or duplicate data. After a
+successful scan with at least one candidate it also runs the deterministic
+`swing-analysis` artifact and `market-data research-run-current --contract-version v2`
+for exactly those candidates, writing `analysis-YYYY-MM-DD.json` and
+`research-YYYY-MM-DD.json` beside the scan page. Those post-scan stages never
+alter the scan page or its decision, and a post-scan failure is logged in the
+matching `.err` file without failing the scan. The guards apply to the scheduled
+job only and do not restrict on-demand scans or `market-data` research commands.
+Interpretation, prior-candidate tracking, and ledger writes remain manual.
 
 ```bash
 doppler run -- signal-decisions scan \
@@ -445,4 +451,22 @@ provider instead of entering a decision. `--refresh` always re-fetches the
 terminal session, so corrections are still observed. Composed windows keep at
 most 64 distinct source responses; beyond that the full window is re-fetched
 and the cache is rewritten.
+
+For a deliberate historical gap, `scripts/backfill_bharatstock_gap.py` fills only
+the requested range through the same cache path. It is sequential, sleeps
+between symbols, writes a checkpoint after each symbol, and stops immediately on
+`RATE_LIMITED` so it can be resumed. It refuses to overwrite existing records,
+skips fully covered symbols, and reports remaining gaps. Example:
+
+```bash
+doppler run -- .venv/bin/python scripts/backfill_bharatstock_gap.py \
+  --storage-root /absolute/path/to/SwingTradingAIAssistantData \
+  --universe-snapshot /absolute/path/to/universe_snapshots/nifty-universe-v3.json \
+  --start 2026-08-01 --end 2026-09-21 \
+  --checkpoint /absolute/path/to/backfill-checkpoint.json \
+  --delay 2.0
+```
+
+This is a data-acquisition tool, not a scan or research decision. It does not
+reconstruct as-published point-in-time history across corporate actions.
 

@@ -98,4 +98,48 @@ cd "$REPO" || exit 1
   > "$PAGE" 2> "$LOG/scan-$STAMP.err"
 code=$?
 echo "$(date -Is) exit_code=$code" >> "$LOG/scan-$STAMP.err"
-exit "$code"
+if [ "$code" -ne 0 ]; then
+  exit "$code"
+fi
+
+# Deterministic post-scan analysis. These stages never change the scan page and
+# never make a decision; a failure is logged and does not fail the scan.
+ANALYSIS="$LOG/analysis-$STAMP.json"
+RESEARCH="$LOG/research-$STAMP.json"
+SYMBOLS=$(
+  python3 - "$PAGE" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1]) as handle:
+    envelope = json.load(handle)
+scan = envelope.get("scan", envelope)
+for candidate in scan.get("candidates") or []:
+    symbol = candidate.get("symbol")
+    if isinstance(symbol, str) and symbol:
+        print(symbol)
+PY
+)
+
+if [ -z "$SYMBOLS" ]; then
+  echo "$(date -Is) analysis skipped: no candidates in $STAMP scan" >> "$LOG/scan-$STAMP.err"
+  exit 0
+fi
+
+"$DOPPLER" run -- "$REPO/.venv/bin/swing-analysis" \
+  --scan-json "$PAGE" --output json \
+  > "$ANALYSIS" 2> "$LOG/analysis-$STAMP.err"
+echo "$(date -Is) swing_analysis_exit=$?" >> "$LOG/analysis-$STAMP.err"
+
+symbol_args=""
+for symbol in $SYMBOLS; do
+  symbol_args="$symbol_args --symbol $symbol"
+done
+# shellcheck disable=SC2086 # symbol_args is a built word list of validated symbols
+"$DOPPLER" run -- "$REPO/.venv/bin/market-data" research-run-current \
+  --contract-version v2 $symbol_args \
+  --storage-root "$STORE" --output json \
+  > "$RESEARCH" 2> "$LOG/research-$STAMP.err"
+echo "$(date -Is) research_exit=$?" >> "$LOG/research-$STAMP.err"
+
+exit 0
