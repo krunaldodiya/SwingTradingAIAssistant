@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 
@@ -174,3 +175,199 @@ def test_runner_runs_analysis_and_research_for_candidates(tmp_path: Path) -> Non
     research = next(call for call in calls if "research-run-current" in call)
     assert "--symbol AAA" in research
     assert "--symbol BBB" in research
+
+
+def test_runner_scopes_doppler_explicitly(tmp_path: Path) -> None:
+    """Credentials must be injected by an explicit project/config scope.
+
+    The runner must not depend on a global Doppler configuration: an unscoped
+    ``doppler run`` silently produces a credential-free scan, which the provider
+    rejects per symbol and which then looks like a no-candidate market result.
+    """
+    script = Path(__file__).parents[1] / "scripts" / "daily_after_close_scan.sh"
+    _schedule(tmp_path, closed=None)
+    log = tmp_path / "log"
+    log.mkdir()
+    source = tmp_path / "scan-source.json"
+    _page(source, [])
+    doppler = tmp_path / "doppler"
+    stub_log = tmp_path / "calls.log"
+    _stub_doppler(doppler, stub_log, source)
+    env = os.environ | {
+        "SWING_STORAGE_ROOT": str(tmp_path),
+        "SWING_LOG_DIR": str(log),
+        "SWING_DATE_OVERRIDE": "2026-10-23",
+        "SWING_REPO": str(script.parents[1]),
+        "DOPPLER_BIN": str(doppler),
+        "STUB_LOG": str(stub_log),
+        "STUB_SOURCE": str(source),
+        "SWING_DOPPLER_PROJECT": "test-project",
+        "SWING_DOPPLER_CONFIG": "test-config",
+    }
+    result = subprocess.run(  # noqa: S603 - trusted repository test script
+        [str(script)], env=env, capture_output=True, text=True, check=False
+    )
+    assert result.returncode == 0
+    calls = stub_log.read_text().splitlines()
+    scan_call = next(call for call in calls if "scan" in call)
+    assert "--project test-project --config test-config" in scan_call
+
+
+def test_runner_writes_diary_pages_under_storage_root(tmp_path: Path) -> None:
+    """The default diary directory must live inside the private evidence store."""
+    script = Path(__file__).parents[1] / "scripts" / "daily_after_close_scan.sh"
+    _schedule(tmp_path, closed=None)
+    source = tmp_path / "scan-source.json"
+    _page(source, [])
+    doppler = tmp_path / "doppler"
+    stub_log = tmp_path / "calls.log"
+    _stub_doppler(doppler, stub_log, source)
+    env = os.environ | {
+        "SWING_STORAGE_ROOT": str(tmp_path),
+        "SWING_DATE_OVERRIDE": "2026-10-23",
+        "SWING_REPO": str(script.parents[1]),
+        "DOPPLER_BIN": str(doppler),
+        "STUB_LOG": str(stub_log),
+        "STUB_SOURCE": str(source),
+    }
+    env.pop("SWING_LOG_DIR", None)
+    result = subprocess.run(  # noqa: S603 - trusted repository test script
+        [str(script)], env=env, capture_output=True, text=True, check=False
+    )
+    assert result.returncode == 0
+    assert (tmp_path / "daily-scan" / "scan-2026-10-23.json").exists()
+
+
+def _ledger_stub_repo(tmp_path: Path) -> tuple[Path, Path]:
+    """Build a stub repo whose ledger writer records its invocation."""
+    repo = tmp_path / "repo"
+    scripts = repo / "scripts"
+    scripts.mkdir(parents=True)
+    real_script = Path(__file__).parents[1] / "scripts" / "daily_after_close_scan.sh"
+    (scripts / "daily_after_close_scan.sh").write_text(real_script.read_text())
+    (scripts / "daily_after_close_scan.sh").chmod(0o755)
+    venv_bin = repo / ".venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    (venv_bin / "python").symlink_to(sys.executable)
+    stub = scripts / "write_scan_ledger_entry.py"
+    stub.write_text(
+        "#!/usr/bin/env python3\n"
+        "import os, sys\n"
+        "with open(os.environ['LEDGER_CALL_LOG'], 'a') as handle:\n"
+        "    handle.write(' '.join(sys.argv[1:]) + '\\n')\n"
+    )
+    return repo, stub
+
+
+def test_runner_writes_ledger_entry_for_real_pass(tmp_path: Path) -> None:
+    """A real pass must reach the ledger, not just the diary directory."""
+    repo, _ = _ledger_stub_repo(tmp_path)
+    script = repo / "scripts" / "daily_after_close_scan.sh"
+    _schedule(tmp_path, closed=None)
+    log = tmp_path / "log"
+    log.mkdir()
+    source = tmp_path / "scan-source.json"
+    _page(source, ["AAA"])
+    doppler = tmp_path / "doppler"
+    stub_log = tmp_path / "calls.log"
+    _stub_doppler(doppler, stub_log, source)
+    ledger_calls = tmp_path / "ledger.log"
+    ledger_root = tmp_path / "ledger"
+    (ledger_root / "entries" / "2026").mkdir(parents=True)
+    env = os.environ | {
+        "SWING_STORAGE_ROOT": str(tmp_path),
+        "SWING_LOG_DIR": str(log),
+        "SWING_DATE_OVERRIDE": "2026-10-23",
+        "SWING_ALLOW_OVERWRITE": "1",
+        "SWING_REPO": str(repo),
+        "DOPPLER_BIN": str(doppler),
+        "STUB_LOG": str(stub_log),
+        "STUB_SOURCE": str(source),
+        "SWING_LEDGER_ROOT": str(ledger_root),
+        "LEDGER_CALL_LOG": str(ledger_calls),
+    }
+    result = subprocess.run(  # noqa: S603 - trusted repository test script
+        [str(script)], env=env, capture_output=True, text=True, check=False
+    )
+    assert result.returncode == 0
+    calls = ledger_calls.read_text().splitlines()
+    assert len(calls) == 1
+    assert "--ledger-root" in calls[0]
+    assert "--status unconfirmed" in calls[0]
+    assert "--analysis-json" in calls[0]
+    assert "--research-json" in calls[0]
+
+
+def test_runner_records_ledger_skip_without_ledger_root(tmp_path: Path) -> None:
+    """Without a configured ledger the run must say so, not silently pass."""
+    script = Path(__file__).parents[1] / "scripts" / "daily_after_close_scan.sh"
+    _schedule(tmp_path, closed=None)
+    log = tmp_path / "log"
+    log.mkdir()
+    source = tmp_path / "scan-source.json"
+    _page(source, ["AAA"])
+    doppler = tmp_path / "doppler"
+    stub_log = tmp_path / "calls.log"
+    _stub_doppler(doppler, stub_log, source)
+    env = os.environ | {
+        "SWING_STORAGE_ROOT": str(tmp_path),
+        "SWING_LOG_DIR": str(log),
+        "SWING_DATE_OVERRIDE": "2026-10-23",
+        "SWING_ALLOW_OVERWRITE": "1",
+        "SWING_REPO": str(Path(__file__).parents[1]),
+        "DOPPLER_BIN": str(doppler),
+        "STUB_LOG": str(stub_log),
+        "STUB_SOURCE": str(source),
+    }
+    env.pop("SWING_LEDGER_ROOT", None)
+    result = subprocess.run(  # noqa: S603 - trusted repository test script
+        [str(script)], env=env, capture_output=True, text=True, check=False
+    )
+    assert result.returncode == 0
+    err = (log / "scan-2026-10-23.err").read_text()
+    assert "ledger skipped: SWING_LEDGER_ROOT is not set" in err
+
+
+def test_runner_syncs_ledger_off_device_after_write(tmp_path: Path) -> None:
+    """A pass must push its entry to the remote, not wait for the hourly timer."""
+    repo, _ = _ledger_stub_repo(tmp_path)
+    script = repo / "scripts" / "daily_after_close_scan.sh"
+    _schedule(tmp_path, closed=None)
+    log = tmp_path / "log"
+    log.mkdir()
+    source = tmp_path / "scan-source.json"
+    _page(source, ["AAA"])
+    doppler = tmp_path / "doppler"
+    stub_log = tmp_path / "calls.log"
+    _stub_doppler(doppler, stub_log, source)
+    rclone = tmp_path / "rclone"
+    rclone_log = tmp_path / "rclone.log"
+    rclone.write_text('#!/usr/bin/env bash\nprintf "%s\\n" "$*" >> "$RCLONE_LOG"\n')
+    rclone.chmod(0o755)
+    ledger_root = tmp_path / "ledger"
+    (ledger_root / "entries" / "2026").mkdir(parents=True)
+    env = os.environ | {
+        "SWING_STORAGE_ROOT": str(tmp_path),
+        "SWING_LOG_DIR": str(log),
+        "SWING_DATE_OVERRIDE": "2026-10-23",
+        "SWING_ALLOW_OVERWRITE": "1",
+        "SWING_REPO": str(repo),
+        "DOPPLER_BIN": str(doppler),
+        "STUB_LOG": str(stub_log),
+        "STUB_SOURCE": str(source),
+        "SWING_LEDGER_ROOT": str(ledger_root),
+        "LEDGER_CALL_LOG": str(tmp_path / "ledger.log"),
+        "SWING_RCLONE_BIN": str(rclone),
+        "SWING_SYNC_LOG_DIR": str(tmp_path),
+        "RCLONE_LOG": str(rclone_log),
+    }
+    result = subprocess.run(  # noqa: S603 - trusted repository test script
+        [str(script)], env=env, capture_output=True, text=True, check=False
+    )
+    assert result.returncode == 0
+    calls = rclone_log.read_text().splitlines()
+    assert len(calls) == 1
+    assert "copy" in calls[0]
+    assert str(ledger_root) in calls[0]
+    assert "gdrive:SwingResearchLedger" in calls[0]
+    assert "--update" in calls[0]

@@ -1,0 +1,14 @@
+[Unit]
+Description=Run the daily after-close Nifty 200 scan at 20:30 IST
+Documentation=file://@REPO@/docs/workflows/automated-nifty100-scan.md
+
+[Timer]
+# The service itself re-checks IST hours, weekends and NSE closures, so the
+# timer fires once daily and the script refuses runs it must not make.
+OnCalendar=*-*-* 20:30:00 Asia/Kolkata
+Persistent=true
+AccuracySec=1min
+Unit=swing-daily-scan.service
+
+[Install]
+WantedBy=timers.target

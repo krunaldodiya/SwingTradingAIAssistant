@@ -1,0 +1,11 @@
+[Unit]
+Description=Mirror the private research ledger to Google Drive
+Documentation=file://@REPO@/docs/workflows/automated-nifty100-scan.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# One-way mirror: new and changed ledger files only. Nothing on the Drive side is
+# ever deleted by this unit.
+ExecStart=/usr/bin/rclone copy @LEDGER@ gdrive:SwingResearchLedger --update --log-file @LOGDIR@/research-ledger.log --log-level INFO
