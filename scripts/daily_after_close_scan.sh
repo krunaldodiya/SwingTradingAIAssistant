@@ -106,6 +106,17 @@ fi
 # never make a decision; a failure is logged and does not fail the scan.
 ANALYSIS="$LOG/analysis-$STAMP.json"
 RESEARCH="$LOG/research-$STAMP.json"
+BREADTH="$LOG/breadth-$STAMP.json"
+
+# Market breadth trend from retained evidence. This is provider-free and exists
+# so a zero-candidate week can be explained: whether member breadth is
+# improving, deteriorating, or flat. It is not an index measure and never
+# changes a decision.
+"$REPO/.venv/bin/python" "$REPO/scripts/breadth_trend_report.py" \
+  --storage-root "$STORE" --sessions 20 --output json \
+  > "$BREADTH" 2> "$LOG/breadth-$STAMP.err"
+echo "$(date -Is) breadth_exit=$?" >> "$LOG/scan-$STAMP.err"
+
 SYMBOLS=$(
   python3 - "$PAGE" <<'PY'
 import json

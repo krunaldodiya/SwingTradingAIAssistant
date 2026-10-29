@@ -174,3 +174,78 @@ def test_runner_runs_analysis_and_research_for_candidates(tmp_path: Path) -> Non
     research = next(call for call in calls if "research-run-current" in call)
     assert "--symbol AAA" in research
     assert "--symbol BBB" in research
+
+
+def test_runner_writes_breadth_trend_artifact(tmp_path: Path) -> None:
+    """Each pass leaves a provider-free breadth trend so a dry week is explainable."""
+    script = Path(__file__).parents[1] / "scripts" / "daily_after_close_scan.sh"
+    _schedule(tmp_path, closed=None)
+    evidence = tmp_path / "scan-decision-evidence-v1"
+    evidence.mkdir()
+    (evidence / "page.json").write_text(
+        json.dumps(
+            {
+                "schema": "scan-decision-evidence-envelope@v1",
+                "scan": {
+                    "schema": "swing-trade-scan@v3",
+                    "scan_timestamp": "2026-10-23T14:30:00Z",
+                    "total_stocks_scanned": 200,
+                    "candidate_count": 1,
+                    "eligible_count": 170,
+                    "ineligible_count": 12,
+                    "unknown_count": 17,
+                    "market_regime": {
+                        "regime": "RANGE_OR_TRANSITION",
+                        "uptrend_percent": "13.0%",
+                        "downtrend_percent": "31.5%",
+                        "total_cohort_size": 200,
+                    },
+                    "candidates": [
+                        {
+                            "symbol": "AAA",
+                            "safety_eligibility": {
+                                "status": "ELIGIBLE",
+                                "explanation_ledger": [
+                                    {
+                                        "derived_measurements": {
+                                            "latest_completed_session": "2026-10-22"
+                                        }
+                                    }
+                                ],
+                            },
+                        }
+                    ],
+                    "other_stocks": [],
+                },
+            }
+        )
+    )
+    log = tmp_path / "log"
+    log.mkdir()
+    source = tmp_path / "scan-source.json"
+    _page(source, ["AAA"])
+    doppler = tmp_path / "doppler"
+    stub_log = tmp_path / "calls.log"
+    _stub_doppler(doppler, stub_log, source)
+    ledger = tmp_path / "ledger"
+    (ledger / "entries" / "2026").mkdir(parents=True)
+    env = os.environ | {
+        "SWING_STORAGE_ROOT": str(tmp_path),
+        "SWING_LOG_DIR": str(log),
+        "SWING_DATE_OVERRIDE": "2026-10-23",
+        "SWING_ALLOW_OVERWRITE": "1",
+        "SWING_REPO": str(script.parents[1]),
+        "DOPPLER_BIN": str(doppler),
+        "STUB_LOG": str(stub_log),
+        "STUB_SOURCE": str(source),
+        "SWING_LEDGER_ROOT": str(ledger),
+        "SWING_RCLONE_BIN": "/bin/true",
+    }
+    result = subprocess.run(  # noqa: S603 - trusted repository test script
+        [str(script)], env=env, capture_output=True, text=True, check=False
+    )
+    assert result.returncode == 0
+    report = json.loads((log / "breadth-2026-10-23.json").read_text())
+    assert report["schema"] == "market-breadth-trend@v1"
+    assert report["sessions_observed"] == 1
+    assert "not an index" in report["caveat"]

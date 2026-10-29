@@ -434,6 +434,35 @@ written and synced (or the owner explicitly says skip). The answer must name the
 entry path and state which layers ran. Reporting candidates before persistence is
 a protocol violation.
 
+## Market breadth trend
+
+A zero-candidate week should be explainable, not mysterious. After every scan the
+runner writes `breadth-YYYY-MM-DD.json` beside the diary page by running:
+
+```bash
+python scripts/breadth_trend_report.py \
+  --storage-root /absolute/path/to/SwingTradingAIAssistantData \
+  --sessions 20 --output json
+```
+
+It reads retained scan pages only: no provider call, no credential, no network.
+Per completed session it reports the scanned universe's uptrend share, downtrend
+share, regime label, cohort size and candidate count, then labels the window
+`IMPROVING`, `DETERIORATING`, `FLAT`, or `INSUFFICIENT_HISTORY` from the
+least-squares change in uptrend share. Endpoint-to-endpoint comparison is not
+used: a series that peaked mid-window and has fallen since would otherwise read
+as flat. `confluence` states whether the downtrend share moved the same way.
+
+Two limits are stated in the output itself:
+
+- **It is not an index.** Plan 81 records the Nifty 50 index context bar as
+  deferred and admits no index source, and the scan benchmark is the median of
+  the scanned stocks (Plan 74). Breadth here means member structure over the
+  scanned universe.
+- **It cannot reach beyond retained evidence.** The window is whatever sessions
+  the store holds, and pages where no member reached a safety outcome are
+  excluded, so a provider outage cannot appear as a flat market.
+
 ## Performance
 
 The parsed instrument snapshot is cached in process memory by its immutable
