@@ -71,7 +71,7 @@ def _scan_payload(**overrides: object) -> dict[str, object]:
 
 
 def test_degenerate_page_is_refused() -> None:
-    """A page where every member failed one upstream reason is not a market result."""
+    """A page where no member reached a safety outcome is not a market result."""
     scan = _scan_payload(
         candidate_count=0,
         eligible_count=0,
@@ -85,7 +85,37 @@ def test_degenerate_page_is_refused() -> None:
     )
     reason = writer.degenerate_reason(writer._scan_section(scan))
     assert reason is not None
-    assert "OBSERVATION_STRUCTURE_NOT_READY" in reason
+    assert "no member reached a safety outcome" in reason
+
+
+def test_rejected_safety_credential_is_refused() -> None:
+    """A distinct eligibility-layer failure must not look like a market result.
+
+    The scan's failed_rule is the first eligibility rule id, and safety uses a
+    different provider from observation, so an allowlist of observation codes
+    would miss this case and record a failed pass as a zero-candidate day.
+    """
+    scan = _scan_payload(
+        candidate_count=0,
+        eligible_count=0,
+        ineligible_count=0,
+        unknown_count=200,
+        candidates=[],
+        other_stocks=[
+            {"symbol": f"S{index}", "failed_rule": "CURRENT_UPSTOX_QUOTE_BINDING"}
+            for index in range(3)
+        ],
+    )
+    reason = writer.degenerate_reason(writer._scan_section(scan))
+    assert reason is not None
+    assert "CURRENT_UPSTOX_QUOTE_BINDING" in reason
+
+
+def test_empty_pass_is_refused() -> None:
+    scan = _scan_payload(
+        total_stocks_scanned=0, candidate_count=0, candidates=[], other_stocks=[]
+    )
+    assert writer.degenerate_reason(writer._scan_section(scan)) is not None
 
 
 def test_mixed_failure_page_is_a_real_pass() -> None:

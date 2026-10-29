@@ -465,9 +465,14 @@ the Drive side. Keep both schedules installed together: a ledger written but
 never synced is still single copy. `scripts/install_research_schedule.sh --check` fails when either schedule
 is missing, so a vanished home directory is detected rather than assumed healthy.
 
-The writer refuses a degenerate page — one where every member failed the same upstream reason, such as
-a credential rejection — because recording it would create a false
-"no candidates" market record.
+The writer refuses a degenerate page because recording it would create a false
+"no candidates" market record. The test is the page's shape, not a list of failure
+codes: a genuine market result always admits at least one member to the safety
+screen, so a page where no member reached a safety outcome means the pass stopped
+upstream. This matters because the scan reports the first eligibility rule id,
+and observation and safety use different providers: an allowlist of observation
+codes would miss a rejected Upstox credential and record that failed pass as a
+real zero-candidate day.
 
 Check coverage over any segment:
 

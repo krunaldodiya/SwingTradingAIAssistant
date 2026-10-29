@@ -31,14 +31,6 @@ from typing import cast
 
 Json = dict[str, object]
 
-DEGENERATE_MARKERS = frozenset(
-    {
-        "OBSERVATION_STRUCTURE_NOT_READY",
-        "OBSERVATION_OR_PROVIDER_UNAVAILABLE",
-        "OBSERVATION_PAIR_STATE_UNAVAILABLE",
-        "QUESTION_NOT_READY",
-    }
-)
 IST = timezone(timedelta(hours=5, minutes=30))
 STAGING_PREFIX = ".staged-"
 DOSSIER_FEATURES = ("CANDLE_GEOMETRY", "MARKET_STRUCTURE", "PREVIOUS_CLOSE_COMPARISON")
@@ -126,21 +118,37 @@ def _scan_section(envelope: Json) -> Json:
 
 
 def degenerate_reason(scan: Json) -> str | None:
-    """Return a reason when the page cannot support a market record."""
+    """Return a reason when the page cannot support a market record.
+
+    The test is the page's shape, not a list of failure codes. A genuine market
+    result always admits at least one member to the safety screen, so a page
+    where *no* member reached a safety outcome means the pass stopped upstream -
+    whatever layer stopped it. Matching specific reason codes is unsafe here:
+    the scan's ``failed_rule`` is the first *eligibility rule id*, and the
+    observation and safety layers use different providers, so an allowlist of
+    observation codes silently misses a rejected Upstox credential and would
+    record the failed pass as a real no-candidate day.
+    """
     total = _count(scan.get("total_stocks_scanned"))
+    if total <= 0:
+        return "the pass evaluated no members"
     candidates = _count(scan.get("candidate_count"))
     eligible = _count(scan.get("eligible_count"))
     ineligible = _count(scan.get("ineligible_count"))
-    if not total or candidates or eligible or ineligible:
+    if candidates or eligible or ineligible:
         return None
-    rules = {
-        rule
-        for row in [*_rows(scan.get("candidates")), *_rows(scan.get("other_stocks"))]
-        if (rule := _text(row.get("failed_rule")))
-    }
-    if not rules or not rules <= DEGENERATE_MARKERS:
-        return None
-    return f"every member failed the same upstream reason ({sorted(rules)[0]})"
+    rules = sorted(
+        {
+            rule
+            for row in [
+                *_rows(scan.get("candidates")),
+                *_rows(scan.get("other_stocks")),
+            ]
+            if (rule := _text(row.get("failed_rule")))
+        }
+    )
+    detail = f": {', '.join(rules[:3])}" if rules else ""
+    return f"no member reached a safety outcome{detail}"
 
 
 def _policy_by_symbol(analysis: Json | None) -> dict[str, Json]:
