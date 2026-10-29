@@ -486,6 +486,20 @@ def _discard(path: Path) -> None:
         )
 
 
+def _stage(directory: Path, text: str) -> Path:
+    """Write the complete entry to a temporary file with final permissions."""
+    handle, path = tempfile.mkstemp(dir=directory, prefix=".staged-", suffix=".md")
+    os.close(handle)
+    staged = Path(path)
+    try:
+        staged.write_text(text, encoding="utf-8")
+        os.chmod(staged, 0o600)
+    except OSError:
+        _discard(staged)
+        raise
+    return staged
+
+
 def _write_entry(
     *, args: argparse.Namespace, envelope: Json, handle: str, stamp: str
 ) -> int:
@@ -524,37 +538,41 @@ def _write_entry(
             print(f"ledger_entry_exists: {prior}")
             return 0
         target = resolve_target(ledger_root, stamp, handle)
+        # Publish atomically: the final name never exists until the complete,
+        # correctly permissioned content is in place. An interruption can then
+        # only leave a temporary file, never a partial record that a retry would
+        # accept as an existing entry.
         try:
-            with open(target, "x", encoding="utf-8") as destination:
-                destination.write(text)
-        except FileExistsError:
-            # Another writer won this exact path. Only accept it when it really
-            # records our handle; otherwise keep looking for a free name.
-            if handle and handle in target.read_text(errors="replace"):
-                print(f"ledger_entry_exists: {target}")
-                return 0
-            print(
-                "ledger_entry_failed: path already held by another entry",
-                file=sys.stderr,
-            )
-            return 2
+            staged = _stage(target.parent, text)
         except OSError as error:
-            _discard(target)
             print(
                 f"ledger_entry_failed: {error.strerror or 'write error'}",
                 file=sys.stderr,
             )
             return 2
         try:
-            os.chmod(target, 0o600)
-        except OSError as error:
-            # An entry with wrong permissions is not a usable record.
-            _discard(target)
+            os.link(staged, target)
+        except FileExistsError:
+            # Another writer won this exact path. Only accept it when it really
+            # records our handle.
+            if handle and handle in target.read_text(errors="replace"):
+                _discard(staged)
+                print(f"ledger_entry_exists: {target}")
+                return 0
+            _discard(staged)
             print(
-                f"ledger_entry_failed: {error.strerror or 'chmod error'}",
+                "ledger_entry_failed: path already held by another entry",
                 file=sys.stderr,
             )
             return 2
+        except OSError as error:
+            _discard(staged)
+            print(
+                f"ledger_entry_failed: {error.strerror or 'publish error'}",
+                file=sys.stderr,
+            )
+            return 2
+        _discard(staged)
     print(f"ledger_entry_written: {target}")
     return 0
 

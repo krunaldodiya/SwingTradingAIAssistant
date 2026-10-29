@@ -486,9 +486,10 @@ separately and do not fail the check.
 
 A pass fails, rather than reporting success, when the entry cannot be written or
 the off-device copy fails. An unset `SWING_LEDGER_ROOT` is a configuration
-failure for a scheduled run. Writers serialise on a lock outside the vault, and
-a partially written or wrongly-permissioned entry is removed rather than left to
-be mistaken for a record.
+failure for a scheduled run. Writers serialise on a lock outside the vault and
+publish atomically: the entry is written and permissioned as a temporary file,
+then linked into place, so an interruption can leave only a stranded temporary
+file, never a partial entry that a retry would accept as existing.
 Backfill a missing day from its retained page without rerunning research:
 
 ```bash

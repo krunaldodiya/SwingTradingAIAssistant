@@ -311,3 +311,38 @@ def test_writer_discards_partial_entry_on_failure(tmp_path: Path, monkeypatch) -
     code = writer.main(["--scan-json", str(scan_path), "--ledger-root", str(ledger)])
     assert code == 2
     assert list((ledger / "entries" / "2026").glob("*.md")) == []
+
+
+def test_publish_is_atomic_and_leaves_no_staging_file(tmp_path: Path) -> None:
+    """Only the finished, correctly permissioned entry becomes visible."""
+    ledger = tmp_path / "ledger"
+    (ledger / "entries" / "2026").mkdir(parents=True)
+    scan_path = tmp_path / "scan.json"
+    scan_path.write_text(json.dumps(_scan_payload()))
+    assert (
+        writer.main(["--scan-json", str(scan_path), "--ledger-root", str(ledger)]) == 0
+    )
+    files = list((ledger / "entries" / "2026").iterdir())
+    assert [path.suffix for path in files] == [".md"]
+    assert not any(path.name.startswith(".staged-") for path in files)
+    assert files[0].stat().st_mode & 0o777 == 0o600
+    assert "status: unconfirmed" in files[0].read_text()
+
+
+def test_staging_leftover_is_not_treated_as_a_record(tmp_path: Path) -> None:
+    """A stranded temporary file must never satisfy the duplicate check."""
+    ledger = tmp_path / "ledger"
+    directory = ledger / "entries" / "2026"
+    directory.mkdir(parents=True)
+    handle = "a" * 64
+    (directory / ".staged-abandoned.md").write_text(f"handle {handle}")
+    scan_path = tmp_path / "scan.json"
+    payload = _scan_payload()
+    payload["decision_evidence_handle"] = handle
+    scan_path.write_text(json.dumps(payload))
+    assert (
+        writer.main(["--scan-json", str(scan_path), "--ledger-root", str(ledger)]) == 0
+    )
+    published = [path for path in directory.iterdir() if path.name.endswith(".md")]
+    assert len(published) == 2  # the stranded temp file plus the real entry
+    assert any(handle in path.read_text() for path in published)
