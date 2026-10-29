@@ -346,3 +346,12 @@ def test_staging_leftover_is_not_treated_as_a_record(tmp_path: Path) -> None:
     published = [path for path in directory.iterdir() if path.name.endswith(".md")]
     assert len(published) == 2  # the stranded temp file plus the real entry
     assert any(handle in path.read_text() for path in published)
+
+
+def test_staging_files_are_excluded_from_off_device_mirror() -> None:
+    """A stranded staging file must never become a permanent remote object."""
+    root = Path(__file__).parents[1]
+    runner = (root / "scripts" / "daily_after_close_scan.sh").read_text()
+    unit = (root / "scripts" / "systemd" / "research-ledger-sync.service").read_text()
+    assert "--exclude" in runner and ".staged-*" in runner
+    assert "--exclude" in unit and ".staged-*" in unit

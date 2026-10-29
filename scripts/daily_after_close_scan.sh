@@ -191,6 +191,7 @@ if [ -n "${SWING_LEDGER_ROOT:-}" ]; then
   LEDGER_REMOTE=${SWING_LEDGER_REMOTE:-gdrive:SwingResearchLedger}
   if [ -x "$RCLONE" ]; then
     "$RCLONE" copy "$SWING_LEDGER_ROOT" "$LEDGER_REMOTE" --update \
+      --exclude ".staged-*" \
       --log-file "${SWING_SYNC_LOG_DIR:-$HOME/.local/state/rclone}/research-ledger.log" \
       >> "$LOG/ledger-sync-$STAMP.log" 2>&1
     sync_code=$?

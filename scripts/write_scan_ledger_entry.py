@@ -40,6 +40,7 @@ DEGENERATE_MARKERS = frozenset(
     }
 )
 IST = timezone(timedelta(hours=5, minutes=30))
+STAGING_PREFIX = ".staged-"
 DOSSIER_FEATURES = ("CANDLE_GEOMETRY", "MARKET_STRUCTURE", "PREVIOUS_CLOSE_COMPARISON")
 
 
@@ -487,17 +488,39 @@ def _discard(path: Path) -> None:
 
 
 def _stage(directory: Path, text: str) -> Path:
-    """Write the complete entry to a temporary file with final permissions."""
-    handle, path = tempfile.mkstemp(dir=directory, prefix=".staged-", suffix=".md")
-    os.close(handle)
+    """Write the complete entry to a durable temporary file with final permissions.
+
+    The bytes are flushed to the device before publication, so a power loss
+    cannot leave a published name with missing content. Staging names are
+    excluded from the off-device mirror, so a stranded one never becomes a
+    permanent remote object.
+    """
+    handle, path = tempfile.mkstemp(dir=directory, prefix=STAGING_PREFIX, suffix=".md")
     staged = Path(path)
     try:
-        staged.write_text(text, encoding="utf-8")
+        with os.fdopen(handle, "w", encoding="utf-8") as destination:
+            destination.write(text)
+            destination.flush()
+            os.fsync(destination.fileno())
         os.chmod(staged, 0o600)
     except OSError:
         _discard(staged)
         raise
     return staged
+
+
+def _sync_directory(directory: Path) -> None:
+    """Persist the directory entry created by publication."""
+    try:
+        descriptor = os.open(directory, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(descriptor)
+    except OSError:
+        pass
+    finally:
+        os.close(descriptor)
 
 
 def _write_entry(
@@ -555,11 +578,11 @@ def _write_entry(
         except FileExistsError:
             # Another writer won this exact path. Only accept it when it really
             # records our handle.
-            if handle and handle in target.read_text(errors="replace"):
-                _discard(staged)
+            accepted = bool(handle) and handle in target.read_text(errors="replace")
+            _discard(staged)
+            if accepted:
                 print(f"ledger_entry_exists: {target}")
                 return 0
-            _discard(staged)
             print(
                 "ledger_entry_failed: path already held by another entry",
                 file=sys.stderr,
@@ -573,6 +596,8 @@ def _write_entry(
             )
             return 2
         _discard(staged)
+        # Persist the directory entry so a crash cannot lose the publication.
+        _sync_directory(target.parent)
     print(f"ledger_entry_written: {target}")
     return 0
 

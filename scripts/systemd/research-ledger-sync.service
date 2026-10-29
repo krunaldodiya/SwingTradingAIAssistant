@@ -8,4 +8,4 @@ Wants=network-online.target
 Type=oneshot
 # One-way mirror: new and changed ledger files only. Nothing on the Drive side is
 # ever deleted by this unit.
-ExecStart=/usr/bin/rclone copy @LEDGER@ gdrive:SwingResearchLedger --update --log-file @LOGDIR@/research-ledger.log --log-level INFO
+ExecStart=/usr/bin/rclone copy @LEDGER@ gdrive:SwingResearchLedger --update --exclude .staged-* --log-file @LOGDIR@/research-ledger.log --log-level INFO
