@@ -550,7 +550,9 @@ python scripts/check_benchmark_freshness.py \
   --storage-root /absolute/path/to/SwingTradingAIAssistantData --output json
 ```
 
-States are `FRESH`, `STALE`, and `UNKNOWN` (exit `0`, `3`, `4`). The stage is
+States are `FRESH`, `STALE`, and `UNKNOWN` (exit `0`, `3`, `4`). The runner
+passes the page's own retained handle so the comparison binds to the session the
+scan actually recorded, and wraps the stage in a 60-second deadline. The stage is
 advisory: it never fails, delays, or blocks a pass, and on-demand scans remain
 allowed at any time. When the state is not `FRESH`, the ledger entry records the
 benchmark and relative-strength claim as `UNAVAILABLE` with both sessions named,

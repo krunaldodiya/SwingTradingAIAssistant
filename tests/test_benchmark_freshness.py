@@ -58,7 +58,7 @@ def test_unresolvable_bound_session_is_unknown(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _store(tmp_path, [date(2026, 10, 29)])
-    monkeypatch.setattr(freshness, "_bound_session", lambda root: None)
+    monkeypatch.setattr(freshness, "_bound_session", lambda root, handle=None: None)
 
     report = freshness.check(storage_root=tmp_path, expected=None)
 
@@ -125,3 +125,42 @@ def test_report_states_the_claim_rule(tmp_path: Path) -> None:
     caveat = report["caveat"]
     assert isinstance(caveat, str) and "do not restate" in caveat
     assert json.loads(json.dumps(report))["state"] == "STALE"
+
+
+def test_handle_binds_to_that_pages_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A concurrent historical page must not decide this page's session."""
+    _store(tmp_path, [date(2026, 10, 23)])
+    monkeypatch.setattr(
+        freshness,
+        "read_scan_decision_evidence_completed_session_v1",
+        lambda root, handle: {"completed_session": "2026-10-29"},
+    )
+
+    report = freshness.check(
+        storage_root=tmp_path, expected=None, evidence_handle="a" * 64
+    )
+
+    assert report["state"] == "STALE"
+    assert report["expected_session"] == "2026-10-29"
+
+
+def test_unreadable_handle_is_unknown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _store(tmp_path, [date(2026, 10, 29)])
+
+    def refuse(root: Path, handle: str) -> dict[str, object]:
+        raise freshness.ScanDecisionEvidenceUnavailable("DECISION_EVIDENCE_UNAVAILABLE")
+
+    monkeypatch.setattr(
+        freshness, "read_scan_decision_evidence_completed_session_v1", refuse
+    )
+
+    report = freshness.check(
+        storage_root=tmp_path, expected=None, evidence_handle="a" * 64
+    )
+
+    assert report["state"] == "UNKNOWN"
+    assert report["reason"] == "bound session is unavailable"

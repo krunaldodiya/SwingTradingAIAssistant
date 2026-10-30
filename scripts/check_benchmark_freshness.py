@@ -56,8 +56,22 @@ def _store_last_session(storage_root: Path) -> date | None:
     return newest
 
 
-def _bound_session(storage_root: Path) -> str | None:
-    """Return the completed session of the newest retained evidence record."""
+def _bound_session(storage_root: Path, handle: str | None = None) -> str | None:
+    """Return the completed session this page was bound to.
+
+    A caller that knows the page's retained handle binds to exactly that record.
+    Without one, the newest retained record is only a fallback: a concurrent
+    historical scan could otherwise be mistaken for this page's session.
+    """
+    if handle is not None:
+        try:
+            record = read_scan_decision_evidence_completed_session_v1(
+                storage_root, handle
+            )
+        except ScanDecisionEvidenceUnavailable:
+            return None
+        session = record.get("completed_session")
+        return session if isinstance(session, str) else None
     try:
         handles = list_scan_decision_evidence_handles_v1(storage_root)
     except ScanDecisionEvidenceUnavailable:
@@ -86,9 +100,11 @@ def _bound_session(storage_root: Path) -> str | None:
     return session if isinstance(session, str) else None
 
 
-def check(*, storage_root: Path, expected: str | None) -> dict[str, object]:
+def check(
+    *, storage_root: Path, expected: str | None, evidence_handle: str | None = None
+) -> dict[str, object]:
     store_last = _store_last_session(storage_root)
-    bound = expected or _bound_session(storage_root)
+    bound = expected or _bound_session(storage_root, evidence_handle)
     report: dict[str, object] = {
         "schema": SCHEMA,
         "store_namespace": f"{STORE_NAMESPACE}/{STORE_PROVIDER}",
@@ -119,6 +135,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--storage-root", required=True)
     parser.add_argument("--expected-session")
+    parser.add_argument("--evidence-handle")
     parser.add_argument("--output", choices=("table", "json"), default="table")
     args = parser.parse_args(argv)
 
@@ -136,7 +153,11 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 2
 
-    report = check(storage_root=root, expected=args.expected_session)
+    report = check(
+        storage_root=root,
+        expected=args.expected_session,
+        evidence_handle=args.evidence_handle,
+    )
     state = report["state"]
     if args.output == "json":
         print(json.dumps(report, indent=1))

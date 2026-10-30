@@ -137,9 +137,25 @@ echo "$(date -Is) breadth_exit=$?" >> "$LOG/scan-$STAMP.err"
 # blocks the pass: it only records the state so the ledger entry can say the
 # claim is unavailable instead of restating a stale one.
 FRESHNESS="$LOG/benchmark-freshness-$STAMP.json"
-"$REPO/.venv/bin/python" "$REPO/scripts/check_benchmark_freshness.py" \
-  --storage-root "$STORE" --output json \
-  > "$FRESHNESS" 2> "$LOG/benchmark-freshness-$STAMP.err"
+EVIDENCE_HANDLE=$(
+  python3 - "$PAGE" <<'PY'
+import json
+import sys
+
+try:
+    with open(sys.argv[1]) as handle:
+        envelope = json.load(handle)
+except (OSError, ValueError):
+    envelope = {}
+value = envelope.get("decision_evidence_handle")
+print(value if isinstance(value, str) and len(value) == 64 else "")
+PY
+)
+freshness_args=(--storage-root "$STORE" --output json)
+[ -n "$EVIDENCE_HANDLE" ] && freshness_args+=(--evidence-handle "$EVIDENCE_HANDLE")
+# Bound the stage: a cold or stalled store must never delay the pass.
+timeout 60 "$REPO/.venv/bin/python" "$REPO/scripts/check_benchmark_freshness.py" \
+  "${freshness_args[@]}" > "$FRESHNESS" 2> "$LOG/benchmark-freshness-$STAMP.err"
 freshness_code=$?
 echo "$(date -Is) benchmark_freshness_exit=$freshness_code" >> "$LOG/scan-$STAMP.err"
 # An unusable advisory must never reach the writer as a malformed artifact.
