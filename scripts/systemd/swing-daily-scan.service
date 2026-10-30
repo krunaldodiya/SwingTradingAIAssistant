@@ -1,0 +1,18 @@
+[Unit]
+Description=Daily after-close Nifty 200 scan and G09 diary page
+Documentation=file://@REPO@/docs/workflows/automated-nifty100-scan.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=@REPO@
+ExecStart=@REPO@/scripts/daily_after_close_scan.sh
+# Diary pages and logs live in the private evidence store, never in the repo.
+Environment=SWING_STORAGE_ROOT=@STORE@
+Environment=SWING_DOPPLER_PROJECT=@PROJECT@
+Environment=SWING_DOPPLER_CONFIG=@CONFIG@
+# Every real pass must reach the private ledger; the runner writes the entry.
+Environment=SWING_LEDGER_ROOT=@LEDGER@
+# One run at a time; a scan takes several minutes.
+TimeoutStartSec=3600

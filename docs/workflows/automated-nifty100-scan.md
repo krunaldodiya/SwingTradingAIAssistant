@@ -41,8 +41,17 @@ is eligible, and the price has not moved more than one structural risk unit
 this behavior is `supported-signal-decision-policy@v2`.
 
 **Timing.** Scans and research commands may be run at any time. The scheduled
-nightly runner (`scripts/daily_after_close_scan.sh`; installed as
-`~/daily-scan/run.sh`) carries an 08:00–19:59 IST skip, a weekend skip, a
+nightly runner is `scripts/daily_after_close_scan.sh`, tracked in this
+repository; install its systemd user timer with
+`scripts/install_research_schedule.sh` (units are tracked under
+`scripts/systemd/`, so a lost home directory is repaired by re-running the
+installer; `--check` reports any unit missing from the running system). It writes
+diary pages to
+`$SWING_STORAGE_ROOT/daily-scan/` (default
+`~/SwingTradingAIAssistantData/daily-scan/`), never to an ad-hoc home folder,
+and injects credentials through an explicit Doppler project/config scope
+(`SWING_DOPPLER_PROJECT`, `SWING_DOPPLER_CONFIG`) without mutating global
+Doppler configuration. It carries an 08:00–19:59 IST skip, a weekend skip, a
 retained-calendar NSE closure skip, and a duplicate same-day page skip so the
 diary does not capture intraday, not-yet-published, or duplicate data. After a
 successful scan with at least one candidate it also runs the deterministic
@@ -52,7 +61,8 @@ for exactly those candidates, writing `analysis-YYYY-MM-DD.json` and
 alter the scan page or its decision, and a post-scan failure is logged in the
 matching `.err` file without failing the scan. The guards apply to the scheduled
 job only and do not restrict on-demand scans or `market-data` research commands.
-Interpretation, prior-candidate tracking, and ledger writes remain manual.
+Interpretation and prior-candidate tracking remain manual; the ledger entry and
+its off-device copy are written by the runner.
 
 ```bash
 doppler run -- signal-decisions scan \
@@ -359,7 +369,7 @@ scan schema:
 
 ```bash
 doppler run -- swing-analysis \
-  --scan-json ~/daily-scan/scan-YYYY-MM-DD-research.json \
+  --scan-json ~/SwingTradingAIAssistantData/daily-scan/scan-YYYY-MM-DD.json \
   --output json
 ```
 
@@ -433,6 +443,68 @@ A scan is not a delivered research result until its private-ledger entry is
 written and synced (or the owner explicitly says skip). The answer must name the
 entry path and state which layers ran. Reporting candidates before persistence is
 a protocol violation.
+
+The scheduled runner satisfies the write automatically:
+`scripts/write_scan_ledger_entry.py` derives the entry from the artifacts the run
+already produced and appends it once per retained handle, under
+`$SWING_LEDGER_ROOT/entries/<year>/<session>-<handle8>-nifty200-scan.md`. Set
+`SWING_LEDGER_ROOT` in the service unit (the installer defaults it to
+`~/SwingTradingAIAgentLedgerVault`). Unattended writes are marked
+`status: unconfirmed`; the owner confirms them in place.
+
+Immediately after writing, the runner pushes the ledger to
+`gdrive:SwingResearchLedger` with one `rclone copy --update`. That makes the
+off-device copy part of the pass rather than a later hope. Set
+`SWING_RCLONE_BIN`, `SWING_LEDGER_REMOTE` or `SWING_SYNC_LOG_DIR` to override the
+defaults.
+
+The same installer also enables `research-ledger-sync.timer`, an hourly one-way
+`rclone copy` for entries written outside a scheduled run (backfills, manual
+passes). Both paths copy new and changed files only and never delete anything on
+the Drive side. Keep both schedules installed together: a ledger written but
+never synced is still single copy. `scripts/install_research_schedule.sh --check` fails when either schedule
+is missing, so a vanished home directory is detected rather than assumed healthy.
+
+The writer refuses a degenerate page because recording it would create a false
+"no candidates" market record. The test is the page's shape, not a list of failure
+codes: a genuine market result always admits at least one member to the safety
+screen, so a page where no member reached a safety outcome means the pass stopped
+upstream. This matters because the scan reports the first eligibility rule id,
+and observation and safety use different providers: an allowlist of observation
+codes would miss a rejected Upstox credential and record that failed pass as a
+real zero-candidate day.
+
+Check coverage over any segment:
+
+```bash
+python scripts/check_ledger_coverage.py \
+  --storage-root /absolute/path/to/SwingTradingAIAssistantData \
+  --ledger-root /absolute/path/to/SwingTradingAIAgentLedgerVault \
+  --since 2026-10-19
+```
+
+It exits `1` and lists every session with a real retained page that no ledger
+entry cites. Coverage is per retained page and matched by its exact handle: a
+same-day note that shares only the date does not count, and every page that
+admitted market facts needs its own entry. `DEGENERATE_ONLY` days are reported
+separately and do not fail the check.
+
+A pass fails, rather than reporting success, when the entry cannot be written or
+the off-device copy fails. An unset `SWING_LEDGER_ROOT` is a configuration
+failure for a scheduled run. Writers serialise on a lock outside the vault and
+publish atomically: the entry is written, permissioned and flushed to disk as a
+temporary file, then linked into place and the directory entry synced, so an
+interruption can leave only a stranded temporary file, never a partial entry
+that a retry would accept as existing. Staging names are excluded from both
+`rclone` paths, so a stranded one never becomes a permanent remote object.
+Backfill a missing day from its retained page without rerunning research:
+
+```bash
+python scripts/write_scan_ledger_entry.py \
+  --scan-json "$ROOT/scan-decision-evidence-v1/<handle>.json" \
+  --ledger-root "$LEDGER" --status recorded --backfill
+```
+
 
 ## Performance
 
