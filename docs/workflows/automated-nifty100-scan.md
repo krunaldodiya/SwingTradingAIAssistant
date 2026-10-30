@@ -554,9 +554,10 @@ States are `FRESH`, `STALE`, and `UNKNOWN` (exit `0`, `3`, `4`). The runner
 passes the page's own retained handle so the comparison binds to the session the
 scan actually recorded, and wraps the stage in a 60-second deadline. The stage is
 advisory: it never fails, delays, or blocks a pass, and on-demand scans remain
-allowed at any time. When the state is not `FRESH`, the ledger entry records the
-benchmark and relative-strength claim as `UNAVAILABLE` with both sessions named,
-instead of restating a stale value as current. The underlying defect is
+allowed at any time. The ledger entry restates the benchmark and relative-strength
+values only on affirmative `FRESH` evidence; `STALE`, `UNKNOWN`, or a missing
+advisory records them as `UNAVAILABLE`, naming both sessions where they are known.
+The underlying defect is
 [#397](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/397).
 
 ## Performance

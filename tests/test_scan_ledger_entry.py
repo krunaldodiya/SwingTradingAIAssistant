@@ -442,3 +442,20 @@ def test_fresh_benchmark_keeps_the_measured_claim() -> None:
     )
     assert "benchmark median 20-session return -3.51%" in text
     assert "`OUTPERFORMING`: return +5.00%, excess +8.51%" in text
+
+
+def test_absent_freshness_evidence_does_not_restate_the_claim() -> None:
+    """Measured claims appear only with affirmative FRESH evidence."""
+    text = writer.build_entry(
+        scan_envelope=_scan_with_relative_strength(),
+        analysis=None,
+        research=None,
+        lifecycle=None,
+        now=datetime(2026, 10, 29, 20, 45, tzinfo=IST),
+        status="recorded",
+        commands=[],
+        backfill_note="Backfilled 2026-10-29 20:45 IST from the retained page.",
+    )
+    assert "-3.51%" not in text
+    assert "OUTPERFORMING" not in text
+    assert "benchmark coverage was not established for this pass" in text

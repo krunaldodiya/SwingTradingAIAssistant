@@ -194,6 +194,20 @@ def _header_lines(candidate: Json) -> list[str]:
     ]
 
 
+def _freshness_unavailable(freshness: Json | None) -> str:
+    """Describe a benchmark whose coverage this pass did not establish."""
+    if freshness is None:
+        return (
+            "benchmark coverage was not established for this pass; "
+            "the recorded value is not restated"
+        )
+    return (
+        f"benchmark store ends {_text(freshness.get('store_last_session')) or 'unavailable'}, "
+        f"scored session {_text(freshness.get('expected_session')) or 'unestablished'}; "
+        "the recorded value is stale and is not restated"
+    )
+
+
 def _distance_lines(summary: Json, freshness: Json | None = None) -> list[str]:
     lines: list[str] = []
     distance = _mapping(summary.get("breakout_distance"))
@@ -217,12 +231,10 @@ def _distance_lines(summary: Json, freshness: Json | None = None) -> list[str]:
             f"{str(_text(body.get('body_percent')) or '').rstrip('%')}% of range)."
         )
     strength = _mapping(summary.get("relative_strength"))
-    if strength and freshness is not None and freshness.get("state") != "FRESH":
+    if strength and (freshness is None or freshness.get("state") != "FRESH"):
         lines.append(
-            "- 20-session relative strength UNAVAILABLE: benchmark store ends "
-            f"{_text(freshness.get('store_last_session')) or 'unavailable'}, scored "
-            f"session {_text(freshness.get('expected_session')) or 'unestablished'}; "
-            "the recorded claim describes an earlier market and is not restated."
+            "- 20-session relative strength UNAVAILABLE: "
+            f"{_freshness_unavailable(freshness)}"
         )
     elif strength:
         lines.append(
@@ -290,12 +302,10 @@ def _sample_lines(
     freshness: Json | None = None,
 ) -> list[str]:
     regime = _mapping(scan.get("market_regime"))
-    if freshness is not None and freshness.get("state") != "FRESH":
+    if freshness is None or freshness.get("state") != "FRESH":
         benchmark = (
             "benchmark median 20-session return UNAVAILABLE "
-            f"(store ends {_text(freshness.get('store_last_session')) or 'unavailable'}, "
-            f"scored session {_text(freshness.get('expected_session')) or 'unestablished'}); "
-            "the recorded value is stale and is not restated"
+            f"({_freshness_unavailable(freshness)})"
         )
     else:
         benchmark = (
