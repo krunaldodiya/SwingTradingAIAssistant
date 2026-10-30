@@ -8,6 +8,7 @@ import os
 import re
 import stat
 from contextlib import ExitStack
+from datetime import date
 from pathlib import Path
 from typing import Final, cast
 
@@ -274,8 +275,32 @@ def _validate_scan_shape(scan: dict[str, object]) -> None:
         raise ValueError("invalid universe selection")
 
 
+def _completed_session(observation: object) -> str | None:
+    """Project the admitted observation's latest requested source session."""
+    packet = getattr(observation, "packet", None)
+    feature_slots: object = getattr(packet, "feature_slots", ())
+    sessions: list[date] = []
+    if not isinstance(feature_slots, tuple):
+        return None
+    for slot in cast(tuple[object, ...], feature_slots):
+        source: object | None = getattr(slot, "source", None)
+        requested: object = getattr(source, "requested_sessions", ())
+        if (
+            isinstance(requested, tuple)
+            and requested
+            and isinstance(requested[-1], date)
+        ):
+            sessions.append(requested[-1])
+    return max(sessions).isoformat() if sessions else None
+
+
 def _rows(  # noqa: C901 - complete fail-closed evidence binding
-    root: Path, scan: dict[str, object], rows: object
+    root: Path,
+    scan: dict[str, object],
+    rows: object,
+    *,
+    re_admit_observations: bool = True,
+    observation_bindings: list[tuple[str, str]] | None = None,
 ) -> list[dict[str, object]]:
     raw_symbols = scan.get("evaluated_symbols")
     raw_candidates = scan.get("candidates")
@@ -360,13 +385,17 @@ def _rows(  # noqa: C901 - complete fail-closed evidence binding
         else:
             if type(handle) is not str or _DIGEST.fullmatch(handle) is None:
                 raise ValueError("invalid evidence handle")
-            observation = read_stock_observation_v1(root, handle)
-            if (
-                observation.question != "CURRENT_STRUCTURE"
-                or observation.status != "READY"
-                or observation.symbol != symbol
-            ):
-                raise ValueError("observation binding mismatch")
+            if not re_admit_observations:
+                if observation_bindings is not None:
+                    observation_bindings.append((symbol, handle))
+            else:
+                observation = read_stock_observation_v1(root, handle)
+                if (
+                    observation.question != "CURRENT_STRUCTURE"
+                    or observation.status != "READY"
+                    or observation.symbol != symbol
+                ):
+                    raise ValueError("observation binding mismatch")
         admitted.append(row)
     if len(admitted) != len(symbols):
         raise ValueError("evidence count mismatch")
@@ -468,8 +497,9 @@ def list_scan_decision_evidence_handles_v1(root: Path) -> tuple[str, ...]:
         raise ScanDecisionEvidenceUnavailable("DECISION_EVIDENCE_UNAVAILABLE") from None
 
 
-def read_scan_decision_evidence_v1(root: Path, handle: str) -> dict[str, object]:
-    """Re-admit a selected immutable decision record without provider access."""
+def _read_scan_decision_evidence(
+    root: Path, handle: str, *, include_completed_session: bool
+) -> dict[str, object]:
     try:
         if type(handle) is not str or _DIGEST.fullmatch(handle) is None:
             raise ValueError("invalid evidence handle")
@@ -497,17 +527,57 @@ def read_scan_decision_evidence_v1(root: Path, handle: str) -> dict[str, object]
             or saved["contract_version"] != CONTRACT_VERSION
         ):
             raise ValueError("unsupported evidence record")
-        scan = _validate_scan(saved["scan"])
+        scan = _validate_scan(
+            saved["scan"], require_current_runtime=not include_completed_session
+        )
         if saved["scan_result_identity_sha256"] != scan["result_identity_sha256"]:
             raise ValueError("scan binding mismatch")
-        _rows(root, scan, saved["symbol_evidence"])
-        return {
+        bindings: list[tuple[str, str]] | None = (
+            [] if include_completed_session else None
+        )
+        _rows(
+            root,
+            scan,
+            saved["symbol_evidence"],
+            re_admit_observations=not include_completed_session,
+            observation_bindings=bindings,
+        )
+        result: dict[str, object] = {
             "schema": ENVELOPE_SCHEMA,
             "decision_evidence_handle": handle,
             "scan": scan,
         }
+        if bindings is not None:
+            if not bindings:
+                result["completed_session"] = None
+            else:
+                symbol, observation_handle = bindings[0]
+                observation = read_stock_observation_v1(root, observation_handle)
+                if (
+                    observation.question != "CURRENT_STRUCTURE"
+                    or observation.status != "READY"
+                    or observation.symbol != symbol
+                ):
+                    raise ValueError("observation binding mismatch")
+                completed_session = _completed_session(observation)
+                if completed_session is None:
+                    raise ValueError("completed session is unavailable")
+                result["completed_session"] = completed_session
+        return result
     except Exception:  # noqa: BLE001 - redacted public read boundary
         raise ScanDecisionEvidenceUnavailable("DECISION_EVIDENCE_UNAVAILABLE") from None
+
+
+def read_scan_decision_evidence_v1(root: Path, handle: str) -> dict[str, object]:
+    """Re-admit one exact immutable record without provider access."""
+    return _read_scan_decision_evidence(root, handle, include_completed_session=False)
+
+
+def read_scan_decision_evidence_completed_session_v1(
+    root: Path, handle: str
+) -> dict[str, object]:
+    """Read one immutable scan and project its admitted completed session."""
+    return _read_scan_decision_evidence(root, handle, include_completed_session=True)
 
 
 def read_scan_decision_evidence_metadata_v1(
