@@ -449,7 +449,11 @@ The scheduled runner satisfies the write automatically:
 already produced and appends it once per retained handle, under
 `$SWING_LEDGER_ROOT/entries/<year>/<session>-<handle8>-nifty200-scan.md`. Set
 `SWING_LEDGER_ROOT` in the service unit (the installer defaults it to
-`~/SwingTradingAIAgentLedgerVault`). Unattended writes are marked
+`~/SwingTradingAIAgentLedgerVault`). The completed session comes from the scan
+field, then from an admitted candidate ledger, then from the retained record's
+admitted observation (basis `retained_evidence`), so a zero-candidate page is
+still dated. If none of those establish it, the entry says `unestablished` rather
+than inferring a session from the run label. Unattended writes are marked
 `status: unconfirmed`; the owner confirms them in place.
 
 Immediately after writing, the runner pushes the ledger to
