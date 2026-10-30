@@ -752,3 +752,12 @@ def test_unavailable_member_carries_an_explicit_sweep_fact() -> None:
     assert isinstance(sweep, dict)
     assert sweep["state"] == "UNKNOWN"
     assert sweep["reason"] == "CANDIDATE_HISTORY_UNAVAILABLE"
+
+
+def test_history_ending_before_the_scan_session_is_incomplete() -> None:
+    """A short window must not be read as a market that simply had no sweep."""
+    fact = module._bounded_liquidity_sweep(
+        _sweep_bars(27, 28), (), None, date(2026, 10, 29)
+    )
+    assert fact["state"] == "UNKNOWN"
+    assert fact["reason"] == "SCAN_SESSION_HISTORY_INCOMPLETE"

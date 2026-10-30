@@ -1066,6 +1066,8 @@ def _bounded_liquidity_sweep(
     if completed_session is None:
         return _sweep_unavailable("SCAN_SESSION_UNESTABLISHED")
     bounded = tuple(row for row in rows if row.session <= completed_session)
+    if not bounded or bounded[-1].session != completed_session:
+        return _sweep_unavailable("SCAN_SESSION_HISTORY_INCOMPLETE")
     if event_index is not None and event_index >= len(bounded):
         return _sweep_unavailable("EVENT_OUTSIDE_BOUNDED_HISTORY")
     return _liquidity_sweep(bounded, pivots, event_index=event_index)
