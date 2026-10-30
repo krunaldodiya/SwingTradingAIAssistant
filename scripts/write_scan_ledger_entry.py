@@ -194,7 +194,21 @@ def _header_lines(candidate: Json) -> list[str]:
     ]
 
 
-def _distance_lines(summary: Json) -> list[str]:
+def _freshness_unavailable(freshness: Json | None) -> str:
+    """Describe a benchmark whose coverage this pass did not establish."""
+    if freshness is None:
+        return (
+            "benchmark coverage was not established for this pass; "
+            "the recorded value is not restated"
+        )
+    return (
+        f"benchmark store ends {_text(freshness.get('store_last_session')) or 'unavailable'}, "
+        f"scored session {_text(freshness.get('expected_session')) or 'unestablished'}; "
+        "the recorded value is stale and is not restated"
+    )
+
+
+def _distance_lines(summary: Json, freshness: Json | None = None) -> list[str]:
     lines: list[str] = []
     distance = _mapping(summary.get("breakout_distance"))
     if distance:
@@ -217,7 +231,12 @@ def _distance_lines(summary: Json) -> list[str]:
             f"{str(_text(body.get('body_percent')) or '').rstrip('%')}% of range)."
         )
     strength = _mapping(summary.get("relative_strength"))
-    if strength:
+    if strength and (freshness is None or freshness.get("state") != "FRESH"):
+        lines.append(
+            "- 20-session relative strength UNAVAILABLE: "
+            f"{_freshness_unavailable(freshness)}"
+        )
+    elif strength:
         lines.append(
             f"- 20-session relative strength "
             f"`{_text(strength.get('relative_strength'))}`: return "
@@ -259,10 +278,15 @@ def _dossier_lines(dossier: Json) -> list[str]:
 
 
 def _candidate_lines(
-    candidate: Json, policy: Json | None, dossier: Json | None
+    candidate: Json,
+    policy: Json | None,
+    dossier: Json | None,
+    freshness: Json | None = None,
 ) -> list[str]:
     lines = _header_lines(candidate)
-    lines.extend(_distance_lines(_mapping(candidate.get("candidate_summary"))))
+    lines.extend(
+        _distance_lines(_mapping(candidate.get("candidate_summary")), freshness)
+    )
     if policy is not None:
         lines.extend(_gate_lines(policy))
     if dossier is not None:
@@ -271,8 +295,23 @@ def _candidate_lines(
     return lines
 
 
-def _sample_lines(scan: Json, session: str | None, session_basis: str) -> list[str]:
+def _sample_lines(
+    scan: Json,
+    session: str | None,
+    session_basis: str,
+    freshness: Json | None = None,
+) -> list[str]:
     regime = _mapping(scan.get("market_regime"))
+    if freshness is None or freshness.get("state") != "FRESH":
+        benchmark = (
+            "benchmark median 20-session return UNAVAILABLE "
+            f"({_freshness_unavailable(freshness)})"
+        )
+    else:
+        benchmark = (
+            "benchmark median 20-session return "
+            f"{_text(scan.get('benchmark_median_return_20d'))}"
+        )
     return [
         f"- Completed session {session or 'unestablished'}; basis `{session_basis}`. "
         f"Research-run label {_text(scan.get('scan_timestamp'))}.",
@@ -282,8 +321,7 @@ def _sample_lines(scan: Json, session: str | None, session_basis: str) -> list[s
         f"{_count(scan.get('unknown_count'))} unknown.",
         f"- Market regime `{_text(regime.get('regime'))}` (uptrend "
         f"{_text(regime.get('uptrend_percent'))}, downtrend "
-        f"{_text(regime.get('downtrend_percent'))}); benchmark median 20-session "
-        f"return {_text(scan.get('benchmark_median_return_20d'))}.",
+        f"{_text(regime.get('downtrend_percent'))}); {benchmark}.",
         "",
     ]
 
@@ -348,6 +386,7 @@ def build_entry(
     commands: list[str],
     backfill_note: str | None = None,
     handle: str | None = None,
+    freshness: Json | None = None,
 ) -> str:
     """Render the complete Markdown entry for one pass."""
     scan = _scan_section(scan_envelope)
@@ -381,7 +420,7 @@ def build_entry(
         "",
         "## Data used",
         "",
-        *_sample_lines(scan, session, session_basis),
+        *_sample_lines(scan, session, session_basis, freshness),
         "## Method",
         "",
         *(
@@ -404,6 +443,7 @@ def build_entry(
                     candidate,
                     policies.get(symbol) if symbol else None,
                     dossiers.get(symbol) if symbol else None,
+                    freshness,
                 )
             )
     else:
@@ -547,6 +587,7 @@ def _write_entry(
         analysis=_load(args.analysis_json),
         research=_load(args.research_json),
         lifecycle=_load(args.lifecycle_json),
+        freshness=_load(args.freshness_json),
         now=datetime.now(IST),
         status=str(args.status),
         commands=list(args.command),
@@ -616,6 +657,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--analysis-json")
     parser.add_argument("--research-json")
     parser.add_argument("--lifecycle-json")
+    parser.add_argument("--freshness-json")
     parser.add_argument("--ledger-root", required=True)
     parser.add_argument(
         "--status",
