@@ -138,7 +138,7 @@ MARKET_DATA_RUNTIME_SOURCE_SHA256_V1: Final[dict[str, str]] = {
     "stock_observations_cli.py": "315313510d849238b105c29e3f3efad2dce1c4db984f3e6f80eed561f56c5644",
     "stock_observations_runtime_identity_manifest.py": "5d842365031ea3a7004d9ac2dfd8d220534ef259e840b2f60cc3b2296d11f198",
     "storage_root_lease.py": "f93eac4f668dbdb0e236a3a54452a8d022c5700e91452536acafb1300b22f6ff",
-    "swing_analysis.py": "110df32fb50d5a5f9ec572b615a3a81a757dd48e5c9408e7f3115ebfc209d7c8",
+    "swing_analysis.py": "f9560105467ce980fb59d711e0cd1d6f938304c18eb4b1fbc5f455a9707a91bd",
     "swing_analysis_cli.py": "e3f42222618809d03c881b03f8e8a6980963f3a2d9ddacc3d05334158bc93da8",
     "universe_snapshot.py": "d579f6dcd2a24f2e07448258d9d723b55a8cfa42e4a6d9852c1f8edea9ab9e53",
     "upstox_canonical.py": "a4bfb9105e8dfc0a30c0c6413f4434f78fc1912306ae3f1aa19ccdafd6c58805",

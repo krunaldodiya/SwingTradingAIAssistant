@@ -674,3 +674,81 @@ def test_liquidity_sweep_ignores_sweep_before_event() -> None:
         bars, pivots, event_index=7
     )
     assert sweep["state"] == "NONE"
+
+
+def _scan_with_sessions(*sessions: str) -> dict[str, object]:
+    return {
+        "schema": "swing-trade-scan@v3",
+        "candidates": [
+            {
+                "symbol": "AAA",
+                "safety_eligibility": {
+                    "status": "ELIGIBLE",
+                    "explanation_ledger": [
+                        {"derived_measurements": {"latest_completed_session": session}}
+                    ],
+                },
+            }
+            for session in sessions
+        ],
+    }
+
+
+def test_scan_session_is_established_from_the_admitted_ledger() -> None:
+    scan = _scan_with_sessions("2026-10-29")
+    assert module._scan_completed_session(scan) == date(2026, 10, 29)
+
+
+def test_disagreeing_candidate_sessions_leave_the_session_unestablished() -> None:
+    """Two candidate ledgers naming different sessions cannot date the page."""
+    scan = _scan_with_sessions("2026-10-29", "2026-10-28")
+    assert module._scan_completed_session(scan) is None
+
+
+def test_page_without_ledger_has_no_established_session() -> None:
+    assert module._scan_completed_session({"candidates": []}) is None
+
+
+def _sweep_bars(*days: int) -> tuple[module.AnalysisBar, ...]:
+    return tuple(
+        module.AnalysisBar(
+            date(2026, 10, day),
+            Decimal("100"),
+            Decimal("110"),
+            Decimal("90"),
+            Decimal("105"),
+            1000,
+        )
+        for day in days
+    )
+
+
+def test_sweep_is_unavailable_without_a_bound_session() -> None:
+    fact = module._bounded_liquidity_sweep(_sweep_bars(29), (), None, None)
+    assert fact["state"] == "UNKNOWN"
+    assert fact["reason"] == "SCAN_SESSION_UNESTABLISHED"
+
+
+def test_event_after_the_bound_session_cannot_be_reported() -> None:
+    """History must end at the scanned session, not at analysis run time."""
+    fact = module._bounded_liquidity_sweep(
+        _sweep_bars(27, 28, 29), (), 2, date(2026, 10, 28)
+    )
+    assert fact["state"] == "UNKNOWN"
+    assert fact["reason"] == "EVENT_OUTSIDE_BOUNDED_HISTORY"
+
+
+def test_unavailable_member_carries_an_explicit_sweep_fact() -> None:
+    member = module._unavailable_member(
+        "AAA",
+        "INE000A01001",
+        "NSE",
+        flag="FLAG",
+        gate_id="GATE",
+        observed=None,
+        requirement="REQ",
+    )
+    sweep = member["liquidity_sweep"]
+    assert isinstance(sweep, dict)
+    assert sweep["state"] == "UNKNOWN"
+    assert sweep["reason"] == "CANDIDATE_HISTORY_UNAVAILABLE"

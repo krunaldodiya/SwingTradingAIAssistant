@@ -915,6 +915,7 @@ def _unavailable_member(
         "latest_session": None,
         "history": {"sessions": sessions},
         "flags": [flag],
+        "liquidity_sweep": _sweep_unavailable("CANDIDATE_HISTORY_UNAVAILABLE"),
         "policy": {
             "schema": POLICY_SCHEMA,
             "mode": "PROVISIONAL_RESEARCH",
@@ -991,12 +992,92 @@ def _candidate_inputs(
     return event_session, broken_high, display_stop, stop, stop_source
 
 
+def _candidate_session_values(candidate: object) -> list[str]:
+    """Collect the session values one candidate's admitted ledger names."""
+    if type(candidate) is not dict:
+        return []
+    safety = cast(dict[str, object], candidate).get("safety_eligibility")
+    if type(safety) is not dict:
+        return []
+    ledger = cast(dict[str, object], safety).get("explanation_ledger")
+    if type(ledger) is not list:
+        return []
+    values: list[str] = []
+    for entry in cast(list[object], ledger):
+        if type(entry) is not dict:
+            continue
+        measurements = cast(dict[str, object], entry).get("derived_measurements")
+        if type(measurements) is not dict:
+            continue
+        for key in ("latest_completed_session", "retained_completed_session"):
+            value = cast(dict[str, object], measurements).get(key)
+            if isinstance(value, str):
+                values.append(value)
+    return values
+
+
+def _scan_completed_session(scan: dict[str, object]) -> date | None:
+    """Return the completed session the retained scan was bound to.
+
+    ``swing-trade-scan@v3`` projects no top-level session, so the admitted
+    candidate safety ledger is the in-page evidence. Candidates that disagree, or
+    a page that carries none, leave the session unestablished: the sweep fact then
+    stays unavailable instead of being computed against today's bars.
+    """
+    raw: list[str] = []
+    direct = scan.get("latest_completed_session")
+    if isinstance(direct, str):
+        raw.append(direct)
+    for candidate in cast(list[object], scan.get("candidates") or []):
+        raw.extend(_candidate_session_values(candidate))
+    observed: set[date] = set()
+    for value in raw:
+        try:
+            observed.add(date.fromisoformat(value[:10]))
+        except ValueError:
+            return None
+    return observed.pop() if len(observed) == 1 else None
+
+
+def _sweep_unavailable(reason: str) -> dict[str, object]:
+    return {
+        "state": "UNKNOWN",
+        "side": None,
+        "level_inr": None,
+        "session": None,
+        "age_sessions": None,
+        "lookback_sessions": _SWEEP_LOOKBACK_BARS,
+        "reason": reason,
+    }
+
+
+def _bounded_liquidity_sweep(
+    rows: Sequence[AnalysisBar],
+    pivots: Sequence[tuple[int, str, Decimal]],
+    event_index: int | None,
+    completed_session: date | None,
+) -> dict[str, object]:
+    """Report a sweep only from bars that end at the scan's completed session.
+
+    The provider history runs to the day analysis is executed, which can be later
+    than the session the scan was bound to. Truncating the tail keeps earlier
+    indices stable, so ``event_index`` still addresses the same bar.
+    """
+    if completed_session is None:
+        return _sweep_unavailable("SCAN_SESSION_UNESTABLISHED")
+    bounded = tuple(row for row in rows if row.session <= completed_session)
+    if event_index is not None and event_index >= len(bounded):
+        return _sweep_unavailable("EVENT_OUTSIDE_BOUNDED_HISTORY")
+    return _liquidity_sweep(bounded, pivots, event_index=event_index)
+
+
 def _analyze_member(
     symbol: str,
     isin: str,
     exchange: str,
     rows: Sequence[BharatStockDailyPrice],
     candidate: dict[str, object],
+    completed_session: date | None = None,
 ) -> dict[str, object]:
     bars = _bars(rows)[-_MAX_SESSIONS:]
     try:
@@ -1115,7 +1196,9 @@ def _analyze_member(
         else None,
         "volume": volume,
         "retest": retest,
-        "liquidity_sweep": _liquidity_sweep(bars, pivots, event_index=event_index),
+        "liquidity_sweep": _bounded_liquidity_sweep(
+            bars, pivots, event_index, completed_session
+        ),
         "levels": {
             "broken_high": str(broken_high),
             "structural_stop": str(stop) if stop is not None else None,
@@ -1184,7 +1267,8 @@ def analyze_scan(scan_path: Path) -> dict[str, object]:
     scan = admit_retained_scan_document_v1(raw)
     candidates = cast(list[dict[str, object]], scan.get("candidates") or [])
     client = BharatStockClient()
-    end = datetime.now().date()
+    completed_session = _scan_completed_session(scan)
+    end = completed_session or datetime.now().date()
     start = end - timedelta(days=_LOOKBACK_DAYS)
     members: list[dict[str, object]] = []
     for candidate in candidates:
@@ -1229,7 +1313,9 @@ def analyze_scan(scan_path: Path) -> dict[str, object]:
             continue
         rows = sorted(history.rows, key=lambda row: row.session)
         try:
-            member = _analyze_member(symbol, isin, exchange, tuple(rows), candidate)
+            member = _analyze_member(
+                symbol, isin, exchange, tuple(rows), candidate, completed_session
+            )
         except (ArithmeticError, ValueError) as error:
             members.append(
                 _unavailable_member(
