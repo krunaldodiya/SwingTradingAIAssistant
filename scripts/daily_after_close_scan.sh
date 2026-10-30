@@ -130,6 +130,20 @@ BREADTH="$LOG/breadth-$STAMP.json"
   --storage-root "$STORE" --sessions 20 --output json \
   > "$BREADTH" 2> "$LOG/breadth-$STAMP.err"
 echo "$(date -Is) breadth_exit=$?" >> "$LOG/scan-$STAMP.err"
+
+# Benchmark freshness advisory. The scan computes every relative-strength number
+# from adjusted_daily, which a separate dataset refresh maintains; a stale store
+# makes those numbers describe an earlier market. This stage never fails or
+# blocks the pass: it only records the state so the ledger entry can say the
+# claim is unavailable instead of restating a stale one.
+FRESHNESS="$LOG/benchmark-freshness-$STAMP.json"
+"$REPO/.venv/bin/python" "$REPO/scripts/check_benchmark_freshness.py" \
+  --storage-root "$STORE" --output json \
+  > "$FRESHNESS" 2> "$LOG/benchmark-freshness-$STAMP.err"
+freshness_code=$?
+echo "$(date -Is) benchmark_freshness_exit=$freshness_code" >> "$LOG/scan-$STAMP.err"
+# An unusable advisory must never reach the writer as a malformed artifact.
+[ -s "$FRESHNESS" ] || rm -f "$FRESHNESS"
 SYMBOLS=$(
   python3 - "$PAGE" <<'PY'
 import json
@@ -181,6 +195,7 @@ if [ -n "${SWING_LEDGER_ROOT:-}" ]; then
   [ -f "$ANALYSIS" ] && ledger_args+=(--analysis-json "$ANALYSIS")
   [ -f "$RESEARCH" ] && ledger_args+=(--research-json "$RESEARCH")
   [ -f "$LIFECYCLE" ] && ledger_args+=(--lifecycle-json "$LIFECYCLE")
+  [ -s "$FRESHNESS" ] && ledger_args+=(--freshness-json "$FRESHNESS")
   ledger_args+=(--command "signal-decisions scan --nifty200 --refresh --retain-decision-evidence")
   [ -f "$ANALYSIS" ] && ledger_args+=(--command "swing-analysis --scan-json scan-$STAMP.json")
   [ -f "$RESEARCH" ] && ledger_args+=(--command "market-data research-run-current --contract-version v2")

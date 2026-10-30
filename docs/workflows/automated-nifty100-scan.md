@@ -535,6 +535,28 @@ Two limits are stated in the output itself:
   the store holds, and pages where no member reached a safety outcome are
   excluded, so a provider outage cannot appear as a flat market.
 
+## Benchmark freshness
+
+The scan's `benchmark_median_return_20d` and every candidate's 20-session relative
+strength are computed from `adjusted_daily/provider=bharatstock`, which a separate
+dataset refresh maintains. When that store lags the scanned session, those numbers
+describe an earlier market.
+
+After every scan the runner records the comparison as
+`benchmark-freshness-YYYY-MM-DD.json`:
+
+```bash
+python scripts/check_benchmark_freshness.py \
+  --storage-root /absolute/path/to/SwingTradingAIAssistantData --output json
+```
+
+States are `FRESH`, `STALE`, and `UNKNOWN` (exit `0`, `3`, `4`). The stage is
+advisory: it never fails, delays, or blocks a pass, and on-demand scans remain
+allowed at any time. When the state is not `FRESH`, the ledger entry records the
+benchmark and relative-strength claim as `UNAVAILABLE` with both sessions named,
+instead of restating a stale value as current. The underlying defect is
+[#397](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/397).
+
 ## Performance
 
 The parsed instrument snapshot is cached in process memory by its immutable

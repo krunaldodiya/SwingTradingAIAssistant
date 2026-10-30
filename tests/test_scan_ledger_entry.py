@@ -385,3 +385,60 @@ def test_staging_files_are_excluded_from_off_device_mirror() -> None:
     unit = (root / "scripts" / "systemd" / "research-ledger-sync.service").read_text()
     assert "--exclude" in runner and ".staged-*" in runner
     assert "--exclude" in unit and ".staged-*" in unit
+
+
+def _scan_with_relative_strength() -> dict[str, object]:
+    payload = _scan_payload()
+    scan = payload["scan"]  # type: ignore[index]
+    candidate = scan["candidates"][0]  # type: ignore[index]
+    candidate["candidate_summary"]["relative_strength"] = {
+        "return_20d": "+5.00%",
+        "relative_strength": "OUTPERFORMING",
+        "excess_return": "+8.51%",
+    }
+    return payload
+
+
+def test_stale_benchmark_is_not_restated_in_the_record() -> None:
+    """A frozen benchmark store must not become a permanent relative-strength claim."""
+    text = writer.build_entry(
+        scan_envelope=_scan_with_relative_strength(),
+        analysis=None,
+        research=None,
+        lifecycle=None,
+        now=datetime(2026, 10, 29, 20, 45, tzinfo=IST),
+        status="unconfirmed",
+        commands=["signal-decisions scan --nifty200"],
+        freshness={
+            "state": "STALE",
+            "store_last_session": "2026-10-23",
+            "expected_session": "2026-10-29",
+        },
+    )
+    assert "-3.51%" not in text
+    assert "OUTPERFORMING" not in text
+    assert "+8.51%" not in text
+    assert "benchmark median 20-session return UNAVAILABLE" in text
+    assert (
+        "20-session relative strength UNAVAILABLE: benchmark store ends 2026-10-23"
+        in text
+    )
+
+
+def test_fresh_benchmark_keeps_the_measured_claim() -> None:
+    text = writer.build_entry(
+        scan_envelope=_scan_with_relative_strength(),
+        analysis=None,
+        research=None,
+        lifecycle=None,
+        now=datetime(2026, 10, 29, 20, 45, tzinfo=IST),
+        status="unconfirmed",
+        commands=["signal-decisions scan --nifty200"],
+        freshness={
+            "state": "FRESH",
+            "store_last_session": "2026-10-29",
+            "expected_session": "2026-10-29",
+        },
+    )
+    assert "benchmark median 20-session return -3.51%" in text
+    assert "`OUTPERFORMING`: return +5.00%, excess +8.51%" in text
