@@ -207,7 +207,8 @@ fi
 # degenerate page (all members failing one upstream reason) and never overwrites
 # an entry that already cites this page's handle.
 if [ -n "${SWING_LEDGER_ROOT:-}" ]; then
-  ledger_args=(--scan-json "$PAGE" --ledger-root "$SWING_LEDGER_ROOT" --status unconfirmed)
+  ledger_args=(--scan-json "$PAGE" --ledger-root "$SWING_LEDGER_ROOT" \
+    --storage-root "$STORE" --status unconfirmed)
   [ -f "$ANALYSIS" ] && ledger_args+=(--analysis-json "$ANALYSIS")
   [ -f "$RESEARCH" ] && ledger_args+=(--research-json "$RESEARCH")
   [ -f "$LIFECYCLE" ] && ledger_args+=(--lifecycle-json "$LIFECYCLE")

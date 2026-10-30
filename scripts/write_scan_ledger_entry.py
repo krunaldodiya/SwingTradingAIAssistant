@@ -29,6 +29,11 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import cast
 
+from swing_trading_ai_assistant.market_data.scan_decision_evidence import (
+    ScanDecisionEvidenceUnavailable,
+    read_scan_decision_evidence_completed_session_v1,
+)
+
 Json = dict[str, object]
 
 IST = timezone(timedelta(hours=5, minutes=30))
@@ -87,7 +92,20 @@ def _resolved_handle(envelope: Json, scan_json: str | None) -> str:
     return f"result-{identity}" if identity else ""
 
 
-def completed_session(scan: Json) -> tuple[str | None, str]:
+def _record_belongs_to_page(record: Json, scan: Json) -> bool:
+    """True only when the retained record is the page being written.
+
+    A handle in the envelope could name a different retained page; admitting its
+    session would permanently attribute this page's facts to a foreign record.
+    """
+    page_identity = _text(scan.get("result_identity_sha256"))
+    record_identity = _text(_mapping(record.get("scan")).get("result_identity_sha256"))
+    return bool(page_identity) and page_identity == record_identity
+
+
+def completed_session(
+    scan: Json, *, storage_root: Path | None = None, handle: str | None = None
+) -> tuple[str | None, str]:
     """Return the admitted completed session and how it was established.
 
     ``swing-trade-scan@v3`` projects no top-level session field, so the run
@@ -109,6 +127,18 @@ def completed_session(scan: Json) -> tuple[str | None, str]:
                     observed.add(value[:10])
     if len(observed) == 1:
         return observed.pop(), "candidate_safety_ledger"
+    # A zero-candidate page has no candidate ledger to date it. The retained
+    # record still binds a completed session through its admitted observation.
+    if storage_root is not None and handle:
+        try:
+            record = read_scan_decision_evidence_completed_session_v1(
+                storage_root, handle
+            )
+        except ScanDecisionEvidenceUnavailable:
+            return None, "unestablished"
+        value = _text(record.get("completed_session"))
+        if value and _record_belongs_to_page(record, scan):
+            return value[:10], "retained_evidence"
     return None, "unestablished"
 
 
@@ -387,11 +417,14 @@ def build_entry(
     backfill_note: str | None = None,
     handle: str | None = None,
     freshness: Json | None = None,
+    storage_root: Path | None = None,
 ) -> str:
     """Render the complete Markdown entry for one pass."""
     scan = _scan_section(scan_envelope)
     evidence_handle = handle or "not retained"
-    session, session_basis = completed_session(scan)
+    session, session_basis = completed_session(
+        scan, storage_root=storage_root, handle=handle
+    )
     run_label = (_text(scan.get("scan_timestamp")) or "unknown")[:10]
     scope_session = session or f"unestablished (research-run label {run_label})"
     policies = _policy_by_symbol(analysis)
@@ -511,6 +544,20 @@ def resolve_target(ledger_root: Path, stamp: str, handle: str) -> Path:
 
 
 def existing_entry(ledger_root: Path, stamp: str, handle: str) -> Path | None:
+    """Return an entry that already records this handle.
+
+    The stamp is derived, so it can change when retained evidence becomes
+    readable later. Append-once is therefore keyed on the handle across the whole
+    ledger, not on the stamp directory.
+    """
+    if handle:
+        entries = ledger_root / "entries"
+        if not entries.is_dir():
+            return None
+        for path in sorted(entries.glob("*/*-nifty200-scan.md")):
+            if handle in path.read_text(errors="replace"):
+                return path
+        return None
     directory = ledger_root / "entries" / stamp[:4]
     if not directory.is_dir():
         return None
@@ -588,6 +635,7 @@ def _write_entry(
         research=_load(args.research_json),
         lifecycle=_load(args.lifecycle_json),
         freshness=_load(args.freshness_json),
+        storage_root=_storage_root(args),
         now=datetime.now(IST),
         status=str(args.status),
         commands=list(args.command),
@@ -651,6 +699,17 @@ def _write_entry(
     return 0
 
 
+def _storage_root(args: argparse.Namespace) -> Path | None:
+    """Resolve the private evidence root for a retained-session lookup."""
+    explicit = getattr(args, "storage_root", None)
+    if explicit:
+        return Path(str(explicit))
+    path = Path(str(args.scan_json))
+    if path.parent.name == "scan-decision-evidence-v1":
+        return path.parent.parent
+    return None
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--scan-json", required=True)
@@ -658,6 +717,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--research-json")
     parser.add_argument("--lifecycle-json")
     parser.add_argument("--freshness-json")
+    parser.add_argument("--storage-root")
     parser.add_argument("--ledger-root", required=True)
     parser.add_argument(
         "--status",
@@ -685,7 +745,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     # A retained page file is named by its own handle; the envelope carries it too.
     handle = _resolved_handle(envelope, str(args.scan_json))
-    session, _ = completed_session(scan)
+    session, _ = completed_session(
+        scan, storage_root=_storage_root(args), handle=handle
+    )
     stamp = session or (_text(scan.get("scan_timestamp")) or "")[:10]
     return _write_entry(args=args, envelope=envelope, handle=handle, stamp=stamp)
 
