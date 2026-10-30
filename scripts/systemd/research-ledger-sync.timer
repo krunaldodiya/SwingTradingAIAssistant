@@ -1,0 +1,11 @@
+[Unit]
+Description=Hourly mirror of the research ledger to Google Drive
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+AccuracySec=1min
+Unit=research-ledger-sync.service
+
+[Install]
+WantedBy=timers.target

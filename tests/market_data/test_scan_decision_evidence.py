@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import date
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -13,6 +15,7 @@ from swing_trading_ai_assistant.market_data.scan_decision_evidence import (
     ScanDecisionEvidenceUnavailable,
     _record_scan_decision_evidence_v1,
     list_scan_decision_evidence_handles_v1,
+    read_scan_decision_evidence_completed_session_v1,
     read_scan_decision_evidence_v1,
 )
 from swing_trading_ai_assistant.market_data.signal_decisions_scan_v3 import (
@@ -158,6 +161,54 @@ def test_current_v3_scan_is_admitted(tmp_path: Path) -> None:
     result = read_scan_decision_evidence_v1(tmp_path, handle)
 
     assert result["scan"]["schema"] == SCAN_SCHEMA
+
+
+def test_completed_session_projects_non_candidate_observation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A real zero-candidate market page retains its completed session."""
+    scan = _scan(SCAN_SCHEMA)
+    scan.update(
+        {
+            "eligible_count": 1,
+            "unknown_count": 0,
+            "other_stocks": [
+                {"symbol": "DEMO", "decision": "NO_TRADE", "safety_status": "ELIGIBLE"}
+            ],
+        }
+    )
+    _reseal(scan)
+    observation = SimpleNamespace(
+        question="CURRENT_STRUCTURE",
+        status="READY",
+        symbol="DEMO",
+        packet=SimpleNamespace(
+            feature_slots=(
+                SimpleNamespace(
+                    source=SimpleNamespace(requested_sessions=(date(2026, 10, 29),))
+                ),
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        evidence_module, "read_stock_observation_v1", lambda root, handle: observation
+    )
+    handle = _record_scan_decision_evidence_v1(
+        tmp_path,
+        scan,
+        [
+            {
+                "symbol": "DEMO",
+                "decision": "NO_TRADE",
+                "safety_status": "ELIGIBLE",
+                "observation_handle": "a" * 64,
+            }
+        ],
+    )
+
+    record = read_scan_decision_evidence_completed_session_v1(tmp_path, handle)
+
+    assert record["completed_session"] == "2026-10-29"
 
 
 def test_tampered_evidence_fails_closed(tmp_path: Path) -> None:
