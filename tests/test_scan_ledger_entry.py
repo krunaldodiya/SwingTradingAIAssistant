@@ -470,10 +470,14 @@ def test_zero_candidate_page_is_dated_from_retained_evidence(
     payload = _scan_payload(candidate_count=0, candidates=[], eligible_count=119)
     cast_scan = payload["scan"]  # type: ignore[index]
     cast_scan.pop("latest_completed_session", None)
+    cast_scan["result_identity_sha256"] = "c" * 64
     monkeypatch.setattr(
         writer,
         "read_scan_decision_evidence_completed_session_v1",
-        lambda root, handle: {"completed_session": "2026-10-30"},
+        lambda root, handle: {
+            "completed_session": "2026-10-30",
+            "scan": {"result_identity_sha256": "c" * 64},
+        },
     )
 
     text = writer.build_entry(
@@ -498,6 +502,7 @@ def test_unreadable_retained_record_leaves_the_session_unestablished(
     payload = _scan_payload(candidate_count=0, candidates=[], eligible_count=119)
     cast_scan = payload["scan"]  # type: ignore[index]
     cast_scan.pop("latest_completed_session", None)
+    cast_scan["result_identity_sha256"] = "c" * 64
 
     def refuse(root: Path, handle: str) -> dict[str, object]:
         raise writer.ScanDecisionEvidenceUnavailable("DECISION_EVIDENCE_UNAVAILABLE")
@@ -519,3 +524,50 @@ def test_unreadable_retained_record_leaves_the_session_unestablished(
     )
 
     assert "completed session unestablished" in text
+
+
+def test_foreign_retained_record_cannot_date_the_page(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A handle naming another page must not lend its session to this one."""
+    payload = _scan_payload(candidate_count=0, candidates=[], eligible_count=119)
+    scan = payload["scan"]  # type: ignore[index]
+    scan.pop("latest_completed_session", None)
+    scan["result_identity_sha256"] = "c" * 64
+    monkeypatch.setattr(
+        writer,
+        "read_scan_decision_evidence_completed_session_v1",
+        lambda root, handle: {
+            "completed_session": "2026-10-30",
+            "scan": {"result_identity_sha256": "d" * 64},
+        },
+    )
+
+    text = writer.build_entry(
+        scan_envelope=payload,
+        analysis=None,
+        research=None,
+        lifecycle=None,
+        now=datetime(2026, 10, 30, 20, 47, tzinfo=IST),
+        status="unconfirmed",
+        commands=[],
+        handle="a" * 64,
+        storage_root=tmp_path,
+    )
+
+    assert "completed session unestablished" in text
+    assert "2026-10-30; basis" not in text
+
+
+def test_existing_entry_is_found_by_handle_across_stamps(tmp_path: Path) -> None:
+    """Append-once is per handle: a later-derived session must not add a file."""
+    handle = "a" * 64
+    earlier = (
+        tmp_path / "entries" / "2026" / f"2026-10-30-{handle[:8]}-nifty200-scan.md"
+    )
+    earlier.parent.mkdir(parents=True)
+    earlier.write_text(f"evidence: decision-evidence handle {handle}\n")
+
+    found = writer.existing_entry(tmp_path, "2026-10-31", handle)
+
+    assert found == earlier

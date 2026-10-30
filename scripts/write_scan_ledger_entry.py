@@ -92,6 +92,17 @@ def _resolved_handle(envelope: Json, scan_json: str | None) -> str:
     return f"result-{identity}" if identity else ""
 
 
+def _record_belongs_to_page(record: Json, scan: Json) -> bool:
+    """True only when the retained record is the page being written.
+
+    A handle in the envelope could name a different retained page; admitting its
+    session would permanently attribute this page's facts to a foreign record.
+    """
+    page_identity = _text(scan.get("result_identity_sha256"))
+    record_identity = _text(_mapping(record.get("scan")).get("result_identity_sha256"))
+    return bool(page_identity) and page_identity == record_identity
+
+
 def completed_session(
     scan: Json, *, storage_root: Path | None = None, handle: str | None = None
 ) -> tuple[str | None, str]:
@@ -126,7 +137,7 @@ def completed_session(
         except ScanDecisionEvidenceUnavailable:
             return None, "unestablished"
         value = _text(record.get("completed_session"))
-        if value:
+        if value and _record_belongs_to_page(record, scan):
             return value[:10], "retained_evidence"
     return None, "unestablished"
 
@@ -533,6 +544,20 @@ def resolve_target(ledger_root: Path, stamp: str, handle: str) -> Path:
 
 
 def existing_entry(ledger_root: Path, stamp: str, handle: str) -> Path | None:
+    """Return an entry that already records this handle.
+
+    The stamp is derived, so it can change when retained evidence becomes
+    readable later. Append-once is therefore keyed on the handle across the whole
+    ledger, not on the stamp directory.
+    """
+    if handle:
+        entries = ledger_root / "entries"
+        if not entries.is_dir():
+            return None
+        for path in sorted(entries.glob("*/*-nifty200-scan.md")):
+            if handle in path.read_text(errors="replace"):
+                return path
+        return None
     directory = ledger_root / "entries" / stamp[:4]
     if not directory.is_dir():
         return None
