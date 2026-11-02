@@ -509,6 +509,38 @@ python scripts/write_scan_ledger_entry.py \
   --ledger-root "$LEDGER" --status recorded --backfill
 ```
 
+## Gate friction report
+
+A run of zero qualified candidates cannot by itself distinguish three causes: the
+market produced no setups, a threshold is mis-specified, or a threshold is correct
+but never met in this regime. This report separates them from evidence already
+retained:
+
+```bash
+python scripts/gate_friction_report.py \
+  --storage-root /absolute/path/to/SwingTradingAIAssistantData
+```
+
+It reads the `swing-analysis@v2` artifacts the runner already wrote and reports,
+per gate, how often it `FAIL`s, stays `PENDING`, `PASS`es, or is `UNAVAILABLE`.
+
+Three honesty rules shape the numbers:
+
+- Only `swing-analysis@v2` documents with `swing-analysis-policy@v1` members are
+  counted, so thresholds from different policy versions are never pooled.
+- An unreadable or unsupported artifact is counted and reported, never dropped:
+  the output prints `INCOMPLETE EVIDENCE` and exits `3`. Exit `1` means no gate row
+  was counted at all, so an empty result can never read as a clean one.
+- `CANDLE_BODY_QUALITY` is conjunctive (bullish **and** body at least 60%), so
+  bearish observations are reported separately instead of inflating a "body
+  percent" distribution that the 60% threshold cannot fix.
+
+A gate that never passes across many sessions is a candidate for review — either
+its threshold is unreachable in the prevailing regime or the policy is calibrated
+for a different market. A gate that never fails is a candidate for tightening. The
+report is descriptive: it does not decide, and a handful of candidate rows is not
+evidence that a threshold is wrong.
+
 ## Market breadth trend
 
 A zero-candidate week should be explainable, not mysterious. After every scan the
