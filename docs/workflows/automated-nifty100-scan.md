@@ -509,6 +509,29 @@ python scripts/write_scan_ledger_entry.py \
   --ledger-root "$LEDGER" --status recorded --backfill
 ```
 
+## Gate friction report
+
+A run of zero qualified candidates cannot by itself distinguish three causes: the
+market produced no setups, a threshold is mis-specified, or a threshold is correct
+but never met in this regime. This report separates them from evidence already
+retained:
+
+```bash
+python scripts/gate_friction_report.py \
+  --storage-root /absolute/path/to/SwingTradingAIAssistantData
+```
+
+It reads the `swing-analysis@v2` artifacts the runner already wrote and reports,
+per gate, how often it `FAIL`s, stays `PENDING`, or `PASS`es, plus the observed
+values for the numeric gates. It is read-only: no provider call, no credential,
+no threshold change.
+
+A gate that never passes across many sessions is a candidate for review — either
+its threshold is unreachable in the prevailing regime or the policy is calibrated
+for a different market. A gate that never fails is a candidate for tightening. The
+report is descriptive; it does not decide, and a small sample is not evidence that
+a threshold is wrong.
+
 ## Market breadth trend
 
 A zero-candidate week should be explainable, not mysterious. After every scan the
