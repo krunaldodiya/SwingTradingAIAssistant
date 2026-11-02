@@ -522,15 +522,24 @@ python scripts/gate_friction_report.py \
 ```
 
 It reads the `swing-analysis@v2` artifacts the runner already wrote and reports,
-per gate, how often it `FAIL`s, stays `PENDING`, or `PASS`es, plus the observed
-values for the numeric gates. It is read-only: no provider call, no credential,
-no threshold change.
+per gate, how often it `FAIL`s, stays `PENDING`, `PASS`es, or is `UNAVAILABLE`.
+
+Three honesty rules shape the numbers:
+
+- Only `swing-analysis@v2` documents with `swing-analysis-policy@v1` members are
+  counted, so thresholds from different policy versions are never pooled.
+- An unreadable or unsupported artifact is counted and reported, never dropped:
+  the output prints `INCOMPLETE EVIDENCE` and exits `3`. Exit `1` means no gate row
+  was counted at all, so an empty result can never read as a clean one.
+- `CANDLE_BODY_QUALITY` is conjunctive (bullish **and** body at least 60%), so
+  bearish observations are reported separately instead of inflating a "body
+  percent" distribution that the 60% threshold cannot fix.
 
 A gate that never passes across many sessions is a candidate for review — either
 its threshold is unreachable in the prevailing regime or the policy is calibrated
 for a different market. A gate that never fails is a candidate for tightening. The
-report is descriptive; it does not decide, and a small sample is not evidence that
-a threshold is wrong.
+report is descriptive: it does not decide, and a handful of candidate rows is not
+evidence that a threshold is wrong.
 
 ## Market breadth trend
 
