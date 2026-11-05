@@ -187,7 +187,10 @@ def _load_retained_bars(
         except (KeyError, ArithmeticError, ValueError):
             rejected += 1
             continue
-        if low <= 0 or close <= 0 or high < low:
+        if not all(value.is_finite() for value in (high, low, close)):
+            rejected += 1
+            continue
+        if low <= 0 or close <= 0 or high < low or close > high or close < low:
             rejected += 1
             continue
         bars[session] = {"high": high, "low": low, "close": close}
@@ -211,9 +214,13 @@ def _drop_implausible_moves(
         if previous_close is not None:
             upper = previous_close * (Decimal("1") + _MAX_SESSION_MOVE)
             lower = previous_close * (Decimal("1") - _MAX_SESSION_MOVE)
-            if bar["high"] > upper or bar["low"] < lower:
+            if (
+                bar["high"] > upper
+                or bar["low"] < lower
+                or bar["close"] > upper
+                or bar["close"] < lower
+            ):
                 dropped += 1
-                previous_close = bar["close"]
                 continue
         kept[session] = bar
         previous_close = bar["close"]

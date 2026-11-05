@@ -302,3 +302,56 @@ def test_cli_track_subcommand(
     captured = capsys.readouterr()
     assert code == 0
     assert "paper-tracking-report@v1" in captured.out
+
+
+def test_close_outside_the_reported_range_is_rejected(tmp_path: Path) -> None:
+    """The exit price drives the reported multiple, so it must lie inside the bar."""
+    _write_session_cache(
+        tmp_path,
+        "INE000A01001",
+        [{"session": "2026-10-12", "high": 110, "low": 100, "close": 400}],
+    )
+
+    bars, rejected = _load_retained_bars(tmp_path, "INE000A01001", "NSE")
+
+    assert bars == {}
+    assert rejected == 1
+
+
+def test_non_finite_values_are_rejected(tmp_path: Path) -> None:
+    _write_session_cache(
+        tmp_path,
+        "INE000A01001",
+        [{"session": "2026-10-12", "high": "NaN", "low": 100, "close": 105}],
+    )
+
+    bars, rejected = _load_retained_bars(tmp_path, "INE000A01001", "NSE")
+
+    assert bars == {}
+    assert rejected == 1
+
+
+def test_dropped_bar_does_not_become_the_next_anchor() -> None:
+    """A distrusted close must not shift the band that judges later sessions."""
+    bars = {
+        date(2026, 10, 12): {
+            "high": Decimal("110"),
+            "low": Decimal("100"),
+            "close": Decimal("105"),
+        },
+        date(2026, 10, 13): {
+            "high": Decimal("130"),
+            "low": Decimal("100"),
+            "close": Decimal("200"),
+        },
+        date(2026, 10, 14): {
+            "high": Decimal("104"),
+            "low": Decimal("96"),
+            "close": Decimal("100"),
+        },
+    }
+
+    kept, dropped = _drop_implausible_moves(bars)
+
+    assert dropped == 1
+    assert date(2026, 10, 14) in kept
