@@ -168,13 +168,6 @@ echo "$(date -Is) benchmark_freshness_exit=$freshness_code" >> "$LOG/scan-$STAMP
   --log-scan "$PAGE" --output json \
   > "$LOG/paper-tracking-$STAMP.json" 2> "$LOG/paper-tracking-$STAMP.err"
 echo "$(date -Is) paper_tracking_exit=$?" >> "$LOG/scan-$STAMP.err"
-
-# Deterministic pass report. One factual page per pass so the artifacts are
-# readable without an agent. It states only recorded values, never advice.
-"$REPO/.venv/bin/python" "$REPO/scripts/pass_report.py" \
-  --storage-root "$STORE" \
-  > "$LOG/report-$STAMP.md" 2> "$LOG/report-$STAMP.err"
-echo "$(date -Is) pass_report_exit=$?" >> "$LOG/scan-$STAMP.err"
 SYMBOLS=$(
   python3 - "$PAGE" <<'PY'
 import json
@@ -216,6 +209,14 @@ else
     > "$LIFECYCLE" 2> "$LOG/lifecycle-$STAMP.err"
   echo "$(date -Is) lifecycle_exit=$?" >> "$LOG/lifecycle-$STAMP.err"
 fi
+
+# Deterministic pass report. Written after analysis, dossiers and lifecycle so it
+# renders this pass, not the previous one. Facts only, never advice, and it must
+# never fail the pass.
+"$REPO/.venv/bin/python" "$REPO/scripts/pass_report.py" \
+  --storage-root "$STORE" --artifacts-dir "$LOG" --date "$STAMP" \
+  > "$LOG/report-$STAMP.md" 2> "$LOG/report-$STAMP.err"
+echo "$(date -Is) pass_report_exit=$?" >> "$LOG/scan-$STAMP.err"
 
 # Every real pass must reach the owner's private ledger. This stage is what keeps
 # an unattended run from producing evidence with no research record. It skips a

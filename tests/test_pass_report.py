@@ -148,3 +148,61 @@ def test_missing_analysis_is_reported_not_invented(tmp_path: Path) -> None:
 
     assert "NOT_ANALYSED" in text
     assert "analysis missing" in text
+
+
+def test_analysis_from_another_scan_is_not_joined(tmp_path: Path) -> None:
+    """An overwritten scan must not inherit the previous pass's gates."""
+    directory = tmp_path / "daily-scan"
+    page = _scan_page()
+    page["scan"]["result_identity_sha256"] = "b" * 64  # type: ignore[index]
+    _write(directory, "scan-2026-11-04.json", page)
+    analysis = _analysis()
+    analysis["scan_result_identity_sha256"] = "c" * 64
+    _write(directory, "analysis-2026-11-04.json", analysis)
+
+    text = report.render(report.build_report(tmp_path, "2026-11-04"))
+
+    assert "NOT_ANALYSED" in text
+    assert "FAIL VOLUME_EXPANSION" not in text
+
+
+def test_upstream_stopped_pass_is_not_called_a_zero_candidate_market(
+    tmp_path: Path,
+) -> None:
+    directory = tmp_path / "daily-scan"
+    page = _scan_page(candidates=0)
+    scan = page["scan"]
+    scan["eligible_count"] = 0  # type: ignore[index]
+    scan["ineligible_count"] = 0  # type: ignore[index]
+    scan["unknown_count"] = 200  # type: ignore[index]
+    _write(directory, "scan-2026-11-04.json", page)
+
+    text = report.render(report.build_report(tmp_path, "2026-11-04"))
+
+    assert "stopped upstream" in text
+    assert "No candidate passed the causal and safety screen" not in text
+
+
+def test_empty_lifecycle_file_counts_as_missing(tmp_path: Path) -> None:
+    directory = tmp_path / "daily-scan"
+    _write(directory, "scan-2026-11-04.json", _scan_page())
+    (directory / "lifecycle-2026-11-04.json").write_text("")
+
+    text = report.render(report.build_report(tmp_path, "2026-11-04"))
+
+    assert "lifecycle missing" in text
+
+
+def test_artifacts_directory_override(tmp_path: Path) -> None:
+    logs = tmp_path / "elsewhere"
+    _write(logs, "scan-2026-11-04.json", _scan_page())
+
+    data = report.build_report(tmp_path, "2026-11-04", logs)
+
+    assert data is not None and data["session"] == "2026-11-04"
+
+
+def test_basic_iso_date_is_rejected(tmp_path: Path) -> None:
+    root = _fixture(tmp_path)
+
+    assert report.main(["--storage-root", str(root), "--date", "20261104"]) == 2

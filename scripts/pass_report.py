@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from datetime import date
 from pathlib import Path
@@ -54,11 +55,14 @@ def _load(path: Path) -> Json | None:
     return _mapping(payload)
 
 
+_DAY = re.compile(r"\d{4}-\d{2}-\d{2}\Z")
+
+
 def _latest_session(directory: Path) -> str | None:
     days = sorted(
-        path.stem.removeprefix("scan-")
+        day
         for path in directory.glob("scan-*.json")
-        if path.stem.removeprefix("scan-")
+        if _DAY.match(day := path.stem.removeprefix("scan-"))
     )
     return days[-1] if days else None
 
@@ -108,8 +112,10 @@ def _candidate_rows(analysis: Json | None, scan: Json) -> list[Json]:
     return rows
 
 
-def build_report(storage_root: Path, day: str | None) -> Json | None:
-    directory = storage_root / "daily-scan"
+def build_report(
+    storage_root: Path, day: str | None, artifacts_dir: Path | None = None
+) -> Json | None:
+    directory = artifacts_dir or storage_root / "daily-scan"
     session = day or _latest_session(directory)
     if session is None:
         return None
@@ -117,7 +123,11 @@ def build_report(storage_root: Path, day: str | None) -> Json | None:
     scan = _scan(directory, session)
     if scan is None or page is None:
         return None
-    analysis = _load(directory / f"analysis-{session}.json")
+    analysis_raw = _load(directory / f"analysis-{session}.json")
+    scan_identity = _text(scan.get("result_identity_sha256"))
+    analysis_identity = _text((analysis_raw or {}).get("scan_result_identity_sha256"))
+    # An overwritten scan must not inherit a previous analysis of the same date.
+    analysis = analysis_raw if analysis_identity == scan_identity else None
     breadth = _load(directory / f"breadth-{session}.json")
     freshness = _load(directory / f"benchmark-freshness-{session}.json")
     regime = _mapping(scan.get("market_regime"))
@@ -135,8 +145,8 @@ def build_report(storage_root: Path, day: str | None) -> Json | None:
         "outcomes": _mapping((analysis or {}).get("policy")).get("outcome_counts"),
         "rows": _candidate_rows(analysis, scan),
         "analysis_present": analysis is not None,
-        "lifecycle_present": (directory / f"lifecycle-{session}.json").is_file(),
-        "research_present": (directory / f"research-{session}.json").is_file(),
+        "lifecycle_present": _load(directory / f"lifecycle-{session}.json") is not None,
+        "research_present": _load(directory / f"research-{session}.json") is not None,
         "breadth": {
             "present": breadth is not None,
             "sessions": _count((breadth or {}).get("sessions_observed")),
@@ -152,6 +162,19 @@ def build_report(storage_root: Path, day: str | None) -> Json | None:
             "expected": _text((freshness or {}).get("expected_session")),
         },
     }
+
+
+def _admits_market_facts(report: Json) -> bool:
+    """False when no member reached a safety outcome.
+
+    Such a page records an upstream stop (for example a rejected credential), not
+    a market observation, and must not be described as one.
+    """
+    return bool(
+        _count(report.get("candidates"))
+        or _count(report.get("eligible"))
+        or _count(report.get("ineligible"))
+    )
 
 
 def gate_bullet(row: Json) -> str | None:
@@ -225,16 +248,23 @@ def render(report: Json) -> str:
             for bullet in (gate_bullet(row) for row in rows)
             if bullet is not None
         )
-    else:
+    elif _admits_market_facts(report):
         lines.append("No candidate passed the causal and safety screen this session.")
+    else:
+        lines.append(
+            "**The pass stopped upstream:** no member reached a safety outcome, so "
+            "this page is not a zero-candidate market result."
+        )
 
     lines.extend(["", "## Market breadth", ""])
     if breadth.get("present"):
         change = breadth.get("change")
         lines.append(
             f"- {breadth.get('sessions')} completed sessions, trend "
-            f"`{breadth.get('trend')}`; uptrend {breadth.get('first')} -> "
-            f"{breadth.get('last')} ({change} pp)."
+            f"`{breadth.get('trend') or 'unavailable'}`; uptrend "
+            f"{breadth.get('first') or 'unavailable'} -> "
+            f"{breadth.get('last') or 'unavailable'} "
+            f"({change if change is not None else 'unavailable'} pp)."
         )
     else:
         lines.append("- No breadth artifact for this session.")
@@ -263,6 +293,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--storage-root", required=True)
     parser.add_argument("--date")
+    parser.add_argument("--artifacts-dir")
     parser.add_argument("--output", choices=("markdown", "json"), default="markdown")
     args = parser.parse_args(argv)
 
@@ -272,12 +303,16 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     if args.date:
         try:
+            if len(args.date) != 10:
+                raise ValueError(args.date)
             date.fromisoformat(args.date)
         except ValueError:
             print("pass_report_invalid: date must be YYYY-MM-DD", file=sys.stderr)
             return 2
 
-    report = build_report(root, args.date)
+    report = build_report(
+        root, args.date, Path(args.artifacts_dir) if args.artifacts_dir else None
+    )
     if report is None:
         print("pass_report_unavailable: no scan page for that date", file=sys.stderr)
         return 1
