@@ -116,7 +116,14 @@ def test_manifests_record_the_archive_and_counts(tmp_path: Path) -> None:
     sums = (staging / "upload" / "SHA256SUMS").read_text().split()
     assert sums[1] == "SwingTradingAIAssistantData-20261105.tar.gz.gpg"
     assert len(sums[0]) == 64
-    assert (staging / "upload" / "RESTORE.md").read_text().count("20261105") >= 1
+    restore = (staging / "upload" / "RESTORE.md").read_text()
+    assert restore.count("20261105") >= 1
+    # The key is not uploaded by default, so the instructions must say so.
+    assert "held offline" in restore
+    assert verification["recovery_key_file"] is None
+    # Only the encrypted archive is retained, never the plaintext one.
+    assert not (staging / "SwingTradingAIAssistantData-20261105.tar.gz").exists()
+    assert (staging / "SwingTradingAIAssistantData-20261105.tar.gz.gpg").exists()
 
 
 def test_previous_snapshot_is_not_deleted_before_upload_succeeds(
@@ -200,3 +207,69 @@ def test_invalid_input_is_rejected(tmp_path: Path) -> None:
 
     no_key = _run(tmp_path, "--storage-root", str(root))
     assert no_key.returncode == 2
+
+
+def test_failed_remote_verification_keeps_the_previous_snapshot(tmp_path: Path) -> None:
+    """Deleting the old archive before verification is how you lose a backup."""
+    root = _data_root(tmp_path)
+    log = tmp_path / "rclone.log"
+    stub = tmp_path / "rclone-bad-check"
+    stub.write_text(
+        "#!/usr/bin/env bash\n"
+        f'printf "%s\\n" "$*" >> "{log}"\n'
+        'case "$1" in\n'
+        '  lsf) echo "SwingTradingAIAssistantData-19990101.tar.gz.gpg"; exit 0 ;;\n'
+        "  check) exit 1 ;;\n"
+        "  *) exit 0 ;;\n"
+        "esac\n"
+    )
+    stub.chmod(0o755)
+
+    result = _run(
+        tmp_path,
+        "--storage-root",
+        str(root),
+        "--remote",
+        "stub:backup",
+        "--passphrase-file",
+        str(_passphrase(tmp_path)),
+        "--stamp",
+        "20261105",
+        env={"BACKUP_RCLONE_BIN": str(stub)},
+    )
+
+    assert result.returncode == 1
+    assert "previous snapshot was left in place" in result.stderr
+    assert not any(
+        call.startswith("deletefile") for call in log.read_text().splitlines()
+    )
+
+
+def test_caller_staging_directory_keeps_unrelated_files(tmp_path: Path) -> None:
+    """A user-supplied staging directory is not ours to delete wholesale."""
+    root = _data_root(tmp_path)
+    stub, _ = _stub_rclone(tmp_path)
+    staging = tmp_path / "my-backups"
+    staging.mkdir()
+    keeper = staging / "keep-me.txt"
+    keeper.write_text("important")
+
+    result = _run(
+        tmp_path,
+        "--storage-root",
+        str(root),
+        "--remote",
+        "stub:backup",
+        "--passphrase-file",
+        str(_passphrase(tmp_path)),
+        "--stamp",
+        "20261105",
+        "--staging",
+        str(staging),
+        env={"BACKUP_RCLONE_BIN": str(stub)},
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert keeper.read_text() == "important"
+    assert not (staging / "upload").exists()
+    assert not (staging / "SwingTradingAIAssistantData-20261105.tar.gz").exists()

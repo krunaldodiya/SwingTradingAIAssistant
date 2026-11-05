@@ -1,15 +1,13 @@
 #!/usr/bin/env bash
 # Encrypted, verified backup of the private data root to an rclone remote.
 #
-# The procedure used to live only in a RESTORE.md on the remote, so every backup
-# was a remembered sequence. This script makes it repeatable:
+#   create archive -> encrypt -> verify decrypt -> write manifests -> upload
+#   -> verify the remote -> replace the previous snapshot -> remove staging
 #
-#   create archive -> encrypt -> verify decrypt -> write manifests
-#   -> upload -> verify remote -> remove staging
-#
-# It never uploads the passphrase unless asked, and it never deletes the remote
-# passphrase file. Replacing the previous snapshot is deliberate: one snapshot
-# per remote folder, so a restore can never pick a stale archive by accident.
+# The previous snapshot is replaced only after the uploaded bytes are verified,
+# so a failed verification can never leave the remote without a trusted backup.
+# The passphrase is never uploaded unless asked, and the remote passphrase file
+# is never deleted.
 #
 # Exit codes: 0 success, 1 failure, 2 invalid input.
 set -uo pipefail
@@ -22,6 +20,10 @@ RCLONEBIN=${BACKUP_RCLONE_BIN:-rclone}
 TARBIN=${BACKUP_TAR_BIN:-tar}
 STAMP=${BACKUP_STAMP:-$(date -u +%Y%m%d)}
 STAGING=""
+STAGING_OWNED=0
+UPLOAD_DIR=""
+ARCHIVE=""
+ENCRYPTED=""
 KEEP_LOCAL=0
 DRY_RUN=0
 UPLOAD_KEY=0
@@ -35,7 +37,8 @@ Usage: scripts/backup_data_root.sh --passphrase-file PATH [options]
   --remote DEST           rclone destination (default gdrive:SwingTradingAIAssistantData)
   --passphrase-file PATH  file holding the gpg passphrase (required)
   --stamp YYYYMMDD        snapshot label (default today, UTC)
-  --staging DIR           working directory (default a fresh temp dir)
+  --staging DIR           working directory (default a fresh temp dir). Only the
+                          files this script creates are removed from a caller dir.
   --keep-local            keep the encrypted archive after upload
   --upload-key            also upload the passphrase file (legacy behaviour)
   --dry-run               print the plan and exit without writing anything
@@ -54,7 +57,14 @@ info() {
 
 cleanup() {
   if [ -n "$STAGING" ] && [ "$DRY_RUN" -eq 0 ] && [ "$KEEP_LOCAL" -eq 0 ]; then
-    rm -rf "$STAGING"
+    if [ "$STAGING_OWNED" -eq 1 ]; then
+      rm -rf "$STAGING"
+    else
+      [ -n "$UPLOAD_DIR" ] && rm -rf "$UPLOAD_DIR"
+      [ -n "$ARCHIVE" ] && rm -f "$STAGING/$ARCHIVE"
+      [ -n "$ENCRYPTED" ] && rm -f "$STAGING/$ENCRYPTED"
+      rm -f "$STAGING/verify.tar.gz"
+    fi
   fi
 }
 trap cleanup EXIT
@@ -92,7 +102,7 @@ if [ "$DRY_RUN" -eq 1 ]; then
   info "dry run, nothing will be written"
   info "source $STORAGE_ROOT ($SIZE, $FILES files, $DIRS dirs, $LINKS symlinks)"
   info "archive $ENCRYPTED"
-  info "remote $REMOTE (previous snapshot in that folder will be replaced)"
+  info "remote $REMOTE (previous snapshot in that folder is replaced after verification)"
   if [ -n "$PASSPHRASE_FILE" ] && [ -r "$PASSPHRASE_FILE" ]; then
     info "passphrase file readable"
   else
@@ -106,8 +116,10 @@ fi
 
 if [ -z "$STAGING" ]; then
   STAGING=$(mktemp -d) || fail "cannot create staging directory"
+  STAGING_OWNED=1
 else
   mkdir -p "$STAGING" || fail "cannot create staging directory"
+  STAGING_OWNED=0
 fi
 chmod 700 "$STAGING"
 UPLOAD_DIR="$STAGING/upload"
@@ -133,9 +145,24 @@ ENTRIES=$("$TARBIN" -tzf "$STAGING/verify.tar.gz" | wc -l)
 EXPECTED=$((FILES + DIRS))
 [ "$ENTRIES" -ge "$EXPECTED" ] || fail "archive lists $ENTRIES entries, expected at least $EXPECTED"
 rm -f "$STAGING/verify.tar.gz"
+# The plaintext archive has served its purpose; only the encrypted copy is kept.
+rm -f "$STAGING/$ARCHIVE"
 
 ARCHIVE_HASH=$(sha256sum "$STAGING/$ENCRYPTED" | cut -d' ' -f1)
 SNAPSHOT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+if [ "$UPLOAD_KEY" -eq 1 ]; then
+  KEY_FILE_NAME="RECOVERY-KEY.txt"
+  KEY_LINE="\"recovery_key_file\": \"RECOVERY-KEY.txt\","
+  RESTORE_DOWNLOADS="Download the archive, SHA256SUMS and RECOVERY-KEY.txt from this folder."
+  RESTORE_DECRYPT="--passphrase-file RECOVERY-KEY.txt"
+else
+  KEY_FILE_NAME=""
+  KEY_LINE="\"recovery_key_file\": null,
+  \"recovery_key_storage\": \"OFFLINE - not stored beside the archive\","
+  RESTORE_DOWNLOADS="Download the archive and SHA256SUMS. The passphrase is held offline, not in this folder."
+  RESTORE_DECRYPT="--passphrase-file <your recovery key>"
+fi
 
 printf '%s  %s\n' "$ARCHIVE_HASH" "$ENCRYPTED" > "$UPLOAD_DIR/SHA256SUMS"
 cat > "$UPLOAD_DIR/VERIFICATION.json" <<JSON
@@ -144,8 +171,8 @@ cat > "$UPLOAD_DIR/VERIFICATION.json" <<JSON
   "archive_bytes": $(stat -c %s "$STAGING/$ENCRYPTED"),
   "archive_sha256": "$ARCHIVE_HASH",
   "decryption_verified": true,
+  $KEY_LINE
   "encryption": "gpg symmetric AES256",
-  "recovery_key_file": "RECOVERY-KEY.txt",
   "snapshot_utc": "$SNAPSHOT",
   "source": "$STORAGE_ROOT",
   "source_directories_including_root": $DIRS,
@@ -163,12 +190,11 @@ Snapshot UTC: $SNAPSHOT. Complete source folder including hidden files:
 $FILES regular files and $DIRS directories including the root; $LINKS symbolic links.
 The archive was encrypted locally and its decryption plus tar listing were verified.
 
-Download the archive, SHA256SUMS and RECOVERY-KEY.txt from this folder. Restore into a NEW empty directory:
+$RESTORE_DOWNLOADS Restore into a NEW empty directory:
 
 \`\`\`sh
 sha256sum --check SHA256SUMS
-chmod 600 RECOVERY-KEY.txt
-gpg --batch --pinentry-mode loopback --passphrase-file RECOVERY-KEY.txt --output $ARCHIVE --decrypt $ENCRYPTED
+gpg --batch --pinentry-mode loopback $RESTORE_DECRYPT --output $ARCHIVE --decrypt $ENCRYPTED
 mkdir -m 700 restored-data
 tar --extract --gzip --preserve-permissions --file $ARCHIVE --directory restored-data
 \`\`\`
@@ -179,27 +205,39 @@ RESTORE
 
 cp "$STAGING/$ENCRYPTED" "$UPLOAD_DIR/" || fail "cannot stage encrypted archive"
 if [ "$UPLOAD_KEY" -eq 1 ]; then
-  cp "$PASSPHRASE_FILE" "$UPLOAD_DIR/RECOVERY-KEY.txt" || fail "cannot stage passphrase"
+  cp "$PASSPHRASE_FILE" "$UPLOAD_DIR/$KEY_FILE_NAME" || fail "cannot stage passphrase"
   info "WARNING: the passphrase is being uploaded beside the archive"
 fi
 
 info "uploading to $REMOTE"
 "$RCLONEBIN" copy "$UPLOAD_DIR" "$REMOTE" --stats-one-line || fail "upload failed"
 
-# Replace the previous snapshot without touching the remote passphrase file.
-for old in $("$RCLONEBIN" lsf "$REMOTE" --files-only 2>/dev/null | grep -E '\.tar\.gz\.gpg$' || true); do
-  if [ "$old" != "$ENCRYPTED" ]; then
-    "$RCLONEBIN" deletefile "$REMOTE/$old" || fail "cannot remove previous snapshot $old"
-    info "removed previous snapshot $old"
-  fi
-done
+if ! REMOTE_FILES=$("$RCLONEBIN" lsf "$REMOTE" --files-only); then
+  fail "cannot list $REMOTE; leaving the previous snapshot untouched"
+fi
+OLD_ARCHIVES=()
+while IFS= read -r name; do
+  [ -n "$name" ] || continue
+  case "$name" in
+    *.tar.gz.gpg) [ "$name" = "$ENCRYPTED" ] || OLD_ARCHIVES+=("$name") ;;
+  esac
+done <<< "$REMOTE_FILES"
 
+# Verify the uploaded bytes before removing anything from the remote.
 EXCLUDE=()
 if [ "$UPLOAD_KEY" -eq 0 ]; then
-  EXCLUDE=(--exclude "RECOVERY-KEY.txt")
+  EXCLUDE+=(--exclude "/RECOVERY-KEY.txt")
 fi
+for old in "${OLD_ARCHIVES[@]}"; do
+  EXCLUDE+=(--exclude "/$old")
+done
 "$RCLONEBIN" check "$UPLOAD_DIR" "$REMOTE" --checksum "${EXCLUDE[@]}" \
-  || fail "remote verification failed"
+  || fail "remote verification failed; the previous snapshot was left in place"
+
+for old in "${OLD_ARCHIVES[@]}"; do
+  "$RCLONEBIN" deletefile "$REMOTE/$old" || fail "cannot remove previous snapshot $old"
+  info "removed previous snapshot $old"
+done
 
 info "done: $REMOTE/$ENCRYPTED"
 info "sha256 $ARCHIVE_HASH"
