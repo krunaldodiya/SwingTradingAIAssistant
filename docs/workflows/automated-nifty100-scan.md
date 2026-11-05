@@ -509,6 +509,37 @@ python scripts/write_scan_ledger_entry.py \
   --ledger-root "$LEDGER" --status recorded --backfill
 ```
 
+## Forward paper observation
+
+Every pass registers its research candidates and follows them forward, so the
+screen can be measured instead of argued about:
+
+```bash
+signal-decisions track --storage-root /absolute/path/to/SwingTradingAIAssistantData \
+  --log-scan /absolute/path/to/daily-scan/scan-YYYY-MM-DD.json --output table
+```
+
+The runner does this automatically after each scan and writes
+`paper-tracking-YYYY-MM-DD.json`. There is no holding, no order, and no
+performance claim: this is measurement only.
+
+| Rule | Value |
+|---|---|
+| Entry | the candidate's event-session price |
+| Stop | its display stop reference |
+| Target | 2R |
+| Horizon | 10 completed sessions, then `WINDOW_EXPIRED` |
+| Data source | the scan's own retained per-session bars, never `adjusted_daily` |
+| Integrity guard | a bar whose session range leaves ±25% of the previous close is discarded as an adjusted/unadjusted splice |
+
+The data-source rule matters: entry price comes from a live quote, so evaluating
+it against an adjusted series mixes bases and produces impossible multiples. The
+guard exists because that failure was observed (a `+40R` result for a stock that
+never moved 40 risk units).
+
+A pass may be logged as an envelope (`{decision_evidence_handle, scan}`); the
+command accepts either that or a bare scan result.
+
 ## Gate friction report
 
 A run of zero qualified candidates cannot by itself distinguish three causes: the

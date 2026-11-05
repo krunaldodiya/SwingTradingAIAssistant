@@ -80,6 +80,11 @@ def log_candidates_from_scan(
     registry_dir = storage_root / "paper-observations-v1"
     registry_dir.mkdir(mode=0o700, exist_ok=True)
 
+    # A retained page is stored as an envelope holding the scan; accept either
+    # shape so "--log-scan page.json" cannot silently log nothing.
+    inner = scan_result.get("scan")
+    if isinstance(inner, dict):
+        scan_result = cast(dict[str, object], inner)
     candidates = cast(list[dict[str, object]], scan_result.get("candidates", []))
     logged: list[dict[str, object]] = []
 
@@ -143,42 +148,76 @@ def log_candidates_from_scan(
     return logged
 
 
-def _load_historical_bars_for_symbol(
-    storage_root: Path, symbol: str
-) -> dict[date, dict[str, Any]]:
-    bars: dict[date, dict[str, Any]] = {}
-    adjusted_dir = storage_root / "adjusted_daily" / "provider=bharatstock"
-    if not adjusted_dir.exists():
-        return bars
+_MAX_SESSION_MOVE: Final = Decimal("0.25")
+_HORIZON_SESSIONS: Final = 10
 
-    for pq_file in adjusted_dir.rglob("*.parquet"):
+
+def _load_retained_bars(
+    storage_root: Path, isin: str, exchange: str
+) -> tuple[dict[date, dict[str, Any]], int]:
+    """Read the bars the scan itself retained for this instrument.
+
+    ``adjusted_daily`` is maintained by a separate pipeline and can lag the
+    sessions being tracked, so forward evaluation must not depend on it. The
+    retained per-session cache always ends at a session the scan observed.
+    Returns the bars and the number of unreadable records rejected.
+    """
+    base = (
+        storage_root
+        / "bharatstock-session-cache-v1"
+        / f"isin={isin}"
+        / f"exchange={exchange}"
+    )
+    bars: dict[date, dict[str, Any]] = {}
+    rejected = 0
+    if not isin or not base.is_dir():
+        return bars, rejected
+    for path in sorted(base.glob("session=*.json")):
         try:
-            table: Any = _PARQUET.read_table(pq_file)
-            symbols_col = table["symbol"].to_pylist()
-            if symbol not in symbols_col:
-                continue
-            sessions = table["session"].to_pylist()
-            highs = table["high"].to_pylist()
-            lows = table["low"].to_pylist()
-            closes = table["close"].to_pylist()
-            for s, row_symbol, bar_high, bar_low, bar_close in zip(
-                sessions,
-                symbols_col,
-                highs,
-                lows,
-                closes,
-                strict=False,
-            ):
-                if row_symbol != symbol or not isinstance(s, date):
-                    continue
-                bars[s] = {
-                    "high": Decimal(str(bar_high)),
-                    "low": Decimal(str(bar_low)),
-                    "close": Decimal(str(bar_close)),
-                }
+            payload: object = json.loads(path.read_text())
         except (OSError, ValueError):
+            rejected += 1
             continue
-    return bars
+        row = cast(dict[str, object], payload) if isinstance(payload, dict) else {}
+        try:
+            session = date.fromisoformat(str(row["session"]))
+            high = Decimal(str(row["high"]))
+            low = Decimal(str(row["low"]))
+            close = Decimal(str(row["close"]))
+        except (KeyError, ArithmeticError, ValueError):
+            rejected += 1
+            continue
+        if low <= 0 or close <= 0 or high < low:
+            rejected += 1
+            continue
+        bars[session] = {"high": high, "low": low, "close": close}
+    return bars, rejected
+
+
+def _drop_implausible_moves(
+    bars: dict[date, dict[str, Any]],
+) -> tuple[dict[date, dict[str, Any]], int]:
+    """Discard bars whose session range is impossible for an NSE instrument.
+
+    Indian circuit limits cap a session's move well below 25%. A bar outside that
+    band is an adjusted/unadjusted splice or a mis-joined row, and reading it as
+    price action produces absurd multiples (the failure this guard exists for).
+    """
+    kept: dict[date, dict[str, Any]] = {}
+    dropped = 0
+    previous_close: Decimal | None = None
+    for session in sorted(bars):
+        bar = bars[session]
+        if previous_close is not None:
+            upper = previous_close * (Decimal("1") + _MAX_SESSION_MOVE)
+            lower = previous_close * (Decimal("1") - _MAX_SESSION_MOVE)
+            if bar["high"] > upper or bar["low"] < lower:
+                dropped += 1
+                previous_close = bar["close"]
+                continue
+        kept[session] = bar
+        previous_close = bar["close"]
+    return kept, dropped
 
 
 def _evaluate_forward_trade(
@@ -191,18 +230,21 @@ def _evaluate_forward_trade(
     risk = Decimal(str(record.get("risk_per_share_inr", "0")))
     target_2r = Decimal(str(record.get("target_2r_inr", "0")))
 
-    forward_sessions = sorted([s for s in bars if s > entry_session])
+    forward_sessions = sorted([s for s in bars if s > entry_session])[
+        :_HORIZON_SESSIONS
+    ]
     max_r = Decimal("0.0")
-    sessions_held = len(forward_sessions)
+    sessions_held = 0
     status = "ACTIVE"
     exit_session = None
     exit_price = None
     return_r = None
 
-    for s in forward_sessions:
+    for held, s in enumerate(forward_sessions, 1):
         b = bars[s]
         high: Decimal = b["high"]
         close: Decimal = b["close"]
+        sessions_held = held
 
         r_reached = (high - entry_price) / risk if risk > 0 else Decimal("0")
         if r_reached > max_r:
@@ -222,7 +264,7 @@ def _evaluate_forward_trade(
             return_r = Decimal("2.0")
             break
 
-    if status == "ACTIVE" and sessions_held >= 10:
+    if status == "ACTIVE" and len(forward_sessions) >= _HORIZON_SESSIONS:
         status = "WINDOW_EXPIRED"
         last_s = forward_sessions[-1]
         last_close: Decimal = bars[last_s]["close"]
@@ -269,8 +311,15 @@ def update_paper_trades(storage_root: Path) -> list[dict[str, object]]:
             updated_records.append(record)
             continue
 
-        symbol = str(record.get("symbol", ""))
-        bars = _load_historical_bars_for_symbol(storage_root, symbol)
+        isin = str(record.get("isin") or "")
+        exchange = str(record.get("exchange") or "NSE")
+        bars, unreadable = _load_retained_bars(storage_root, isin, exchange)
+        bars, implausible = _drop_implausible_moves(bars)
+        # Recorded before evaluation so the identity digest covers it.
+        record["data_quality"] = {
+            "unreadable_records": unreadable,
+            "implausible_bars": implausible,
+        }
         updated = _evaluate_forward_trade(record, bars)
 
         trade_file.write_bytes(_canonical_bytes(updated))
