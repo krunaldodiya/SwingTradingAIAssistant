@@ -160,6 +160,14 @@ freshness_code=$?
 echo "$(date -Is) benchmark_freshness_exit=$freshness_code" >> "$LOG/scan-$STAMP.err"
 # An unusable advisory must never reach the writer as a malformed artifact.
 [ -s "$FRESHNESS" ] || rm -f "$FRESHNESS"
+
+# Forward paper observation (G11). Registers today's candidates and evaluates
+# their recorded stop/target against retained bars. This is measurement, never
+# advice, and it must never fail or delay the pass.
+"$REPO/.venv/bin/signal-decisions" track --storage-root "$STORE" \
+  --log-scan "$PAGE" --output json \
+  > "$LOG/paper-tracking-$STAMP.json" 2> "$LOG/paper-tracking-$STAMP.err"
+echo "$(date -Is) paper_tracking_exit=$?" >> "$LOG/scan-$STAMP.err"
 SYMBOLS=$(
   python3 - "$PAGE" <<'PY'
 import json

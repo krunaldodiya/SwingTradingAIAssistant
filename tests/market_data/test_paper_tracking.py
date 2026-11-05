@@ -7,15 +7,14 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
 
-import pyarrow as pa
-import pyarrow.parquet as pq
 import pytest
 
 from swing_trading_ai_assistant.market_data.paper_tracking import (
     RECORD_SCHEMA,
     REPORT_SCHEMA,
+    _drop_implausible_moves,
     _evaluate_forward_trade,
-    _load_historical_bars_for_symbol,
+    _load_retained_bars,
     format_tracking_table,
     generate_tracking_report,
     log_candidates_from_scan,
@@ -27,58 +26,84 @@ from swing_trading_ai_assistant.market_data.signal_decisions_v3_cli import (
 _NOW = datetime(2026, 10, 16, 10, 0, tzinfo=UTC)
 
 
-def _write_adjusted_forward_bars(
-    storage_root: Path, rows: list[dict[str, object]]
+def _write_session_cache(
+    storage_root: Path, isin: str, rows: list[dict[str, object]]
 ) -> None:
-    directory = storage_root / "adjusted_daily" / "provider=bharatstock" / "request-a"
-    directory.mkdir(parents=True, exist_ok=True)
-    table = pa.table(
-        {
-            "symbol": [row["symbol"] for row in rows],
-            "session": [row["session"] for row in rows],
-            "high": [row["high"] for row in rows],
-            "low": [row["low"] for row in rows],
-            "close": [row["close"] for row in rows],
-        }
+    directory = (
+        storage_root / "bharatstock-session-cache-v1" / f"isin={isin}" / "exchange=NSE"
     )
-    pq.write_table(table, directory / "data.parquet")
+    directory.mkdir(parents=True, exist_ok=True)
+    for row in rows:
+        session = row["session"]
+        (directory / f"session={session}.json").write_text(
+            json.dumps(
+                {
+                    "schema": "bharatstock-session-cache@v1",
+                    "isin": isin,
+                    "exchange": "NSE",
+                    "session": str(session),
+                    "high": str(row["high"]),
+                    "low": str(row["low"]),
+                    "close": str(row["close"]),
+                }
+            )
+        )
 
 
-def test_load_historical_bars_filters_to_requested_symbol(tmp_path: Path) -> None:
-    first = date(2026, 10, 12)
-    second = date(2026, 10, 13)
-    _write_adjusted_forward_bars(
+def test_load_retained_bars_reads_the_session_cache(tmp_path: Path) -> None:
+    _write_session_cache(
         tmp_path,
+        "INE000A01001",
         [
-            {"symbol": "ALPHA", "session": first, "high": 110, "low": 90, "close": 105},
-            {
-                "symbol": "ALPHA",
-                "session": second,
-                "high": 115,
-                "low": 95,
-                "close": 112,
-            },
-            {"symbol": "ZULU", "session": first, "high": 510, "low": 490, "close": 505},
-            {
-                "symbol": "ZULU",
-                "session": second,
-                "high": 515,
-                "low": 495,
-                "close": 512,
-            },
+            {"session": "2026-10-12", "high": 110, "low": 90, "close": 105},
+            {"session": "2026-10-13", "high": 115, "low": 95, "close": 112},
         ],
     )
 
-    bars = _load_historical_bars_for_symbol(tmp_path, "ALPHA")
+    bars, rejected = _load_retained_bars(tmp_path, "INE000A01001", "NSE")
 
-    assert bars == {
-        first: {"high": Decimal("110"), "low": Decimal("90"), "close": Decimal("105")},
-        second: {
-            "high": Decimal("115"),
-            "low": Decimal("95"),
-            "close": Decimal("112"),
+    assert rejected == 0
+    assert bars[date(2026, 10, 12)] == {
+        "high": Decimal("110"),
+        "low": Decimal("90"),
+        "close": Decimal("105"),
+    }
+
+
+def test_missing_isin_yields_no_bars_instead_of_borrowing_another_series(
+    tmp_path: Path,
+) -> None:
+    _write_session_cache(
+        tmp_path,
+        "INE000A01001",
+        [{"session": "2026-10-12", "high": 110, "low": 90, "close": 105}],
+    )
+
+    bars, rejected = _load_retained_bars(tmp_path, "", "NSE")
+
+    assert bars == {}
+    assert rejected == 0
+
+
+def test_impossible_session_range_is_dropped() -> None:
+    """A high far outside the circuit band is a splice, not price action."""
+    bars = {
+        date(2026, 10, 12): {
+            "high": Decimal("110"),
+            "low": Decimal("100"),
+            "close": Decimal("105"),
+        },
+        date(2026, 10, 13): {
+            "high": Decimal("1139"),
+            "low": Decimal("104"),
+            "close": Decimal("106"),
         },
     }
+
+    kept, dropped = _drop_implausible_moves(bars)
+
+    assert dropped == 1
+    assert date(2026, 10, 13) not in kept
 
 
 def _sample_scan_result() -> dict[str, object]:
@@ -277,3 +302,56 @@ def test_cli_track_subcommand(
     captured = capsys.readouterr()
     assert code == 0
     assert "paper-tracking-report@v1" in captured.out
+
+
+def test_close_outside_the_reported_range_is_rejected(tmp_path: Path) -> None:
+    """The exit price drives the reported multiple, so it must lie inside the bar."""
+    _write_session_cache(
+        tmp_path,
+        "INE000A01001",
+        [{"session": "2026-10-12", "high": 110, "low": 100, "close": 400}],
+    )
+
+    bars, rejected = _load_retained_bars(tmp_path, "INE000A01001", "NSE")
+
+    assert bars == {}
+    assert rejected == 1
+
+
+def test_non_finite_values_are_rejected(tmp_path: Path) -> None:
+    _write_session_cache(
+        tmp_path,
+        "INE000A01001",
+        [{"session": "2026-10-12", "high": "NaN", "low": 100, "close": 105}],
+    )
+
+    bars, rejected = _load_retained_bars(tmp_path, "INE000A01001", "NSE")
+
+    assert bars == {}
+    assert rejected == 1
+
+
+def test_dropped_bar_does_not_become_the_next_anchor() -> None:
+    """A distrusted close must not shift the band that judges later sessions."""
+    bars = {
+        date(2026, 10, 12): {
+            "high": Decimal("110"),
+            "low": Decimal("100"),
+            "close": Decimal("105"),
+        },
+        date(2026, 10, 13): {
+            "high": Decimal("130"),
+            "low": Decimal("100"),
+            "close": Decimal("200"),
+        },
+        date(2026, 10, 14): {
+            "high": Decimal("104"),
+            "low": Decimal("96"),
+            "close": Decimal("100"),
+        },
+    }
+
+    kept, dropped = _drop_implausible_moves(bars)
+
+    assert dropped == 1
+    assert date(2026, 10, 14) in kept
