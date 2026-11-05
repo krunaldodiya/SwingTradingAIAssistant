@@ -168,6 +168,13 @@ echo "$(date -Is) benchmark_freshness_exit=$freshness_code" >> "$LOG/scan-$STAMP
   --log-scan "$PAGE" --output json \
   > "$LOG/paper-tracking-$STAMP.json" 2> "$LOG/paper-tracking-$STAMP.err"
 echo "$(date -Is) paper_tracking_exit=$?" >> "$LOG/scan-$STAMP.err"
+
+# Deterministic pass report. One factual page per pass so the artifacts are
+# readable without an agent. It states only recorded values, never advice.
+"$REPO/.venv/bin/python" "$REPO/scripts/pass_report.py" \
+  --storage-root "$STORE" \
+  > "$LOG/report-$STAMP.md" 2> "$LOG/report-$STAMP.err"
+echo "$(date -Is) pass_report_exit=$?" >> "$LOG/scan-$STAMP.err"
 SYMBOLS=$(
   python3 - "$PAGE" <<'PY'
 import json
