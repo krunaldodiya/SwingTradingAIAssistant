@@ -641,6 +641,30 @@ Two limits are stated in the output itself:
   the store holds, and pages where no member reached a safety outcome are
   excluded, so a provider outage cannot appear as a flat market.
 
+## Backing up the data root
+
+The private evidence store is not reproducible: a later download cannot rebuild
+what was known earlier. `scripts/backup_data_root.sh` makes the snapshot
+repeatable instead of a remembered sequence:
+
+```bash
+scripts/backup_data_root.sh --passphrase-file /run/media/.../recovery-key.txt
+```
+
+It creates a `tar.gz`, encrypts it with `gpg` symmetric AES256, decrypts it again
+and compares hashes, writes `SHA256SUMS`, `VERIFICATION.json` and `RESTORE.md`,
+uploads, then verifies the remote with `rclone check --checksum`.
+
+| Property | Behaviour |
+|---|---|
+| Previous snapshot | Replaced only **after** the uploaded bytes are verified; a failed upload or verification leaves the old backup in place |
+| Remote passphrase | Never deleted; uploaded only with `--upload-key`, which prints a warning |
+| Staging | Removed on success. The plaintext archive is always removed; `--keep-local` retains only the encrypted artifact. A caller-supplied `--staging` directory is never deleted, only the files this script created |
+| Dry run | `--dry-run` prints the plan (size, counts, destination) and writes nothing |
+
+Keeping the passphrase in the same remote folder as the archive protects a stolen
+disk, not a compromised account. Prefer storing it offline.
+
 ## Benchmark freshness
 
 The scan's `benchmark_median_return_20d` and every candidate's 20-session relative
