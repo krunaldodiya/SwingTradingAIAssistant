@@ -657,9 +657,9 @@ uploads, then verifies the remote with `rclone check --checksum`.
 
 | Property | Behaviour |
 |---|---|
-| Previous snapshot | Replaced only **after** the upload succeeds; a failed upload leaves the old backup in place |
+| Previous snapshot | Replaced only **after** the uploaded bytes are verified; a failed upload or verification leaves the old backup in place |
 | Remote passphrase | Never deleted; uploaded only with `--upload-key`, which prints a warning |
-| Staging | Removed on success, including the plaintext archive; `--keep-local` retains it |
+| Staging | Removed on success. The plaintext archive is always removed; `--keep-local` retains only the encrypted artifact. A caller-supplied `--staging` directory is never deleted, only the files this script created |
 | Dry run | `--dry-run` prints the plan (size, counts, destination) and writes nothing |
 
 Keeping the passphrase in the same remote folder as the archive protects a stolen
