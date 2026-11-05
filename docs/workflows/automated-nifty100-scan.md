@@ -509,6 +509,30 @@ python scripts/write_scan_ledger_entry.py \
   --ledger-root "$LEDGER" --status recorded --backfill
 ```
 
+## Deterministic pass report
+
+Every pass writes `report-YYYY-MM-DD.md` beside its artifacts:
+
+```bash
+python scripts/pass_report.py --storage-root /absolute/path/to/SwingTradingAIAssistantData
+```
+
+It restates the recorded session, member counts, candidates with their gate
+outcomes, breadth trend and data-quality notes. It copies values; it does not
+rank, score, recommend or predict, and it marks a missing artifact as missing
+rather than inferring one. The report exists so a pass is readable without an
+agent, not to replace interpretation.
+
+Exit codes: `0` rendered, `1` no scan page for the requested date, `2` invalid input.
+
+The report distinguishes the run label from the completed session: the label is
+the date the pass ran, while the session comes from the retained record's admitted
+observation and renders `unestablished` when no evidence establishes it. A pass
+that overwrites a same-date page replaces its derived artifacts — analysis,
+dossiers and lifecycle — and a zero-candidate overwrite removes them, so an
+earlier pass cannot be reported as the current one. The immutable prior scan
+remains available by its retained evidence handle.
+
 ## Forward paper observation
 
 Every pass registers its research candidates and follows them forward, so the

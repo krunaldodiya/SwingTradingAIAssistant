@@ -185,6 +185,10 @@ PY
 
 if [ -z "$SYMBOLS" ]; then
   echo "$(date -Is) analysis skipped: no candidates in $STAMP scan" >> "$LOG/scan-$STAMP.err"
+  # Same-date artifacts from an earlier pass do not describe this page; leaving
+  # them would let the report claim dossiers or a lifecycle that this pass never
+  # produced.
+  rm -f "$ANALYSIS" "$RESEARCH" "$LIFECYCLE"
 else
   run_with_secrets "$REPO/.venv/bin/swing-analysis" \
     --scan-json "$PAGE" --output json \
@@ -209,6 +213,14 @@ else
     > "$LIFECYCLE" 2> "$LOG/lifecycle-$STAMP.err"
   echo "$(date -Is) lifecycle_exit=$?" >> "$LOG/lifecycle-$STAMP.err"
 fi
+
+# Deterministic pass report. Written after analysis, dossiers and lifecycle so it
+# renders this pass, not the previous one. Facts only, never advice, and it must
+# never fail the pass.
+"$REPO/.venv/bin/python" "$REPO/scripts/pass_report.py" \
+  --storage-root "$STORE" --artifacts-dir "$LOG" --date "$STAMP" \
+  > "$LOG/report-$STAMP.md" 2> "$LOG/report-$STAMP.err"
+echo "$(date -Is) pass_report_exit=$?" >> "$LOG/scan-$STAMP.err"
 
 # Every real pass must reach the owner's private ledger. This stage is what keeps
 # an unattended run from producing evidence with no research record. It skips a
