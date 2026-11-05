@@ -35,6 +35,7 @@ def _scan_page(candidates: int = 1) -> dict[str, object]:
     ] * candidates
     scan = {
         "schema": "swing-trade-scan@v3",
+        "result_identity_sha256": "b" * 64,
         "total_stocks_scanned": 200,
         "candidate_count": candidates,
         "eligible_count": 169,
@@ -53,6 +54,7 @@ def _scan_page(candidates: int = 1) -> dict[str, object]:
 def _analysis() -> dict[str, object]:
     return {
         "schema": "swing-analysis@v2",
+        "scan_result_identity_sha256": "b" * 64,
         "policy": {"outcome_counts": {"NOT_QUALIFIED": 1}},
         "members": [
             {
@@ -107,6 +109,7 @@ def test_report_states_facts_and_candidate_gates(tmp_path: Path) -> None:
     data = report.build_report(root, "2026-11-04")
     text = report.render(data)
 
+    assert "Completed session: **unestablished**" in text
     assert "Members evaluated once: **200**" in text
     assert "`RANGE_OR_TRANSITION`" in text
     assert "| AAA | NIFTY_100 | BOS | 2 | 100 | 90 | 10 | `NOT_QUALIFIED` |" in text
@@ -128,7 +131,7 @@ def test_defaults_to_the_latest_session(tmp_path: Path) -> None:
 
     data = report.build_report(root, None)
 
-    assert data is not None and data["session"] == "2026-11-04"
+    assert data is not None and data["run_label"] == "2026-11-04"
 
 
 def test_missing_session_and_invalid_input(tmp_path: Path) -> None:
@@ -154,7 +157,7 @@ def test_analysis_from_another_scan_is_not_joined(tmp_path: Path) -> None:
     """An overwritten scan must not inherit the previous pass's gates."""
     directory = tmp_path / "daily-scan"
     page = _scan_page()
-    page["scan"]["result_identity_sha256"] = "b" * 64  # type: ignore[index]
+    # page identity stays "b"; the analysis below is bound to "c".
     _write(directory, "scan-2026-11-04.json", page)
     analysis = _analysis()
     analysis["scan_result_identity_sha256"] = "c" * 64
@@ -199,10 +202,23 @@ def test_artifacts_directory_override(tmp_path: Path) -> None:
 
     data = report.build_report(tmp_path, "2026-11-04", logs)
 
-    assert data is not None and data["session"] == "2026-11-04"
+    assert data is not None and data["run_label"] == "2026-11-04"
 
 
 def test_basic_iso_date_is_rejected(tmp_path: Path) -> None:
     root = _fixture(tmp_path)
 
     assert report.main(["--storage-root", str(root), "--date", "20261104"]) == 2
+
+
+def test_session_is_unestablished_without_evidence(tmp_path: Path) -> None:
+    """The run label is not a completed session."""
+    directory = tmp_path / "daily-scan"
+    page = _scan_page()
+    page.pop("decision_evidence_handle")
+    _write(directory, "scan-2026-11-05.json", page)
+
+    text = report.render(report.build_report(tmp_path, "2026-11-05"))
+
+    assert "Completed session: **unestablished**" in text
+    assert "run label 2026-11-05" in text

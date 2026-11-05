@@ -22,6 +22,11 @@ from datetime import date
 from pathlib import Path
 from typing import cast
 
+from swing_trading_ai_assistant.market_data.scan_decision_evidence import (
+    ScanDecisionEvidenceUnavailable,
+    read_scan_decision_evidence_completed_session_v1,
+)
+
 Json = dict[str, object]
 
 
@@ -58,11 +63,43 @@ def _load(path: Path) -> Json | None:
 _DAY = re.compile(r"\d{4}-\d{2}-\d{2}\Z")
 
 
+def _valid_day(value: str) -> bool:
+    try:
+        date.fromisoformat(value)
+    except ValueError:
+        return False
+    return True
+
+
+def _completed_session(
+    storage_root: Path, scan: Json, handle: str | None
+) -> str | None:
+    """Return the session the page's evidence was bound to, when established.
+
+    ``swing-trade-scan@v3`` projects no top-level session, so the run date is only
+    a label. The admitted retained record is the authority; the run date is never
+    promoted to a completed session.
+    """
+    direct = scan.get("latest_completed_session")
+    if isinstance(direct, str):
+        return direct[:10]
+    if handle:
+        try:
+            record = read_scan_decision_evidence_completed_session_v1(
+                storage_root, handle
+            )
+        except ScanDecisionEvidenceUnavailable:
+            return None
+        value = record.get("completed_session")
+        return value if isinstance(value, str) else None
+    return None
+
+
 def _latest_session(directory: Path) -> str | None:
     days = sorted(
         day
         for path in directory.glob("scan-*.json")
-        if _DAY.match(day := path.stem.removeprefix("scan-"))
+        if _DAY.fullmatch(day := path.stem.removeprefix("scan-")) and _valid_day(day)
     )
     return days[-1] if days else None
 
@@ -124,16 +161,22 @@ def build_report(
     if scan is None or page is None:
         return None
     analysis_raw = _load(directory / f"analysis-{session}.json")
+    handle = _text(page.get("decision_evidence_handle"))
     scan_identity = _text(scan.get("result_identity_sha256"))
     analysis_identity = _text((analysis_raw or {}).get("scan_result_identity_sha256"))
-    # An overwritten scan must not inherit a previous analysis of the same date.
-    analysis = analysis_raw if analysis_identity == scan_identity else None
+    # An overwritten scan must not inherit a previous analysis of the same date,
+    # and an unbound analysis cannot be shown to belong to this scan at all.
+    analysis = (
+        analysis_raw if scan_identity and analysis_identity == scan_identity else None
+    )
+    completed = _completed_session(storage_root, scan, handle)
     breadth = _load(directory / f"breadth-{session}.json")
     freshness = _load(directory / f"benchmark-freshness-{session}.json")
     regime = _mapping(scan.get("market_regime"))
     return {
-        "session": session,
-        "handle": _text(page.get("decision_evidence_handle")),
+        "run_label": session,
+        "session": completed or "unestablished",
+        "handle": handle,
         "members": _count(scan.get("total_stocks_scanned")),
         "eligible": _count(scan.get("eligible_count")),
         "ineligible": _count(scan.get("ineligible_count")),
@@ -198,8 +241,9 @@ def render(report: Json) -> str:
     freshness = _mapping(report.get("freshness"))
     outcomes = _mapping(report.get("outcomes"))
     lines = [
-        f"# Research pass — {report['session']}",
+        f"# Research pass — run label {report['run_label']}",
         "",
+        f"- Completed session: **{report['session']}**",
         f"- Evidence handle: `{report.get('handle') or 'not retained'}`",
         f"- Members evaluated once: **{report['members']}** "
         f"(eligible {report['eligible']}, ineligible {report['ineligible']}, "
@@ -303,7 +347,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     if args.date:
         try:
-            if len(args.date) != 10:
+            if not _DAY.fullmatch(args.date):
                 raise ValueError(args.date)
             date.fromisoformat(args.date)
         except ValueError:

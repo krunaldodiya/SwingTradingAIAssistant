@@ -185,6 +185,10 @@ PY
 
 if [ -z "$SYMBOLS" ]; then
   echo "$(date -Is) analysis skipped: no candidates in $STAMP scan" >> "$LOG/scan-$STAMP.err"
+  # Same-date artifacts from an earlier pass do not describe this page; leaving
+  # them would let the report claim dossiers or a lifecycle that this pass never
+  # produced.
+  rm -f "$ANALYSIS" "$RESEARCH" "$LIFECYCLE"
 else
   run_with_secrets "$REPO/.venv/bin/swing-analysis" \
     --scan-json "$PAGE" --output json \
