@@ -71,6 +71,16 @@ def _valid_day(value: str) -> bool:
     return True
 
 
+def _observation_layer_stopped(scan: Json) -> bool:
+    """True when every member stopped before any market fact existed."""
+    rows = _rows(scan.get("candidates")) + _rows(scan.get("other_stocks"))
+    if not rows:
+        return False
+    return all(
+        row.get("failed_rule") == "OBSERVATION_STRUCTURE_NOT_READY" for row in rows
+    )
+
+
 def _completed_session(
     storage_root: Path, scan: Json, handle: str | None
 ) -> str | None:
@@ -187,6 +197,7 @@ def build_report(
         "downtrend": _text(regime.get("downtrend_percent")),
         "outcomes": _mapping((analysis or {}).get("policy")).get("outcome_counts"),
         "rows": _candidate_rows(analysis, scan),
+        "observation_layer_stopped": _observation_layer_stopped(scan),
         "analysis_present": analysis is not None,
         "lifecycle_present": _load(directory / f"lifecycle-{session}.json") is not None,
         "research_present": _load(directory / f"research-{session}.json") is not None,
@@ -319,6 +330,12 @@ def render(report: Json) -> str:
         f"dossiers {'present' if report.get('research_present') else 'missing'}, "
         f"lifecycle {'present' if report.get('lifecycle_present') else 'missing'}."
     )
+    if report.get("observation_layer_stopped"):
+        lines.append(
+            "- **Every member stopped at the observation layer** "
+            "(`OBSERVATION_STRUCTURE_NOT_READY`). Verify provider credentials and "
+            "Doppler scope before reading this page as a market result."
+        )
     lines.extend(
         [
             "",

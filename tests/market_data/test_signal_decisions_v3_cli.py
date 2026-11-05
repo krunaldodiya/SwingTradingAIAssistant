@@ -213,3 +213,28 @@ def test_retired_nifty500_scan_flag_is_rejected_before_root_access(
     assert captured.out == ""
     assert captured.err == "request_invalid\n"
     assert not root.exists()
+
+
+def test_observation_layer_stop_is_distinguishable_from_a_market_result() -> None:
+    """A rejected credential must not read as a market with nothing to report."""
+    stopped = {
+        "candidates": [],
+        "other_stocks": [
+            {"symbol": "AAA", "failed_rule": "OBSERVATION_STRUCTURE_NOT_READY"},
+            {"symbol": "BBB", "failed_rule": "OBSERVATION_STRUCTURE_NOT_READY"},
+        ],
+    }
+    mixed = {
+        "candidates": [],
+        "other_stocks": [
+            {"symbol": "AAA", "failed_rule": "OBSERVATION_STRUCTURE_NOT_READY"},
+            {"symbol": "BBB", "failed_rule": "CAUSAL_EVENT_CONTINUITY_UNAVAILABLE"},
+        ],
+    }
+
+    assert cli_module.observation_layer_stopped(stopped) is True
+    assert cli_module.observation_layer_stopped(mixed) is False
+    assert (
+        cli_module.observation_layer_stopped({"candidates": [], "other_stocks": []})
+        is False
+    )
