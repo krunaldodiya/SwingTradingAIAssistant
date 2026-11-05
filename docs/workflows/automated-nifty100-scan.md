@@ -509,6 +509,21 @@ python scripts/write_scan_ledger_entry.py \
   --ledger-root "$LEDGER" --status recorded --backfill
 ```
 
+## When every member is unavailable
+
+A rejected or missing provider credential surfaces per symbol as an unready
+observation, which is indistinguishable from a market with nothing to report. Two
+diagnostics close that gap without changing the scanner's identity contract:
+
+- `signal-decisions scan` writes `PROVIDER_CHECK` to stderr when every evaluated
+  member stopped at `OBSERVATION_STRUCTURE_NOT_READY`, naming the Doppler scope to
+  verify (`SWING_DOPPLER_PROJECT` / `SWING_DOPPLER_CONFIG`).
+- The pass report prints the same finding under data quality.
+
+Neither turns the pass into a market verdict. A hand-run scan without the
+explicit Doppler scope is the common cause; the scheduled runner sets it per
+command.
+
 ## Deterministic pass report
 
 Every pass writes `report-YYYY-MM-DD.md` beside its artifacts:

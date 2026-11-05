@@ -222,3 +222,22 @@ def test_session_is_unestablished_without_evidence(tmp_path: Path) -> None:
 
     assert "Completed session: **unestablished**" in text
     assert "run label 2026-11-05" in text
+
+
+def test_observation_layer_stop_is_flagged_in_the_report(tmp_path: Path) -> None:
+    directory = tmp_path / "daily-scan"
+    page = _scan_page(candidates=0)
+    scan = page["scan"]
+    scan["eligible_count"] = 0  # type: ignore[index]
+    scan["ineligible_count"] = 0  # type: ignore[index]
+    scan["unknown_count"] = 200  # type: ignore[index]
+    scan["other_stocks"] = [  # type: ignore[index]
+        {"symbol": "AAA", "failed_rule": "OBSERVATION_STRUCTURE_NOT_READY"},
+        {"symbol": "BBB", "failed_rule": "OBSERVATION_STRUCTURE_NOT_READY"},
+    ]
+    _write(directory, "scan-2026-11-04.json", page)
+
+    text = report.render(report.build_report(tmp_path, "2026-11-04"))
+
+    assert "Every member stopped at the observation layer" in text
+    assert "Verify provider credentials" in text

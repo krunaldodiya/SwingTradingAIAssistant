@@ -449,6 +449,31 @@ def _run_track(request: _TrackRequest) -> int:
         return 1
 
 
+_OBSERVATION_STOPPED = "OBSERVATION_STRUCTURE_NOT_READY"
+
+
+def observation_layer_stopped(scan_result: dict[str, object]) -> bool:
+    """True when every evaluated member stopped before any market fact existed.
+
+    A rejected provider credential surfaces per symbol as an unready observation.
+    Without this check a configuration error is indistinguishable from a market
+    with nothing to report, so the caller is told to verify credentials instead of
+    reading a verdict.
+    """
+    rows: list[object] = []
+    for key in ("candidates", "other_stocks"):
+        value = scan_result.get(key)
+        if isinstance(value, list):
+            rows.extend(cast(list[object], value))
+    if not rows:
+        return False
+    return all(
+        isinstance(row, dict)
+        and cast(dict[str, object], row).get("failed_rule") == _OBSERVATION_STOPPED
+        for row in rows
+    )
+
+
 def _run_scan(request: _ScanRequest) -> int:
     try:
         rows: list[dict[str, object]] | None = (
@@ -464,6 +489,13 @@ def _run_scan(request: _ScanRequest) -> int:
             warnings=warnings,
             sessions_back=request.sessions_back,
         )
+        if observation_layer_stopped(scan_result):
+            warnings.append(
+                "PROVIDER_CHECK: every evaluated symbol stopped at the observation "
+                "layer; verify provider credentials and Doppler scope "
+                "(SWING_DOPPLER_PROJECT/SWING_DOPPLER_CONFIG) before reading this "
+                "as a market result."
+            )
         for warning in warnings:
             sys.stderr.write(warning + "\n")
         if request.retain_decision_evidence:
