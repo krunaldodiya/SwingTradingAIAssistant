@@ -616,3 +616,34 @@ def test_coverage_check_targets_the_current_page_handle(tmp_path: Path) -> None:
     args = coverage_log.read_text()
     assert f"--handle {'0' * 64}" in args
     assert "--since" not in args
+
+
+def test_scan_timeout_discards_the_page_and_reports_124(tmp_path: Path) -> None:
+    """A stalled provider call must fail fast, not eat the whole pass."""
+    script = Path(__file__).parents[1] / "scripts" / "daily_after_close_scan.sh"
+    _schedule(tmp_path, closed=None)
+    log = tmp_path / "log"
+    log.mkdir()
+    doppler = tmp_path / "doppler-slow"
+    doppler.write_text("#!/usr/bin/env bash\nsleep 30\n")
+    doppler.chmod(0o755)
+    env = os.environ | {
+        "SWING_STORAGE_ROOT": str(tmp_path),
+        "SWING_LOG_DIR": str(log),
+        "SWING_DATE_OVERRIDE": "2026-10-23",
+        "SWING_REPO": str(script.parents[1]),
+        "DOPPLER_BIN": str(doppler),
+        "SWING_LEDGER_ROOT": str(tmp_path / "ledger"),
+        "SWING_RCLONE_BIN": "/bin/true",
+        "SWING_SCAN_TIMEOUT": "1",
+    }
+
+    result = subprocess.run(  # noqa: S603 - trusted repository test script
+        [str(script)], env=env, capture_output=True, text=True, check=False, timeout=60
+    )
+
+    assert result.returncode == 124
+    assert not (log / "scan-2026-10-23.json").exists()
+    err = (log / "scan-2026-10-23.err").read_text()
+    assert "exit_code=124" in err
+    assert "scan exceeded 1s; page discarded" in err
