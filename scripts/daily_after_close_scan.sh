@@ -105,13 +105,25 @@ if [ "$DRY_RUN" = "1" ]; then
 fi
 
 cd "$REPO" || exit 1
-run_with_secrets "$REPO/.venv/bin/signal-decisions" scan \
+# Suppose the provider stops answering mid-scan. Without a deadline one stalled
+# request consumes the whole pass and systemd eventually kills the unit, leaving
+# an empty page and no record. Fail fast, name the stage, and leave no artifact.
+SCAN_TIMEOUT=${SWING_SCAN_TIMEOUT:-1200}
+timeout "$SCAN_TIMEOUT" "$DOPPLER" run \
+  --project "$DOPPLER_PROJECT_NAME" --config "$DOPPLER_CONFIG_NAME" -- \
+  "$REPO/.venv/bin/signal-decisions" scan \
   --storage-root "$STORE" \
   --nifty200 --refresh --retain-decision-evidence --output json \
   > "$PAGE" 2> "$LOG/scan-$STAMP.err"
 code=$?
-echo "$(date -Is) exit_code=$code" >> "$LOG/scan-$STAMP.err"
+echo "$(date -Is) exit_code=$code scan_timeout_s=$SCAN_TIMEOUT" >> "$LOG/scan-$STAMP.err"
 if [ "$code" -ne 0 ]; then
+  # A partial or empty page is not evidence; leaving it invites a later reader to
+  # mistake a failed pass for a no-candidate market.
+  rm -f "$PAGE"
+  if [ "$code" -eq 124 ]; then
+    echo "$(date -Is) scan exceeded ${SCAN_TIMEOUT}s; page discarded" >> "$LOG/scan-$STAMP.err"
+  fi
   exit "$code"
 fi
 
@@ -261,6 +273,34 @@ if [ -n "${SWING_LEDGER_ROOT:-}" ]; then
     # A ledger that never left the device is still single-copy; report it.
     if [ "$sync_code" -ne 0 ]; then
       exit "$sync_code"
+    fi
+
+    # A pass with no entry for this session is not delivered. The page's own
+    # evidence handle is checked, not the calendar date: a scan can bind an older
+    # completed session, and a date filter would then pass vacuously.
+    COVERAGE_HANDLE=$(
+      python3 -c 'import json, sys
+try:
+    payload = json.load(open(sys.argv[1]))
+except (OSError, ValueError):
+    payload = {}
+value = payload.get("decision_evidence_handle") if isinstance(payload, dict) else None
+print(value if isinstance(value, str) and len(value) == 64 else "")' "$PAGE"
+    )
+    coverage_args=(--storage-root "$STORE" --ledger-root "$SWING_LEDGER_ROOT" --output table)
+    if [ -n "$COVERAGE_HANDLE" ]; then
+      coverage_args+=(--handle "$COVERAGE_HANDLE")
+    else
+      coverage_args+=(--since "$STAMP")
+    fi
+    "$REPO/.venv/bin/python" "$REPO/scripts/check_ledger_coverage.py" \
+      "${coverage_args[@]}" > "$LOG/coverage-$STAMP.log" 2>&1
+    coverage_code=$?
+    echo "$(date -Is) coverage_exit=$coverage_code" >> "$LOG/scan-$STAMP.err"
+    if [ "$coverage_code" -ne 0 ]; then
+      echo "$(date -Is) coverage gap for $STAMP; see $LOG/coverage-$STAMP.log" \
+        >> "$LOG/scan-$STAMP.err"
+      exit "$coverage_code"
     fi
   else
     echo "$(date -Is) ledger sync failed: $RCLONE not executable" >> "$LOG/scan-$STAMP.err"

@@ -4,7 +4,7 @@ import importlib.util
 import json
 import subprocess
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -571,3 +571,35 @@ def test_existing_entry_is_found_by_handle_across_stamps(tmp_path: Path) -> None
     found = writer.existing_entry(tmp_path, "2026-10-31", handle)
 
     assert found == earlier
+
+
+def test_handle_scoped_check_ignores_other_days(tmp_path: Path) -> None:
+    """A run date filter can pass vacuously; the page handle cannot."""
+    storage = tmp_path / "data"
+    evidence = storage / "scan-decision-evidence-v1"
+    evidence.mkdir(parents=True)
+    # A page that bound 2026-11-05 while the run happened on 2026-11-06.
+    uncited = _scan_payload(latest_completed_session="2026-11-05")
+    (evidence / "late.json").write_text(
+        json.dumps({**uncited, "decision_evidence_handle": "d" * 64})
+    )
+    ledger = tmp_path / "ledger"
+    (ledger / "entries" / "2026").mkdir(parents=True)
+
+    by_date = checker.build_report(
+        storage_root=storage, ledger_root=ledger, since=date(2026, 11, 6)
+    )
+    assert by_date == []  # the date window excludes the bound session entirely
+
+    by_handle = checker.build_report(
+        storage_root=storage, ledger_root=ledger, since=None, handle="d" * 64
+    )
+    assert [row["state"] for row in by_handle] == ["MISSING"]
+
+    (ledger / "entries" / "2026" / "2026-11-06-run.md").write_text(
+        f"evidence: decision-evidence handle {'d' * 64}"
+    )
+    by_handle = checker.build_report(
+        storage_root=storage, ledger_root=ledger, since=None, handle="d" * 64
+    )
+    assert [row["state"] for row in by_handle] == ["OK"]

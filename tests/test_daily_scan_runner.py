@@ -266,6 +266,9 @@ def _ledger_stub_repo(tmp_path: Path) -> tuple[Path, Path]:
         "with open(os.environ['LEDGER_CALL_LOG'], 'a') as handle:\n"
         "    handle.write(' '.join(sys.argv[1:]) + '\\n')\n"
     )
+    # The coverage stage runs last; stub it so these tests stay about wiring.
+    coverage = scripts / "check_ledger_coverage.py"
+    coverage.write_text("#!/usr/bin/env python3\nraise SystemExit(0)\n")
     return repo, stub
 
 
@@ -491,3 +494,156 @@ def test_runner_writes_breadth_trend_artifact(tmp_path: Path) -> None:
     report = json.loads((log / "breadth-2026-10-23.json").read_text())
     assert report["schema"] == "market-breadth-trend@v1"
     assert report["sessions_observed"] == 0
+
+
+def test_scan_failure_discards_the_page(tmp_path: Path) -> None:
+    """A failed scan must not leave a page a later reader could trust."""
+    script = Path(__file__).parents[1] / "scripts" / "daily_after_close_scan.sh"
+    _schedule(tmp_path, closed=None)
+    log = tmp_path / "log"
+    log.mkdir()
+    doppler = tmp_path / "doppler-fail"
+    doppler.write_text(
+        "#!/usr/bin/env bash\n"
+        'case "$*" in\n'
+        '  *" scan "*) echo "{"partial":" ; exit 1 ;;\n'
+        "  *) echo '{}' ;;\n"
+        "esac\n"
+    )
+    doppler.chmod(0o755)
+    env = os.environ | {
+        "SWING_STORAGE_ROOT": str(tmp_path),
+        "SWING_LOG_DIR": str(log),
+        "SWING_DATE_OVERRIDE": "2026-10-23",
+        "SWING_REPO": str(script.parents[1]),
+        "DOPPLER_BIN": str(doppler),
+        "SWING_LEDGER_ROOT": str(tmp_path / "ledger"),
+        "SWING_RCLONE_BIN": "/bin/true",
+    }
+
+    result = subprocess.run(  # noqa: S603 - trusted repository test script
+        [str(script)], env=env, capture_output=True, text=True, check=False
+    )
+
+    assert result.returncode == 1
+    assert not (log / "scan-2026-10-23.json").exists()
+    err = (log / "scan-2026-10-23.err").read_text()
+    assert "exit_code=1" in err
+
+
+def test_coverage_gap_fails_the_pass(tmp_path: Path) -> None:
+    """A pass with no ledger entry for this session is not delivered."""
+    repo, _ = _ledger_stub_repo(tmp_path)
+    (repo / "scripts" / "check_ledger_coverage.py").write_text(
+        "#!/usr/bin/env python3\nraise SystemExit(1)\n"
+    )
+    script = repo / "scripts" / "daily_after_close_scan.sh"
+    _schedule(tmp_path, closed=None)
+    log = tmp_path / "log"
+    log.mkdir()
+    source = tmp_path / "scan-source.json"
+    _page(source, ["AAA"])
+    doppler = tmp_path / "doppler"
+    stub_log = tmp_path / "calls.log"
+    _stub_doppler(doppler, stub_log, source)
+    ledger = tmp_path / "ledger"
+    (ledger / "entries" / "2026").mkdir(parents=True)
+    env = os.environ | {
+        "SWING_STORAGE_ROOT": str(tmp_path),
+        "SWING_LOG_DIR": str(log),
+        "SWING_DATE_OVERRIDE": "2026-10-23",
+        "SWING_ALLOW_OVERWRITE": "1",
+        "SWING_REPO": str(repo),
+        "DOPPLER_BIN": str(doppler),
+        "STUB_LOG": str(stub_log),
+        "STUB_SOURCE": str(source),
+        "SWING_LEDGER_ROOT": str(ledger),
+        "SWING_RCLONE_BIN": "/bin/true",
+        "LEDGER_CALL_LOG": str(tmp_path / "ledger.log"),
+    }
+
+    result = subprocess.run(  # noqa: S603 - trusted repository test script
+        [str(script)], env=env, capture_output=True, text=True, check=False
+    )
+
+    assert result.returncode == 1
+    err = (log / "scan-2026-10-23.err").read_text()
+    assert "coverage_exit=1" in err
+    assert "coverage gap for 2026-10-23" in err
+
+
+def test_coverage_check_targets_the_current_page_handle(tmp_path: Path) -> None:
+    """The gate must check this page, not a date window that may exclude it."""
+    repo, _ = _ledger_stub_repo(tmp_path)
+    coverage_log = tmp_path / "coverage.log"
+    (repo / "scripts" / "check_ledger_coverage.py").write_text(
+        "#!/usr/bin/env python3\n"
+        "import os, sys\n"
+        "with open(os.environ['COVERAGE_LOG'], 'w') as handle:\n"
+        "    handle.write(' '.join(sys.argv[1:]))\n"
+    )
+    script = repo / "scripts" / "daily_after_close_scan.sh"
+    _schedule(tmp_path, closed=None)
+    log = tmp_path / "log"
+    log.mkdir()
+    source = tmp_path / "scan-source.json"
+    _page(source, ["AAA"])
+    doppler = tmp_path / "doppler"
+    stub_log = tmp_path / "calls.log"
+    _stub_doppler(doppler, stub_log, source)
+    ledger = tmp_path / "ledger"
+    (ledger / "entries" / "2026").mkdir(parents=True)
+    env = os.environ | {
+        "SWING_STORAGE_ROOT": str(tmp_path),
+        "SWING_LOG_DIR": str(log),
+        "SWING_DATE_OVERRIDE": "2026-10-23",
+        "SWING_ALLOW_OVERWRITE": "1",
+        "SWING_REPO": str(repo),
+        "DOPPLER_BIN": str(doppler),
+        "STUB_LOG": str(stub_log),
+        "STUB_SOURCE": str(source),
+        "SWING_LEDGER_ROOT": str(ledger),
+        "SWING_RCLONE_BIN": "/bin/true",
+        "LEDGER_CALL_LOG": str(tmp_path / "ledger.log"),
+        "COVERAGE_LOG": str(coverage_log),
+    }
+
+    result = subprocess.run(  # noqa: S603 - trusted repository test script
+        [str(script)], env=env, capture_output=True, text=True, check=False
+    )
+
+    assert result.returncode == 0, result.stderr
+    args = coverage_log.read_text()
+    assert f"--handle {'0' * 64}" in args
+    assert "--since" not in args
+
+
+def test_scan_timeout_discards_the_page_and_reports_124(tmp_path: Path) -> None:
+    """A stalled provider call must fail fast, not eat the whole pass."""
+    script = Path(__file__).parents[1] / "scripts" / "daily_after_close_scan.sh"
+    _schedule(tmp_path, closed=None)
+    log = tmp_path / "log"
+    log.mkdir()
+    doppler = tmp_path / "doppler-slow"
+    doppler.write_text("#!/usr/bin/env bash\nsleep 30\n")
+    doppler.chmod(0o755)
+    env = os.environ | {
+        "SWING_STORAGE_ROOT": str(tmp_path),
+        "SWING_LOG_DIR": str(log),
+        "SWING_DATE_OVERRIDE": "2026-10-23",
+        "SWING_REPO": str(script.parents[1]),
+        "DOPPLER_BIN": str(doppler),
+        "SWING_LEDGER_ROOT": str(tmp_path / "ledger"),
+        "SWING_RCLONE_BIN": "/bin/true",
+        "SWING_SCAN_TIMEOUT": "1",
+    }
+
+    result = subprocess.run(  # noqa: S603 - trusted repository test script
+        [str(script)], env=env, capture_output=True, text=True, check=False, timeout=60
+    )
+
+    assert result.returncode == 124
+    assert not (log / "scan-2026-10-23.json").exists()
+    err = (log / "scan-2026-10-23.err").read_text()
+    assert "exit_code=124" in err
+    assert "scan exceeded 1s; page discarded" in err

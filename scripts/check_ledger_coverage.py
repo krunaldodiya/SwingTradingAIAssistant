@@ -95,7 +95,11 @@ def _pages(evidence: Path) -> dict[str, list[Json]]:
 
 
 def build_report(
-    *, storage_root: Path, ledger_root: Path, since: date | None
+    *,
+    storage_root: Path,
+    ledger_root: Path,
+    since: date | None,
+    handle: str | None = None,
 ) -> list[Json]:
     """Report every real research day and whether its pages are cited.
 
@@ -111,7 +115,12 @@ def build_report(
     for stamp in sorted(pages):
         if since is not None and date.fromisoformat(stamp) < since:
             continue
-        real = [page for page in pages[stamp] if page["state"] == "real"]
+        selected = [
+            page for page in pages[stamp] if handle is None or page["handle"] == handle
+        ]
+        if handle is not None and not selected:
+            continue
+        real = [page for page in selected if page["state"] == "real"]
         uncited = [
             page["handle"] for page in real if not _cites(corpus, str(page["handle"]))
         ]
@@ -127,7 +136,7 @@ def build_report(
             {
                 "session": stamp,
                 "real_pages": len(real),
-                "degenerate_pages": len(pages[stamp]) - len(real),
+                "degenerate_pages": len(selected) - len(real),
                 "candidates": max(
                     (_count(page["candidates"]) for page in pages[stamp]), default=0
                 ),
@@ -161,6 +170,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--storage-root", required=True)
     parser.add_argument("--ledger-root", required=True)
     parser.add_argument("--since")
+    parser.add_argument(
+        "--handle",
+        help="Check one exact retained page instead of a date window.",
+    )
     parser.add_argument("--output", choices=("table", "json"), default="table")
     args = parser.parse_args(argv)
 
@@ -168,6 +181,7 @@ def main(argv: list[str] | None = None) -> int:
         storage_root=Path(args.storage_root),
         ledger_root=Path(args.ledger_root),
         since=date.fromisoformat(args.since) if args.since else None,
+        handle=args.handle,
     )
     if args.output == "json":
         missing = [row for row in report if row["state"] == "MISSING"]

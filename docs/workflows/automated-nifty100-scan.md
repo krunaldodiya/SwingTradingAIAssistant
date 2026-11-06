@@ -579,6 +579,29 @@ never moved 40 risk units).
 A pass may be logged as an envelope (`{decision_evidence_handle, scan}`); the
 command accepts either that or a bare scan result.
 
+## When a pass fails
+
+A stalled provider call used to consume the whole pass: the service hit its
+one-hour systemd limit, an empty `scan-YYYY-MM-DD.json` survived, and nothing
+reported the loss.
+
+Three behaviours now make that loud instead of silent:
+
+- **The scan is bounded.** `SWING_SCAN_TIMEOUT` (default `1200` seconds) wraps the
+  scan. A timeout exits `124`, logs `scan exceeded Ns; page discarded`, and fails
+  the unit.
+- **A failed scan leaves no page.** Any non-zero scan exit removes
+  `scan-YYYY-MM-DD.json`, because a partial or empty page is not evidence and a
+  later reader could mistake it for a no-candidate market.
+- **The pass ends with a coverage check on this page.** The page's own evidence
+  handle is checked (`check_ledger_coverage.py --handle`), not a date window: a
+  scan can bind an older completed session, and a date filter would then pass
+  vacuously. A gap fails the unit the same night and writes
+  `coverage-YYYY-MM-DD.log`.
+
+A transient network stall is still possible; it now costs one retry rather than a
+silently missing research day.
+
 ## Gate friction report
 
 A run of zero qualified candidates cannot by itself distinguish three causes: the
