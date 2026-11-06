@@ -96,16 +96,30 @@ def log_candidates_from_scan(
         isin = str(c.get("isin", ""))
         exchange = str(c.get("exchange", "NSE"))
         entry_session = str(summary.get("event_session", ""))
-        price_str = str(summary.get("current_price_inr", "0"))
         stop_str = str(summary.get("supporting_stop_reference_inr", "0"))
 
-        entry_price = Decimal(price_str)
+        # The entry is the close of the session the setup was detected in, never
+        # the price on the day it was noticed: a candidate is republished for up
+        # to five sessions, and using the later price measures a trade nobody
+        # could have taken.
+        try:
+            entry_day = date.fromisoformat(entry_session)
+        except ValueError:
+            continue
+        bars, _unreadable = _load_retained_bars(storage_root, isin, exchange)
+        entry_price = bars.get(entry_day, {}).get("close")
+        if entry_price is None:
+            # Without the event-session close there is no honest entry price.
+            continue
+
         stop_price = Decimal(stop_str)
         risk = entry_price - stop_price
         if risk <= 0:
             continue
 
-        trade_seed = f"{symbol}:{entry_session}:{_decimal_text(entry_price)}:{_decimal_text(stop_price)}"
+        # Identity is the setup, not the day it was observed, so re-running a pass
+        # cannot register the same candidate twice.
+        trade_seed = f"{symbol}:{entry_session}"
         trade_id = hashlib.sha256(trade_seed.encode("utf-8")).hexdigest()
         trade_file = registry_dir / f"{trade_id}.json"
 
@@ -333,6 +347,153 @@ def update_paper_trades(storage_root: Path) -> list[dict[str, object]]:
         updated_records.append(updated)
 
     return updated_records
+
+
+def _canonical_record(
+    *,
+    symbol: str,
+    entry_session: str,
+    entry_price: Decimal,
+    stop_price: Decimal,
+    isin: str,
+    exchange: str,
+) -> dict[str, object]:
+    """Build one registry record from a setup and its event-session close."""
+    risk = entry_price - stop_price
+    trade_id = hashlib.sha256(f"{symbol}:{entry_session}".encode()).hexdigest()
+    return {
+        "schema": RECORD_SCHEMA,
+        "trade_id": trade_id,
+        "symbol": symbol,
+        "isin": isin,
+        "exchange": exchange,
+        "entry_session": entry_session,
+        "entry_price_inr": _decimal_text(entry_price),
+        "stop_reference_inr": _decimal_text(stop_price),
+        "risk_per_share_inr": _decimal_text(risk),
+        "target_1r_inr": _decimal_text(entry_price + risk),
+        "target_2r_inr": _decimal_text(entry_price + (risk * Decimal("2"))),
+        "target_3r_inr": _decimal_text(entry_price + (risk * Decimal("3"))),
+        "status": "ACTIVE",
+        "exit_session": None,
+        "exit_price_inr": None,
+        "return_multiple_r": None,
+        "max_r_reached": "0.0",
+        "sessions_held": 0,
+        "data_quality": {"unreadable_records": 0, "implausible_bars": 0},
+    }
+
+
+def _repair_group(
+    storage_root: Path,
+    registry_dir: Path,
+    group: list[tuple[Path, dict[str, object]]],
+    *,
+    dry_run: bool,
+) -> tuple[str, int]:
+    """Return the outcome for one ``(symbol, entry_session)`` group and removals."""
+    diagnostics = group[0][1]
+    symbol = str(diagnostics.get("symbol", ""))
+    entry_session = str(diagnostics.get("entry_session", ""))
+    try:
+        entry_day = date.fromisoformat(entry_session)
+    except ValueError:
+        return "unrepairable", 0
+    isin = str(diagnostics.get("isin") or "")
+    exchange = str(diagnostics.get("exchange") or "NSE")
+    bars, _unreadable = _load_retained_bars(storage_root, isin, exchange)
+    bars, _implausible = _drop_implausible_moves(bars)
+    entry_price = bars.get(entry_day, {}).get("close")
+    stop_price = Decimal(str(diagnostics.get("stop_reference_inr", "0")))
+    if entry_price is None or stop_price <= 0 or entry_price <= stop_price:
+        return "unrepairable", 0
+
+    conflict = (
+        "stop_conflict"
+        if any(
+            str(other.get("stop_reference_inr")) != str(stop_price)
+            for _path, other in group[1:]
+        )
+        else ""
+    )
+    record = _evaluate_forward_trade(
+        _canonical_record(
+            symbol=symbol,
+            entry_session=entry_session,
+            entry_price=entry_price,
+            stop_price=stop_price,
+            isin=isin,
+            exchange=exchange,
+        ),
+        bars,
+    )
+    # One record survives per setup; the rest are duplicates regardless of whether
+    # their legacy filename happens to match the canonical one.
+    removed = max(0, len(group) - 1)
+    if not dry_run:
+        target = registry_dir / f"{record['trade_id']}.json"
+        target.write_bytes(_canonical_bytes(record))
+        for path, _record in group:
+            if path != target:
+                path.unlink(missing_ok=True)
+    return conflict or "repaired", removed
+
+
+def repair_registry(  # noqa: C901 - one pass over the whole registry
+    storage_root: Path, *, dry_run: bool = False
+) -> dict[str, object]:
+    """Rewrite the registry as one canonical record per setup.
+
+    Records written before the entry price came from the event-session close carry
+    a price-derived identity, so the same setup was registered again on every pass.
+    This groups by ``(symbol, entry_session)``, re-prices from retained bars, keeps
+    the canonical record and removes the duplicates.
+
+    A setup whose session close cannot be found, or whose stop is at or above the
+    entry, is left untouched and reported. Inventing an entry price would be worse
+    than an admitted gap.
+    """
+    registry_dir = storage_root / "paper-observations-v1"
+    counters = {
+        "records_read": 0,
+        "repaired": 0,
+        "duplicates_removed": 0,
+        "unrepairable": 0,
+        "stop_conflicts": 0,
+    }
+    if not registry_dir.is_dir():
+        return {"schema": "paper-registry-repair@v1", "dry_run": dry_run, **counters}
+
+    grouped: dict[tuple[str, str], list[tuple[Path, dict[str, object]]]] = {}
+    for trade_file in sorted(registry_dir.glob("*.json")):
+        if len(trade_file.stem) != 64:
+            continue
+        try:
+            record = cast(dict[str, object], json.loads(trade_file.read_text()))
+        except (OSError, ValueError):
+            continue
+        counters["records_read"] += 1
+        key = (str(record.get("symbol", "")), str(record.get("entry_session", "")))
+        grouped.setdefault(key, []).append((trade_file, record))
+
+    for group in grouped.values():
+        outcome, removed = _repair_group(
+            storage_root, registry_dir, group, dry_run=dry_run
+        )
+        counters["duplicates_removed"] += removed
+        if outcome == "unrepairable":
+            counters["unrepairable"] += 1
+            continue
+        counters["repaired"] += 1
+        if outcome == "stop_conflict":
+            counters["stop_conflicts"] += 1
+
+    return {
+        "schema": "paper-registry-repair@v1",
+        "dry_run": dry_run,
+        "setups": len(grouped),
+        **counters,
+    }
 
 
 def generate_tracking_report(

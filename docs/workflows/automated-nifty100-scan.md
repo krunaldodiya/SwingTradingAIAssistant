@@ -579,6 +579,24 @@ never moved 40 risk units).
 A pass may be logged as an envelope (`{decision_evidence_handle, scan}`); the
 command accepts either that or a bare scan result.
 
+**Entry is the event-session close, never the price when the candidate was
+noticed.** A candidate is republished for up to five sessions, so using the later
+price would measure a trade nobody could have taken. The trade identity is
+`symbol + event_session`, which makes re-logging the same setup a no-op; a
+candidate whose event-session close is missing is not registered at all.
+
+Registries written before this rule carry price-derived identities, so one setup
+can appear several times. Repair it once:
+
+```bash
+python scripts/repair_paper_registry.py --storage-root /absolute/path --dry-run
+python scripts/repair_paper_registry.py --storage-root /absolute/path
+```
+
+The repair groups by `(symbol, entry_session)`, re-prices from retained bars,
+keeps one canonical record and reports any setup whose session close is missing
+instead of inventing an entry.
+
 ## When a pass fails
 
 A stalled provider call used to consume the whole pass: the service hit its
