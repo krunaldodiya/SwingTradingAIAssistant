@@ -593,8 +593,10 @@ Three behaviours now make that loud instead of silent:
 - **A failed scan leaves no page.** Any non-zero scan exit removes
   `scan-YYYY-MM-DD.json`, because a partial or empty page is not evidence and a
   later reader could mistake it for a no-candidate market.
-- **The pass ends with a coverage check.** `check_ledger_coverage.py --since` the
-  current session must pass. A gap fails the unit the same night and writes
+- **The pass ends with a coverage check on this page.** The page's own evidence
+  handle is checked (`check_ledger_coverage.py --handle`), not a date window: a
+  scan can bind an older completed session, and a date filter would then pass
+  vacuously. A gap fails the unit the same night and writes
   `coverage-YYYY-MM-DD.log`.
 
 A transient network stall is still possible; it now costs one retry rather than a

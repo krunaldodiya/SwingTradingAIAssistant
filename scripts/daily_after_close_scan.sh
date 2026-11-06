@@ -275,12 +275,26 @@ if [ -n "${SWING_LEDGER_ROOT:-}" ]; then
       exit "$sync_code"
     fi
 
-    # A pass with no entry for this session is not delivered. This runs last and
-    # fails the unit, so a missing session is reported the same night instead of
-    # being discovered days later.
+    # A pass with no entry for this session is not delivered. The page's own
+    # evidence handle is checked, not the calendar date: a scan can bind an older
+    # completed session, and a date filter would then pass vacuously.
+    COVERAGE_HANDLE=$(
+      python3 -c 'import json, sys
+try:
+    payload = json.load(open(sys.argv[1]))
+except (OSError, ValueError):
+    payload = {}
+value = payload.get("decision_evidence_handle") if isinstance(payload, dict) else None
+print(value if isinstance(value, str) and len(value) == 64 else "")' "$PAGE"
+    )
+    coverage_args=(--storage-root "$STORE" --ledger-root "$SWING_LEDGER_ROOT" --output table)
+    if [ -n "$COVERAGE_HANDLE" ]; then
+      coverage_args+=(--handle "$COVERAGE_HANDLE")
+    else
+      coverage_args+=(--since "$STAMP")
+    fi
     "$REPO/.venv/bin/python" "$REPO/scripts/check_ledger_coverage.py" \
-      --storage-root "$STORE" --ledger-root "$SWING_LEDGER_ROOT" \
-      --since "$STAMP" --output table > "$LOG/coverage-$STAMP.log" 2>&1
+      "${coverage_args[@]}" > "$LOG/coverage-$STAMP.log" 2>&1
     coverage_code=$?
     echo "$(date -Is) coverage_exit=$coverage_code" >> "$LOG/scan-$STAMP.err"
     if [ "$coverage_code" -ne 0 ]; then
