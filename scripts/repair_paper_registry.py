@@ -6,11 +6,11 @@ candidate was noticed, and derived the trade identity from that price. A candida
 is republished for up to five sessions, so the same setup was registered again on
 every pass and the aggregates counted overlapping positions.
 
-This command groups by ``(symbol, entry_session)``, re-prices each setup from the
-retained event-session close, keeps one canonical record and removes the rest. A
-setup whose session close is missing, or whose stop is at or above the entry, is
-reported instead of rewritten: inventing an entry price would be worse than an
-admitted gap.
+This command groups by ``(ISIN, exchange, event_session)``, re-prices each setup
+from the retained event-session close, keeps one canonical record and removes the
+rest. Missing or conflicting canonical identity, symbol, stop, or session-close
+data is reported instead of rewritten: inventing an entry or deleting history
+would be worse than an admitted gap.
 
 Read-only with ``--dry-run``. Exit codes: 0 reported, 2 invalid input.
 """
@@ -23,8 +23,6 @@ import sys
 from pathlib import Path
 
 from swing_trading_ai_assistant.market_data.paper_tracking import repair_registry
-
-SCHEMA = "paper-registry-repair@v1"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -50,6 +48,7 @@ def main(argv: list[str] | None = None) -> int:
         f"{prefix} {result['repaired']}, "
         f"duplicates removed {result['duplicates_removed']}, "
         f"unrepairable {result['unrepairable']}, "
+        f"identity conflicts {result['identity_conflicts']}, "
         f"stop conflicts {result['stop_conflicts']}"
     )
     if args.dry_run:
