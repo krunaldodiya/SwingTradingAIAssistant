@@ -69,6 +69,39 @@ def _runtime_identity() -> str:
     return _digest(observed)
 
 
+def _trade_id(isin: str, exchange: str, entry_session: str) -> str:
+    """Return the stable identity for one canonical instrument setup."""
+    seed = f"{isin}:{exchange}:{entry_session}"
+    return hashlib.sha256(seed.encode()).hexdigest()
+
+
+def _retained_event_close(
+    storage_root: Path,
+    isin: str,
+    exchange: str,
+    entry_session: str,
+) -> tuple[Decimal, int, int] | None:
+    """Return the integrity-checked event close and its cache diagnostics."""
+    try:
+        entry_day = date.fromisoformat(entry_session)
+    except ValueError:
+        return None
+    bars, unreadable = _load_retained_bars(storage_root, isin, exchange)
+    bars, implausible = _drop_implausible_moves(bars)
+    entry_price = bars.get(entry_day, {}).get("close")
+    if entry_price is None:
+        return None
+    return entry_price, unreadable, implausible
+
+
+def _existing_record(path: Path) -> dict[str, object] | None:
+    """Return a readable record when a canonical setup already exists."""
+    try:
+        return cast(dict[str, object], json.loads(path.read_text()))
+    except (OSError, ValueError):
+        return None
+
+
 def log_candidates_from_scan(
     storage_root: Path,
     scan_result: dict[str, object],
@@ -96,26 +129,36 @@ def log_candidates_from_scan(
         isin = str(c.get("isin", ""))
         exchange = str(c.get("exchange", "NSE"))
         entry_session = str(summary.get("event_session", ""))
-        price_str = str(summary.get("current_price_inr", "0"))
         stop_str = str(summary.get("supporting_stop_reference_inr", "0"))
+        if not symbol or not isin or not exchange:
+            continue
+        # The entry is the close of the session the setup was detected in, never
+        # the price on the day it was noticed: a candidate is republished for up
+        # to five sessions, and using the later price measures a trade nobody
+        # could have taken.
+        try:
+            stop_price = Decimal(stop_str)
+        except InvalidOperation:
+            continue
+        event_close = _retained_event_close(storage_root, isin, exchange, entry_session)
+        if event_close is None:
+            # Without a valid event-session close there is no honest entry price.
+            continue
+        entry_price, unreadable, implausible = event_close
 
-        entry_price = Decimal(price_str)
-        stop_price = Decimal(stop_str)
         risk = entry_price - stop_price
         if risk <= 0:
             continue
 
-        trade_seed = f"{symbol}:{entry_session}:{_decimal_text(entry_price)}:{_decimal_text(stop_price)}"
-        trade_id = hashlib.sha256(trade_seed.encode("utf-8")).hexdigest()
+        # Identity is the canonical instrument setup, not the day it was observed,
+        # so re-running a pass cannot register the same candidate twice.
+        trade_id = _trade_id(isin, exchange, entry_session)
         trade_file = registry_dir / f"{trade_id}.json"
 
-        if trade_file.exists():
-            try:
-                existing = cast(dict[str, object], json.loads(trade_file.read_text()))
-                logged.append(existing)
-                continue
-            except (OSError, ValueError):
-                pass
+        existing = _existing_record(trade_file)
+        if existing is not None:
+            logged.append(existing)
+            continue
 
         target_1r = entry_price + risk
         target_2r = entry_price + (risk * Decimal("2"))
@@ -140,11 +183,14 @@ def log_candidates_from_scan(
             "return_multiple_r": None,
             "max_r_reached": "0.0",
             "sessions_held": 0,
+            "data_quality": {
+                "unreadable_records": unreadable,
+                "implausible_bars": implausible,
+            },
         }
         record["record_identity_sha256"] = _digest(record)
         trade_file.write_bytes(_canonical_bytes(record))
         logged.append(record)
-
     return logged
 
 
@@ -333,6 +379,171 @@ def update_paper_trades(storage_root: Path) -> list[dict[str, object]]:
         updated_records.append(updated)
 
     return updated_records
+
+
+def _canonical_record(
+    *,
+    symbol: str,
+    entry_session: str,
+    entry_price: Decimal,
+    stop_price: Decimal,
+    isin: str,
+    exchange: str,
+    data_quality: dict[str, int],
+) -> dict[str, object]:
+    """Build one registry record from a setup and its event-session close."""
+    risk = entry_price - stop_price
+    return {
+        "schema": RECORD_SCHEMA,
+        "trade_id": _trade_id(isin, exchange, entry_session),
+        "symbol": symbol,
+        "isin": isin,
+        "exchange": exchange,
+        "entry_session": entry_session,
+        "entry_price_inr": _decimal_text(entry_price),
+        "stop_reference_inr": _decimal_text(stop_price),
+        "risk_per_share_inr": _decimal_text(risk),
+        "target_1r_inr": _decimal_text(entry_price + risk),
+        "target_2r_inr": _decimal_text(entry_price + (risk * Decimal("2"))),
+        "target_3r_inr": _decimal_text(entry_price + (risk * Decimal("3"))),
+        "status": "ACTIVE",
+        "exit_session": None,
+        "exit_price_inr": None,
+        "return_multiple_r": None,
+        "max_r_reached": "0.0",
+        "sessions_held": 0,
+        "data_quality": data_quality,
+    }
+
+
+def _repair_group(
+    storage_root: Path,
+    registry_dir: Path,
+    group: list[tuple[Path, dict[str, object]]],
+    *,
+    dry_run: bool,
+) -> tuple[str, int]:
+    """Return the outcome for one canonical-instrument setup and removals."""
+    diagnostics = group[0][1]
+    symbol = str(diagnostics.get("symbol", ""))
+    isin = str(diagnostics.get("isin") or "")
+    exchange = str(diagnostics.get("exchange") or "")
+    entry_session = str(diagnostics.get("entry_session", ""))
+    if not symbol or not isin or not exchange:
+        return "unrepairable", 0
+    if any(str(other.get("symbol", "")) != symbol for _path, other in group[1:]):
+        return "identity_conflict", 0
+    try:
+        entry_day = date.fromisoformat(entry_session)
+        stop_prices = {
+            Decimal(str(record.get("stop_reference_inr", "0")))
+            for _path, record in group
+        }
+    except (InvalidOperation, ValueError):
+        return "unrepairable", 0
+    if len(stop_prices) != 1:
+        return "stop_conflict", 0
+    stop_price = stop_prices.pop()
+    bars, unreadable = _load_retained_bars(storage_root, isin, exchange)
+    bars, implausible = _drop_implausible_moves(bars)
+    entry_price = bars.get(entry_day, {}).get("close")
+    if entry_price is None or stop_price <= 0 or entry_price <= stop_price:
+        return "unrepairable", 0
+
+    record = _evaluate_forward_trade(
+        _canonical_record(
+            symbol=symbol,
+            entry_session=entry_session,
+            entry_price=entry_price,
+            stop_price=stop_price,
+            isin=isin,
+            exchange=exchange,
+            data_quality={
+                "unreadable_records": unreadable,
+                "implausible_bars": implausible,
+            },
+        ),
+        bars,
+    )
+    # One record survives per setup; the rest are duplicates regardless of whether
+    # their legacy filename happens to match the canonical one.
+    removed = max(0, len(group) - 1)
+    if not dry_run:
+        target = registry_dir / f"{record['trade_id']}.json"
+        target.write_bytes(_canonical_bytes(record))
+        for path, _record in group:
+            if path != target:
+                path.unlink(missing_ok=True)
+    return "repaired", removed
+
+
+def repair_registry(  # noqa: C901 - one pass over the whole registry
+    storage_root: Path, *, dry_run: bool = False
+) -> dict[str, object]:
+    """Rewrite the registry as one canonical record per setup.
+
+    Records written before the entry price came from the event-session close carry
+    a price-derived identity, so the same setup was registered again on every pass.
+    This groups by ``(isin, exchange, entry_session)``, re-prices from retained
+    bars, keeps the canonical record and removes the duplicates.
+
+    A setup whose canonical identity, session close or stop is invalid is left
+    untouched and reported. A conflicting symbol or stop is also left untouched;
+    selecting one would destroy measurement history. Inventing an entry price
+    would be worse than an admitted gap.
+    """
+    registry_dir = storage_root / "paper-observations-v1"
+    counters = {
+        "records_read": 0,
+        "repaired": 0,
+        "duplicates_removed": 0,
+        "unrepairable": 0,
+        "identity_conflicts": 0,
+        "stop_conflicts": 0,
+    }
+    if not registry_dir.is_dir():
+        return {"schema": "paper-registry-repair@v1", "dry_run": dry_run, **counters}
+
+    grouped: dict[tuple[str, str, str], list[tuple[Path, dict[str, object]]]] = {}
+    for trade_file in sorted(registry_dir.glob("*.json")):
+        if len(trade_file.stem) != 64:
+            continue
+        try:
+            record = cast(dict[str, object], json.loads(trade_file.read_text()))
+        except (OSError, ValueError):
+            continue
+        counters["records_read"] += 1
+        symbol = str(record.get("symbol", ""))
+        identity = (
+            str(record.get("isin") or ""),
+            str(record.get("exchange") or ""),
+            str(record.get("entry_session", "")),
+        )
+        # Broken identities must remain individual records: grouping them could
+        # discard unrelated history without a canonical basis for comparison.
+        key = identity if symbol and all(identity) else (trade_file.name, "", "")
+        grouped.setdefault(key, []).append((trade_file, record))
+
+    for group in grouped.values():
+        outcome, removed = _repair_group(
+            storage_root, registry_dir, group, dry_run=dry_run
+        )
+        counters["duplicates_removed"] += removed
+        if outcome != "repaired":
+            counters["unrepairable"] += 1
+            if outcome == "identity_conflict":
+                counters["identity_conflicts"] += 1
+            if outcome == "stop_conflict":
+                counters["stop_conflicts"] += 1
+        else:
+            counters["repaired"] += 1
+
+    return {
+        "schema": "paper-registry-repair@v1",
+        "dry_run": dry_run,
+        "setups": len(grouped),
+        **counters,
+    }
 
 
 def generate_tracking_report(

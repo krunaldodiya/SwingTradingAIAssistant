@@ -571,13 +571,32 @@ performance claim: this is measurement only.
 | Data source | the scan's own retained per-session bars, never `adjusted_daily` |
 | Integrity guard | a bar whose session range leaves ±25% of the previous close is discarded as an adjusted/unadjusted splice |
 
-The data-source rule matters: entry price comes from a live quote, so evaluating
-it against an adjusted series mixes bases and produces impossible multiples. The
-guard exists because that failure was observed (a `+40R` result for a stock that
-never moved 40 risk units).
+The data-source rule matters: entry price comes from the retained event-session
+close, so evaluation stays on the same retained series. The guard exists because
+mixing adjusted and unadjusted bars was observed to produce impossible multiples
+(a `+40R` result for a stock that never moved 40 risk units).
 
 A pass may be logged as an envelope (`{decision_evidence_handle, scan}`); the
 command accepts either that or a bare scan result.
+
+**Entry is the event-session close, never the price when the candidate was
+noticed.** A candidate is republished for up to five sessions, so using the later
+price would measure a trade nobody could have taken. The trade identity is
+`ISIN + exchange + event_session`, which makes re-logging the same canonical
+instrument setup a no-op; a candidate whose valid event-session close is missing
+is not registered at all.
+
+Registries written before this rule carry price-derived identities, so one setup
+can appear several times. Repair it once:
+
+```bash
+python scripts/repair_paper_registry.py --storage-root /absolute/path --dry-run
+python scripts/repair_paper_registry.py --storage-root /absolute/path
+```
+
+The repair groups by `(ISIN, exchange, entry_session)`, re-prices from retained
+bars, keeps one canonical record and reports missing or conflicting identity,
+symbol, stop, or session-close data instead of inventing or deleting history.
 
 ## When a pass fails
 

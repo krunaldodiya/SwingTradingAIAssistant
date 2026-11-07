@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -18,6 +20,7 @@ from swing_trading_ai_assistant.market_data.paper_tracking import (
     format_tracking_table,
     generate_tracking_report,
     log_candidates_from_scan,
+    repair_registry,
 )
 from swing_trading_ai_assistant.market_data.signal_decisions_v3_cli import (
     main as cli_main,
@@ -142,7 +145,25 @@ def _sample_scan_result() -> dict[str, object]:
     }
 
 
+def _seed_pfc_bars(tmp_path: Path) -> None:
+    """Retained bars for the sample candidate, ending at its event session."""
+    _write_session_cache(
+        tmp_path,
+        "INE134E01011",
+        [
+            {"session": "2026-10-09", "high": 330, "low": 320, "close": 325},
+            {"session": "2026-10-12", "high": 338, "low": 330, "close": 333.25},
+            {"session": "2026-10-13", "high": 352, "low": 340, "close": 350},
+        ],
+    )
+
+
+def _candidate(scan: dict[str, object]) -> dict[str, object]:
+    return cast(list[dict[str, object]], scan["candidates"])[0]
+
+
 def test_log_candidates_from_scan_creates_active_paper_trade(tmp_path: Path) -> None:
+    _seed_pfc_bars(tmp_path)
     scan = _sample_scan_result()
     logged = log_candidates_from_scan(tmp_path, scan)
     assert len(logged) == 1
@@ -257,6 +278,7 @@ def test_evaluate_forward_trade_window_expired() -> None:
 
 
 def test_format_tracking_table_renders_summary_and_rows(tmp_path: Path) -> None:
+    _seed_pfc_bars(tmp_path)
     scan = _sample_scan_result()
     log_candidates_from_scan(tmp_path, scan)
     report = generate_tracking_report(tmp_path, clock=lambda: _NOW)
@@ -277,6 +299,7 @@ def test_format_tracking_table_renders_summary_and_rows(tmp_path: Path) -> None:
 def test_cli_track_subcommand(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    _seed_pfc_bars(tmp_path)
     scan_file = tmp_path / "scan.json"
     scan_file.write_text(json.dumps(_sample_scan_result()))
 
@@ -355,3 +378,187 @@ def test_dropped_bar_does_not_become_the_next_anchor() -> None:
 
     assert dropped == 1
     assert date(2026, 10, 14) in kept
+
+
+def test_entry_is_the_event_session_close_not_the_observed_price(
+    tmp_path: Path,
+) -> None:
+    """A candidate stays live for days; the entry is the session that produced it."""
+    _seed_pfc_bars(tmp_path)
+    scan = _sample_scan_result()
+    summary = cast(dict[str, object], _candidate(scan)["candidate_summary"])
+    summary["current_price_inr"] = "999.00"
+
+    trade = log_candidates_from_scan(tmp_path, scan)[0]
+
+    assert trade["entry_price_inr"] == "333.25"
+    assert trade["risk_per_share_inr"] == "19.9"
+
+
+def test_relogging_the_same_setup_is_a_no_op(tmp_path: Path) -> None:
+    """The identity is the setup, so a later price cannot register a second trade."""
+    _seed_pfc_bars(tmp_path)
+    first = _sample_scan_result()
+    second = _sample_scan_result()
+    summary = cast(dict[str, object], _candidate(second)["candidate_summary"])
+    summary["current_price_inr"] = "350.00"
+
+    one = log_candidates_from_scan(tmp_path, first)[0]
+    again = log_candidates_from_scan(tmp_path, second)[0]
+
+    assert one["trade_id"] == again["trade_id"]
+    assert len(list((tmp_path / "paper-observations-v1").glob("*.json"))) == 1
+
+
+def test_candidate_without_an_event_close_is_not_registered(tmp_path: Path) -> None:
+    """Without the session close there is no honest entry price."""
+    scan = _sample_scan_result()
+
+    assert log_candidates_from_scan(tmp_path, scan) == []
+
+
+def test_repair_deduplicates_price_keyed_records(tmp_path: Path) -> None:
+    """Legacy records keyed by price collapse to one canonical record per setup."""
+    _seed_pfc_bars(tmp_path)
+    registry = tmp_path / "paper-observations-v1"
+    registry.mkdir()
+    for price in ("333.25", "341.10"):
+        legacy_id = hashlib.sha256(
+            f"PFC:2026-10-12:{price}:313.35".encode()
+        ).hexdigest()
+        (registry / f"{legacy_id}.json").write_text(
+            json.dumps(
+                {
+                    "schema": RECORD_SCHEMA,
+                    "trade_id": legacy_id,
+                    "symbol": "PFC",
+                    "isin": "INE134E01011",
+                    "exchange": "NSE",
+                    "entry_session": "2026-10-12",
+                    "entry_price_inr": price,
+                    "stop_reference_inr": "313.35",
+                    "risk_per_share_inr": "19.90",
+                    "status": "ACTIVE",
+                    "sessions_held": 0,
+                    "max_r_reached": "0.0",
+                }
+            )
+        )
+
+    result = repair_registry(tmp_path)
+
+    assert result["records_read"] == 2
+    assert result["setups"] == 1
+    assert result["repaired"] == 1
+    assert result["duplicates_removed"] == 1
+    files = list(registry.glob("*.json"))
+    assert len(files) == 1
+    repaired = json.loads(files[0].read_text())
+    assert repaired["entry_price_inr"] == "333.25"
+    assert (
+        repaired["trade_id"]
+        == hashlib.sha256(b"INE134E01011:NSE:2026-10-12").hexdigest()
+    )
+
+
+def test_repair_dry_run_writes_nothing(tmp_path: Path) -> None:
+    _seed_pfc_bars(tmp_path)
+    registry = tmp_path / "paper-observations-v1"
+    registry.mkdir()
+    legacy = "a" * 64
+    (registry / f"{legacy}.json").write_text(
+        json.dumps(
+            {
+                "schema": RECORD_SCHEMA,
+                "trade_id": legacy,
+                "symbol": "PFC",
+                "isin": "INE134E01011",
+                "exchange": "NSE",
+                "entry_session": "2026-10-12",
+                "entry_price_inr": "341.10",
+                "stop_reference_inr": "313.35",
+                "status": "ACTIVE",
+            }
+        )
+    )
+
+    result = repair_registry(tmp_path, dry_run=True)
+
+    assert result["repaired"] == 1
+    assert [path.name for path in registry.glob("*.json")] == [f"{legacy}.json"]
+
+
+def test_distinct_instruments_with_same_symbol_and_session_do_not_collide(
+    tmp_path: Path,
+) -> None:
+    _seed_pfc_bars(tmp_path)
+    second_isin = "INE000A01001"
+    _write_session_cache(
+        tmp_path,
+        second_isin,
+        [
+            {"session": "2026-10-09", "high": 330, "low": 320, "close": 325},
+            {"session": "2026-10-12", "high": 338, "low": 330, "close": 333.25},
+        ],
+    )
+    first = _sample_scan_result()
+    second = json.loads(json.dumps(first))
+    second["candidates"][0]["isin"] = second_isin
+
+    first_trade = log_candidates_from_scan(tmp_path, first)[0]
+    second_trade = log_candidates_from_scan(tmp_path, second)[0]
+
+    assert first_trade["trade_id"] != second_trade["trade_id"]
+    assert len(list((tmp_path / "paper-observations-v1").glob("*.json"))) == 2
+
+
+def test_implausible_event_bar_is_not_registered(tmp_path: Path) -> None:
+    _seed_pfc_bars(tmp_path)
+    event_bar = (
+        tmp_path
+        / "bharatstock-session-cache-v1"
+        / "isin=INE134E01011"
+        / "exchange=NSE"
+        / "session=2026-10-12.json"
+    )
+    event_bar.write_text(
+        json.dumps(
+            {
+                "session": "2026-10-12",
+                "high": "420",
+                "low": "330",
+                "close": "333.25",
+            }
+        )
+    )
+
+    assert log_candidates_from_scan(tmp_path, _sample_scan_result()) == []
+
+
+def test_repair_preserves_conflicting_symbol_history(tmp_path: Path) -> None:
+    _seed_pfc_bars(tmp_path)
+    registry = tmp_path / "paper-observations-v1"
+    registry.mkdir()
+    for index, symbol in enumerate(("PFC", "PFC-RENAMED")):
+        record_id = str(index) * 64
+        (registry / f"{record_id}.json").write_text(
+            json.dumps(
+                {
+                    "schema": RECORD_SCHEMA,
+                    "trade_id": record_id,
+                    "symbol": symbol,
+                    "isin": "INE134E01011",
+                    "exchange": "NSE",
+                    "entry_session": "2026-10-12",
+                    "stop_reference_inr": "313.35",
+                }
+            )
+        )
+    before = sorted(path.name for path in registry.glob("*.json"))
+
+    result = repair_registry(tmp_path)
+
+    assert result["repaired"] == 0
+    assert result["unrepairable"] == 1
+    assert result["identity_conflicts"] == 1
+    assert sorted(path.name for path in registry.glob("*.json")) == before
