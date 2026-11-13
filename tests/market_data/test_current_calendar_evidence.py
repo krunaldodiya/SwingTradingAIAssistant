@@ -79,6 +79,44 @@ def _timing_epoch(trade_date: date, value: time) -> int:
     return int(local.timestamp()) * 1_000
 
 
+def _nse_master_rows(rows: list[dict[str, object]]) -> bytes:
+    value: dict[str, list[object]] = {segment: [] for segment in _SEGMENTS}
+    value["CM"] = rows
+    return json.dumps(value, separators=(",", ":")).encode()
+
+
+def _closure_row(trade_date: date, description: str) -> dict[str, object]:
+    return {
+        "tradingDate": trade_date.strftime("%d-%b-%Y"),
+        "weekDay": trade_date.strftime("%A"),
+        "description": description,
+        "morning_session": None,
+        "evening_session": None,
+    }
+
+
+def _open_row(
+    trade_date: date,
+    start: time,
+    end: time,
+    *,
+    holiday_type: str = "SETTLEMENT_HOLIDAY",
+) -> dict[str, object]:
+    return {
+        "date": trade_date.isoformat(),
+        "description": "Special session",
+        "holiday_type": holiday_type,
+        "closed_exchanges": [],
+        "open_exchanges": [
+            {
+                "exchange": "NSE",
+                "start_time": _timing_epoch(trade_date, start),
+                "end_time": _timing_epoch(trade_date, end),
+            }
+        ],
+    }
+
+
 def _bodies(coverage_from: date, as_of: datetime) -> dict[str, tuple[bytes, str]]:
     coverage_to = as_of.astimezone(ZoneInfo("Asia/Kolkata")).date()
     bodies: dict[str, tuple[bytes, str]] = {
@@ -306,6 +344,182 @@ def test_calendar_only_preserves_conflict_and_special_session_failures() -> None
         match="^SPECIAL_SESSION_UNCORROBORATED$",
     ):
         _acquire(_CalendarTransport(special), coverage_from=coverage_from)
+
+
+def test_special_timing_opening_never_overrides_official_closure() -> None:
+    as_of = datetime(2026, 11, 8, 15, 0, tzinfo=UTC)
+    coverage_from = date(2026, 10, 4)
+    bodies = _bodies(coverage_from, as_of)
+    bodies[api.UPSTOX_HOLIDAYS_URL] = (
+        json.dumps(
+            {
+                "status": "success",
+                "data": [
+                    _open_row(
+                        date(2026, 11, 8),
+                        time(14, 20),
+                        time(15, 30),
+                        holiday_type="SPECIAL_TIMING",
+                    )
+                ],
+            }
+        ).encode(),
+        "application/json",
+    )
+    bodies[api.nse_holiday_master_url_v1(2026)] = (
+        _nse_master_rows([_closure_row(date(2026, 11, 8), "Diwali Laxmi Pujan*")]),
+        "application/json",
+    )
+
+    result = _acquire(
+        _CalendarTransport(bodies), coverage_from=coverage_from, as_of=as_of
+    )
+
+    closures = {item.trade_date: item.reason for item in result.schedule.closures}
+    assert closures[date(2026, 11, 8)] == "NSE_CM_HOLIDAY:Diwali Laxmi Pujan*"
+    assert all(
+        item.trade_date != date(2026, 11, 8) for item in result.schedule.sessions
+    )
+    assert result.schedule.sessions[-1].trade_date == date(2026, 11, 6)
+    manifest = json.loads(result.source_manifest_bytes)
+    assert manifest["composition_policy"]["version"] == (
+        "nse-equity-composed-calendar@v2"
+    )
+
+
+def test_special_timing_opening_without_closure_uses_weekend_policy() -> None:
+    as_of = datetime(2026, 11, 8, 15, 0, tzinfo=UTC)
+    coverage_from = date(2026, 10, 4)
+    bodies = _bodies(coverage_from, as_of)
+    bodies[api.UPSTOX_HOLIDAYS_URL] = (
+        json.dumps(
+            {
+                "status": "success",
+                "data": [
+                    _open_row(
+                        date(2026, 11, 8),
+                        time(14, 20),
+                        time(15, 30),
+                        holiday_type="SPECIAL_TIMING",
+                    )
+                ],
+            }
+        ).encode(),
+        "application/json",
+    )
+    bodies[api.nse_holiday_master_url_v1(2026)] = (
+        _nse_master_rows([_closure_row(date(2026, 1, 26), "Republic Day")]),
+        "application/json",
+    )
+
+    result = _acquire(
+        _CalendarTransport(bodies), coverage_from=coverage_from, as_of=as_of
+    )
+
+    closures = {item.trade_date: item.reason for item in result.schedule.closures}
+    assert closures[date(2026, 11, 8)] == "COMPOSED_WEEKEND_POLICY:SUNDAY"
+
+
+def test_weekday_special_timing_opening_against_closure_is_closed() -> None:
+    as_of = datetime(2026, 11, 9, 15, 0, tzinfo=UTC)
+    coverage_from = date(2026, 10, 5)
+    bodies = _bodies(coverage_from, as_of)
+    bodies[api.UPSTOX_HOLIDAYS_URL] = (
+        json.dumps(
+            {
+                "status": "success",
+                "data": [
+                    _open_row(
+                        date(2026, 11, 9),
+                        time(14, 20),
+                        time(15, 30),
+                        holiday_type="SPECIAL_TIMING",
+                    )
+                ],
+            }
+        ).encode(),
+        "application/json",
+    )
+    bodies[api.nse_holiday_master_url_v1(2026)] = (
+        _nse_master_rows([_closure_row(date(2026, 11, 9), "Special closure")]),
+        "application/json",
+    )
+
+    result = _acquire(
+        _CalendarTransport(bodies), coverage_from=coverage_from, as_of=as_of
+    )
+
+    closures = {item.trade_date: item.reason for item in result.schedule.closures}
+    assert closures[date(2026, 11, 9)] == "NSE_CM_HOLIDAY:Special closure"
+    assert all(
+        item.trade_date != date(2026, 11, 9) for item in result.schedule.sessions
+    )
+
+
+def test_weekday_special_timing_opening_without_closure_still_fails() -> None:
+    as_of = datetime(2026, 11, 9, 15, 0, tzinfo=UTC)
+    coverage_from = date(2026, 10, 5)
+    bodies = _bodies(coverage_from, as_of)
+    bodies[api.UPSTOX_HOLIDAYS_URL] = (
+        json.dumps(
+            {
+                "status": "success",
+                "data": [
+                    _open_row(
+                        date(2026, 11, 9),
+                        time(14, 20),
+                        time(15, 30),
+                        holiday_type="SPECIAL_TIMING",
+                    )
+                ],
+            }
+        ).encode(),
+        "application/json",
+    )
+    bodies[api.nse_holiday_master_url_v1(2026)] = (
+        _nse_master_rows([_closure_row(date(2026, 1, 26), "Republic Day")]),
+        "application/json",
+    )
+
+    with pytest.raises(
+        api.CurrentEvidenceAcquisitionError,
+        match="^SPECIAL_SESSION_UNCORROBORATED$",
+    ):
+        _acquire(_CalendarTransport(bodies), coverage_from=coverage_from, as_of=as_of)
+
+
+def test_prior_year_non_regular_timing_against_closure_is_closed() -> None:
+    as_of = datetime(2026, 1, 6, 4, 30, tzinfo=UTC)
+    coverage_from = date(2025, 12, 6)
+    target = date(2025, 12, 8)
+    bodies = _bodies(coverage_from, as_of)
+    bodies[api.upstox_market_timings_url_v1(target)] = (
+        json.dumps(
+            {
+                "status": "success",
+                "data": [
+                    {
+                        "exchange": "NSE",
+                        "start_time": _timing_epoch(target, time(14, 20)),
+                        "end_time": _timing_epoch(target, time(15, 30)),
+                    }
+                ],
+            }
+        ).encode(),
+        "application/json",
+    )
+    bodies[api.nse_holiday_master_url_v1(2025)] = (
+        _nse_master_rows([_closure_row(target, "Special closure")]),
+        "application/json",
+    )
+
+    result = _acquire(
+        _CalendarTransport(bodies), coverage_from=coverage_from, as_of=as_of
+    )
+
+    closures = {item.trade_date: item.reason for item in result.schedule.closures}
+    assert closures[target] == "NSE_CM_HOLIDAY:Special closure"
+    assert all(item.trade_date != target for item in result.schedule.sessions)
 
 
 def test_calendar_evidence_rejects_tampered_manifest_schedule_and_observation() -> None:

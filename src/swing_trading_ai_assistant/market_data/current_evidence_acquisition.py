@@ -73,7 +73,7 @@ UPSTOX_HOLIDAYS_URL: Final = "https://api.upstox.com/v2/market/holidays"
 UPSTOX_TIMINGS_URL: Final = "https://api.upstox.com/v2/market/timings"
 NSE_HOLIDAY_MASTER_URL: Final = "https://www.nseindia.com/api/holiday-master"
 SCHEDULE_SOURCE: Final = "nse-upstox-composed-calendar"
-SCHEDULE_COMPOSITION_VERSION: Final = "nse-equity-composed-calendar@v1"
+SCHEDULE_COMPOSITION_VERSION: Final = "nse-equity-composed-calendar@v2"
 INDUSTRY_ACQUISITION_METHOD: Final = "BOUNDED_OFFICIAL_FETCH"
 EVENT_LICENCE_POLICY_IDENTITY: Final = CURRENT_EVENT_NOTICE_LICENCE_POLICY_IDENTITY_V1
 
@@ -1459,19 +1459,25 @@ def _compose_calendar_schedule_v1(  # noqa: C901
             if timing is None:
                 raise CurrentEvidenceAcquisitionError("SOURCE_MALFORMED")
             if timing.open_at is not None and timing.close_at is not None:
-                if official_closure is not None:
-                    raise CurrentEvidenceAcquisitionError("SOURCE_CONFLICT")
-                _require_regular_explicit_opening(
-                    current, timing.open_at, timing.close_at
-                )
-                sessions.append(
-                    ScheduleSession(
-                        current,
-                        timing.open_at,
-                        timing.close_at,
-                        "REGULAR",
+                if (timing.open_at, timing.close_at) == _regular_opening(current):
+                    if official_closure is not None:
+                        raise CurrentEvidenceAcquisitionError("SOURCE_CONFLICT")
+                    sessions.append(
+                        ScheduleSession(
+                            current,
+                            timing.open_at,
+                            timing.close_at,
+                            "REGULAR",
+                        )
                     )
-                )
+                elif official_closure is not None:
+                    closed_dates.append(_closure(current, official_closure))
+                elif current.weekday() >= 5:
+                    closed_dates.append(_closure(current, None))
+                else:
+                    raise CurrentEvidenceAcquisitionError(
+                        "SPECIAL_SESSION_UNCORROBORATED"
+                    )
             elif official_closure is not None:
                 closed_dates.append(_closure(current, official_closure))
             elif current.weekday() >= 5:
@@ -1487,21 +1493,29 @@ def _compose_calendar_schedule_v1(  # noqa: C901
             and provider.open_at is not None
             and provider.close_at is not None
         ):
-            if official_closure is not None:
-                raise CurrentEvidenceAcquisitionError("SOURCE_CONFLICT")
-            if provider.holiday_type == "SPECIAL_TIMING":
-                raise CurrentEvidenceAcquisitionError("SPECIAL_SESSION_UNCORROBORATED")
-            _require_regular_explicit_opening(
-                current, provider.open_at, provider.close_at
-            )
-            sessions.append(
-                ScheduleSession(
-                    current,
-                    provider.open_at,
-                    provider.close_at,
-                    "REGULAR",
+            if provider.holiday_type != "SPECIAL_TIMING" and (
+                provider.open_at,
+                provider.close_at,
+            ) == _regular_opening(current):
+                if official_closure is not None:
+                    raise CurrentEvidenceAcquisitionError("SOURCE_CONFLICT")
+                sessions.append(
+                    ScheduleSession(
+                        current,
+                        provider.open_at,
+                        provider.close_at,
+                        "REGULAR",
+                    )
                 )
-            )
+            elif official_closure is not None:
+                # A non-regular provider opening is inadmissible without sealed
+                # official special-session evidence; it cannot override the
+                # exchange's authoritative closure. The claim stays retained.
+                closed_dates.append(_closure(current, official_closure))
+            elif current.weekday() >= 5:
+                closed_dates.append(_closure(current, None))
+            else:
+                raise CurrentEvidenceAcquisitionError("SPECIAL_SESSION_UNCORROBORATED")
         elif provider is not None and provider.closed:
             if current.weekday() < 5 and official_closure is None:
                 raise CurrentEvidenceAcquisitionError("SOURCE_CONFLICT")
@@ -1528,6 +1542,12 @@ def _compose_calendar_schedule_v1(  # noqa: C901
                 "UNRECOGNIZED_HOLIDAY_TYPE",
                 "SPECIAL_SESSION_UNCORROBORATED",
             ],
+            "non_regular_provider_opening": {
+                "admission": "INADMISSIBLE_WITHOUT_SEALED_OFFICIAL_SPECIAL_SESSION",
+                "against_official_closure": "OFFICIAL_CLOSURE_APPLIES",
+                "against_weekend": "WEEKEND_CLOSURE_APPLIES",
+                "otherwise": "SPECIAL_SESSION_UNCORROBORATED",
+            },
             "precedence": [
                 "UPSTOX_NSE_EXPLICIT",
                 "NSE_CM_CLOSURE",
@@ -2006,13 +2026,6 @@ def _regular_opening(trade_date: date) -> tuple[datetime, datetime]:
         datetime.combine(trade_date, _REGULAR_OPEN, _IST).astimezone(UTC),
         datetime.combine(trade_date, _REGULAR_CLOSE, _IST).astimezone(UTC),
     )
-
-
-def _require_regular_explicit_opening(
-    trade_date: date, open_at: datetime, close_at: datetime
-) -> None:
-    if (open_at, close_at) != _regular_opening(trade_date):
-        raise CurrentEvidenceAcquisitionError("SPECIAL_SESSION_UNCORROBORATED")
 
 
 def _closure(trade_date: date, official: _NseClosure | None) -> ScheduleClosure:
