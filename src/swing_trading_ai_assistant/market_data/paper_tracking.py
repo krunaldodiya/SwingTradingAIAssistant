@@ -502,7 +502,12 @@ def repair_registry(  # noqa: C901 - one pass over the whole registry
         "stop_conflicts": 0,
     }
     if not registry_dir.is_dir():
-        return {"schema": "paper-registry-repair@v1", "dry_run": dry_run, **counters}
+        return {
+            "schema": "paper-registry-repair@v1",
+            "dry_run": dry_run,
+            "setups": 0,
+            **counters,
+        }
 
     grouped: dict[tuple[str, str, str], list[tuple[Path, dict[str, object]]]] = {}
     for trade_file in sorted(registry_dir.glob("*.json")):

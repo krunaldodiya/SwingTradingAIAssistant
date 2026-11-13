@@ -488,6 +488,17 @@ def test_repair_dry_run_writes_nothing(tmp_path: Path) -> None:
     assert [path.name for path in registry.glob("*.json")] == [f"{legacy}.json"]
 
 
+def test_repair_reports_zero_setups_when_registry_namespace_is_absent(
+    tmp_path: Path,
+) -> None:
+    result = repair_registry(tmp_path, dry_run=True)
+
+    assert result["schema"] == "paper-registry-repair@v1"
+    assert result["dry_run"] is True
+    assert result["setups"] == 0
+    assert result["records_read"] == 0
+
+
 def test_distinct_instruments_with_same_symbol_and_session_do_not_collide(
     tmp_path: Path,
 ) -> None:

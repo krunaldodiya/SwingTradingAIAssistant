@@ -4,6 +4,8 @@ import importlib.util
 import json
 from pathlib import Path
 
+import pytest
+
 spec = importlib.util.spec_from_file_location(
     "repair_paper_registry",
     Path(__file__).parents[1] / "scripts" / "repair_paper_registry.py",
@@ -81,3 +83,15 @@ def test_repair_collapses_to_one_record_per_setup(tmp_path: Path) -> None:
 
 def test_invalid_root_is_rejected(tmp_path: Path) -> None:
     assert repair.main(["--storage-root", str(tmp_path / "missing")]) == 2
+
+
+def test_absent_registry_reports_zero_setups(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    storage = tmp_path / "data"
+    storage.mkdir()
+
+    code = repair.main(["--storage-root", str(storage), "--dry-run"])
+
+    assert code == 0
+    assert "0 setup(s)" in capsys.readouterr().out
