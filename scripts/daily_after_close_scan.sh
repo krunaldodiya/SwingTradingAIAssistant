@@ -25,6 +25,16 @@ STAMP=${SWING_DATE_OVERRIDE:-$(date +%F)}
 DRY_RUN=${SWING_DRY_RUN:-0}
 mkdir -p "$LOG"
 
+# Optional owner-authorized daily-quota pool. Present files switch every
+# provider request to the pooled router; absent files keep single-key mode.
+POOL_DB=${BHARATSTOCK_KEY_POOL_DB:-$STORE/.quota-router/accounts.sqlite3}
+POOL_KEY=${QUOTA_ROUTER_MASTER_KEY_FILE:-$STORE/.quota-router/master.key}
+if [ -f "$POOL_DB" ] && [ -f "$POOL_KEY" ]; then
+  export BHARATSTOCK_KEY_POOL_DB="$POOL_DB"
+  export QUOTA_ROUTER_MASTER_KEY_FILE="$POOL_KEY"
+  export BHARATSTOCK_KEY_POOL_DAILY_LIMIT=${BHARATSTOCK_KEY_POOL_DAILY_LIMIT:-60}
+fi
+
 # Provider credentials come from Doppler under an explicit project/config scope,
 # so no global Doppler configuration is required or mutated by this repository.
 run_with_secrets() {
