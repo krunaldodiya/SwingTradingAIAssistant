@@ -23,17 +23,6 @@ class _KeyRouter(Protocol):
     def acquire_key(self) -> str: ...
 
 
-class _RouterFactory(Protocol):
-    def __call__(
-        self,
-        storage_path: str,
-        *,
-        daily_limit: int,
-        timezone: str,
-        master_key: str,
-    ) -> _KeyRouter: ...
-
-
 _routers: dict[str, _KeyRouter] = {}
 _lock = Lock()
 _PRIMARY_PROBE_URL = "https://bharatstockapi.com/v1/stocks/INE002A01018?exchange=NSE"
@@ -96,7 +85,7 @@ def key_provider() -> Callable[[], str] | None:
     if limit <= 0:
         raise ValueError("invalid BharatStock key pool daily limit")
     module = _router_module()
-    factory = cast(_RouterFactory, vars(module)["DailyQuotaKeyRouter"])
+    factory = cast(Callable[..., _KeyRouter], vars(module)["DailyQuotaKeyRouter"])
     exhausted = cast(type[BaseException], vars(module)["QuotaExhaustedError"])
 
     with _lock:
