@@ -74,6 +74,7 @@ MARKET_DATA_RUNTIME_SOURCE_SHA256_V1: Final[dict[str, str]] = {
     "instruments.py": "88da37f7a12c1e7e8a3dfa44c2755e12581f986886728b6addce91e851123029",
     "intraday.py": "0966bb9b3bd3bd6870b0a15c1196529d383316a46df51251323caf6b792bcc83",
     "intraday_views.py": "eb9ae60e50b915060a768d5fd2bf5bdd0598dc952d2c7268ad0a3bbb981dc096",
+    "key_pool.py": "98e9a91f2ca4894ba892a0c28e3610e6c9fa5a072dc947f61109615e49d2fddf",
     "live_gate.py": "ce62d930e195d06774c1a9583bed5ac514e1bb7565037b15af957f0b0bcb770a",
     "loss_scenario.py": "0b4629570406b662b68df543264383b01dd75ff76a4d1bc1894f0161b16d46a1",
     "loss_scenario_runtime_identity_manifest.py": "127bd00c9af8db84cd45a8d5d1ed69e9e151437c13c75627428d1db8ea3ea4c5",
