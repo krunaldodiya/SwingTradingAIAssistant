@@ -5,9 +5,9 @@ from typing import Final
 AGENT_RESEARCH_RUN_RUNTIME_SOURCE_SHA256_V1: Final[dict[str, str]] = {
     "src/swing_trading_ai_assistant/market_data/agent_loss_context.py": "2c90515d853cfcdb86d5ab24f29121e2ee7431937009ae4e445d5678c4ffbabe",
     "src/swing_trading_ai_assistant/market_data/loss_scenario.py": "0b4629570406b662b68df543264383b01dd75ff76a4d1bc1894f0161b16d46a1",
-    "src/swing_trading_ai_assistant/market_data/loss_scenario_runtime_identity_manifest.py": "127bd00c9af8db84cd45a8d5d1ed69e9e151437c13c75627428d1db8ea3ea4c5",
+    "src/swing_trading_ai_assistant/market_data/loss_scenario_runtime_identity_manifest.py": "59c0ec623c2e7fc8eef7f9cf921d10b021c9139f9161edf2fa6b0a183f52611d",
     "src/swing_trading_ai_assistant/market_data/agent_analysis_context.py": "630ce056ae043bafb711bd5305d0db2312f265b5c3d9dcea7e2c333b9b3c8726",
-    "src/swing_trading_ai_assistant/market_data/agent_cohort_context.py": "603249166ef2836f4c6630cc3f00bcfb5de0d33ae5934f3ef4c650f048cd5cfa",
+    "src/swing_trading_ai_assistant/market_data/agent_cohort_context.py": "4eb98ec71058e45b68f540322b6c62d5d2cf43ecb08cdf166c64dfa4a30d4454",
     "src/swing_trading_ai_assistant/market_data/agent_cohort_industry.py": "4fdce59d5e3536a54111b681bcd16f1fa9e545cf4f76f961505bd7aea4ed9adb",
     "src/swing_trading_ai_assistant/market_data/agent_cohort_request.py": "dbf2de40af4cce777e50fc70cc13cd125bab01d3e4cde49374d8c8c5be0f460b",
     "src/swing_trading_ai_assistant/market_data/agent_event_context.py": "6bf86acf779ae2a7f9d35246ee174937da91b211faa5b2a5e336a145db802d52",
@@ -18,6 +18,6 @@ AGENT_RESEARCH_RUN_RUNTIME_SOURCE_SHA256_V1: Final[dict[str, str]] = {
     "src/swing_trading_ai_assistant/volume_analysis/current.py": "e55e854e4a1629be4e2bf522dc1dcaf2cd9ae763784ac557b6b201591a6c8618",
     "src/swing_trading_ai_assistant/volume_analysis/request.py": "241fa165aa3e684037499a187d18779f835997ce9c064a6a32a2c542dc6ecc97",
     "src/swing_trading_ai_assistant/volume_analysis/service.py": "3c23777c5825f2b4c46c6b5ff9de184826c25910688ef2ec432dfc86da096893",
-    "src/swing_trading_ai_assistant/market_data/setup_screen.py": "448e32684c5dc3bd82511bcee224d347aadb9b9211f0cf215493050e194b7b38",
-    "src/swing_trading_ai_assistant/market_data/setup_screen_runtime_identity_manifest.py": "288d7f1b93244d56ca3055568af4d2a5e729f669ab203da0bc12785c1344dac7",
+    "src/swing_trading_ai_assistant/market_data/setup_screen.py": "23dad05aae687deff03e1bbd0670cef93332c1d19d5e1abd92968181df84fa60",
+    "src/swing_trading_ai_assistant/market_data/setup_screen_runtime_identity_manifest.py": "cde9f11629670f5a60806beaa08f59746d2ada51b14aae16df437ccd3d807522",
 }

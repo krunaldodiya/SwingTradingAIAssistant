@@ -158,6 +158,18 @@ def _request(
     completed = tuple(item for item in schedule.sessions if item.close_at <= selected)
     if len(completed) < 21:
         raise _Insufficient("LATEST_COMPLETED_SESSION_UNRESOLVED")
+    unresolved = acquisition.first_unresolved_window_closure(
+        schedule.closures,
+        tuple(item.trade_date for item in completed),
+        (21,),
+        sessions_back=0,
+        selection_date=selected.astimezone(ZoneInfo("Asia/Kolkata")).date(),
+    )
+    if unresolved is not None:
+        raise _Insufficient(
+            "CALENDAR_UNRESOLVED:"
+            f"{unresolved.trade_date.isoformat()}:{unresolved.reason}"
+        )
     sessions = tuple(
         daily.CurrentSamePassRawSessionV1(
             i, s.trade_date, s.open_at, s.close_at, s.kind

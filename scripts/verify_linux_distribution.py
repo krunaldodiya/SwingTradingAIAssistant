@@ -37,7 +37,7 @@ def _engine() -> str:
 ROOT = Path(__file__).resolve().parents[1]
 DEMO = "swing_trading_ai_assistant._examples.single_stock_research_demo"
 EXPECTED_SYNTHETIC_IDENTITY = (
-    "4e9e6528348e0245af36555d70144e57db7822c4b660e10cecf2b9b83f2bb553"
+    "268afde65f89430997ed056ced4050dcc3eebf970921a07c94a513b7915b0149"
 )
 MUTABLE_SOURCE = (
     ROOT / "src/swing_trading_ai_assistant/market_structure/current_live.py"

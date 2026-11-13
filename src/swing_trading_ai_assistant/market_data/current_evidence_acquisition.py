@@ -75,6 +75,33 @@ NSE_HOLIDAY_MASTER_URL: Final = "https://www.nseindia.com/api/holiday-master"
 SCHEDULE_SOURCE: Final = "nse-upstox-composed-calendar"
 SCHEDULE_COMPOSITION_VERSION: Final = "nse-equity-composed-calendar@v2"
 UNRESOLVED_PREFIX: Final = "UNRESOLVED_"
+
+
+def first_unresolved_window_closure(
+    closures: tuple[ScheduleClosure, ...],
+    completed_sessions: tuple[date, ...],
+    window_sizes: tuple[int, ...],
+    *,
+    sessions_back: int,
+    selection_date: date,
+) -> ScheduleClosure | None:
+    """Return an unresolved date that can invalidate a required session window."""
+    unresolved = tuple(
+        closure for closure in closures if closure.reason.startswith(UNRESOLVED_PREFIX)
+    )
+    if not unresolved:
+        return None
+    for count in window_sizes:
+        selected = completed_sessions[-count:]
+        first, last = selected[0], selected[-1]
+        for closure in unresolved:
+            if first <= closure.trade_date <= last or (
+                sessions_back == 0 and last < closure.trade_date <= selection_date
+            ):
+                return closure
+    return None
+
+
 INDUSTRY_ACQUISITION_METHOD: Final = "BOUNDED_OFFICIAL_FETCH"
 EVENT_LICENCE_POLICY_IDENTITY: Final = CURRENT_EVENT_NOTICE_LICENCE_POLICY_IDENTITY_V1
 

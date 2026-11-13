@@ -7,6 +7,6 @@ LOSS_SCENARIO_RUNTIME_SOURCE_SHA256_V1: Final[dict[str, str]] = {
     "src/swing_trading_ai_assistant/market_data/cli.py": "4bd73e7a5ee79a61ac48d69664a5f19ac1421853c460a00d2b75735f291ffff6",
     "src/swing_trading_ai_assistant/market_data/loss_scenario.py": "0b4629570406b662b68df543264383b01dd75ff76a4d1bc1894f0161b16d46a1",
     "src/swing_trading_ai_assistant/market_data/runtime_source_verifier.py": "834fb3261a269b35e582d91b7c497be276bd102078bb9d71816fe2f77a4c721a",
-    "src/swing_trading_ai_assistant/market_data/setup_screen.py": "448e32684c5dc3bd82511bcee224d347aadb9b9211f0cf215493050e194b7b38",
-    "src/swing_trading_ai_assistant/market_data/setup_screen_runtime_identity_manifest.py": "288d7f1b93244d56ca3055568af4d2a5e729f669ab203da0bc12785c1344dac7",
+    "src/swing_trading_ai_assistant/market_data/setup_screen.py": "23dad05aae687deff03e1bbd0670cef93332c1d19d5e1abd92968181df84fa60",
+    "src/swing_trading_ai_assistant/market_data/setup_screen_runtime_identity_manifest.py": "cde9f11629670f5a60806beaa08f59746d2ada51b14aae16df437ccd3d807522",
 }

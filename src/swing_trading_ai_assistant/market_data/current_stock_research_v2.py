@@ -50,10 +50,10 @@ from .bharatstock_capture import (
 from .catalog import CatalogError
 from .current_event_notice_v2 import RetainedCurrentEventNoticeProjectionV2
 from .current_evidence_acquisition import (
-    UNRESOLVED_PREFIX,
     BoundedOfficialHttpSessionV1,
     CurrentEvidenceAcquisitionError,
     acquire_current_calendar_evidence_v1,
+    first_unresolved_window_closure,
 )
 from .current_research_binding_v2 import (
     AdmittedCurrentResearchBindingV2,
@@ -76,7 +76,7 @@ from .instrument_snapshot import (
 )
 from .key_pool import key_provider
 from .runtime_source_verifier import runtime_source_sha256
-from .schedule_evidence import ScheduleClosure, ScheduleEvidenceStore, ScheduleOutcome
+from .schedule_evidence import ScheduleEvidenceStore, ScheduleOutcome
 from .storage_root_lease import StorageRootLeaseError
 
 CONTRACT_VERSION_V2: Final = "current-stock-research@v2"
@@ -436,31 +436,6 @@ def _terminal(
     )
 
 
-def _first_unresolved_window_closure(
-    closures: tuple[ScheduleClosure, ...],
-    completed_sessions: tuple[date, ...],
-    window_sizes: tuple[int, ...],
-    *,
-    sessions_back: int,
-    selection_date: date,
-) -> ScheduleClosure | None:
-    """Return an unresolved date that can invalidate a required session window."""
-    unresolved = tuple(
-        closure for closure in closures if closure.reason.startswith(UNRESOLVED_PREFIX)
-    )
-    if not unresolved:
-        return None
-    for count in window_sizes:
-        selected = completed_sessions[-count:]
-        first, last = selected[0], selected[-1]
-        for closure in unresolved:
-            if first <= closure.trade_date <= last or (
-                sessions_back == 0 and last < closure.trade_date <= selection_date
-            ):
-                return closure
-    return None
-
-
 def _capture_request(
     *,
     member: object,
@@ -763,7 +738,7 @@ def _research_current_stock_v2(  # noqa: C901 - explicit stage boundaries are in
                     "INSUFFICIENT_COMPLETED_SESSIONS",
                     insufficient=True,
                 )
-            unresolved = _first_unresolved_window_closure(
+            unresolved = first_unresolved_window_closure(
                 calendar.schedule.closures,
                 completed_sessions,
                 window_sizes,
