@@ -34,6 +34,7 @@ from .current_cohort import (
 from .current_corporate_action_screen_runtime_identity_manifest import (
     CORPORATE_ACTION_SCREEN_RUNTIME_SOURCE_SHA256_V1,
 )
+from .current_evidence_acquisition import UNRESOLVED_PREFIX
 from .schedule_evidence import (
     SCHEDULE_SCHEMA_VERSION_V2,
     SCHEDULE_SCHEMA_VERSION_V3,
@@ -1943,6 +1944,17 @@ def _schedule_close(
     try:
         sessions = tuple(schedule.sessions)
         closures = tuple(schedule.closures)
+        if any(
+            closure.reason.startswith(UNRESOLVED_PREFIX)
+            and request.comparison_session
+            <= closure.trade_date
+            <= request.decision_session
+            for closure in closures
+        ):
+            return (
+                PrivateCorporateActionScreenOutcomeV1.SCHEDULE_CONTINUITY_UNPROVEN,
+                None,
+            )
         session_dates = tuple(session.trade_date for session in sessions)
         closure_dates = tuple(closure.trade_date for closure in closures)
         covered = {

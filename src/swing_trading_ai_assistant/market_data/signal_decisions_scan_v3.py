@@ -874,7 +874,14 @@ def _scan_stock(  # noqa: C901 - multi-family screening and anti-manipulation ga
         or getattr(obs_result, "symbol", None) != symbol
         or getattr(obs_result, "status", None) != "READY"
     ):
-        return _unavailable_result(symbol, "OBSERVATION_STRUCTURE_NOT_READY")
+        reason = "OBSERVATION_STRUCTURE_NOT_READY"
+        for limitation in getattr(obs_result, "limitations", ()):
+            if isinstance(limitation, str) and limitation.startswith(
+                "calendar_unresolved:"
+            ):
+                reason = limitation
+                break
+        return _unavailable_result(symbol, reason)
 
     policy_result: dict[str, object] | None = None
     failure_reason: str | None = None

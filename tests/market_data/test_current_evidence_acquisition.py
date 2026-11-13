@@ -452,7 +452,7 @@ def test_oversized_transport_failure_is_sanitized() -> None:
         _acquire(Oversized())
 
 
-def test_composer_rejects_upstox_nse_open_against_official_cm_closure() -> None:
+def test_composer_contains_regular_open_against_official_closure() -> None:
     bodies = _bodies()
     conflict = json.loads(_NSE)
     conflict["CM"].append(
@@ -469,21 +469,22 @@ def test_composer_rejects_upstox_nse_open_against_official_cm_closure() -> None:
         "application/json",
     )
 
-    with pytest.raises(api.CurrentEvidenceAcquisitionError, match="^SOURCE_CONFLICT$"):
-        _acquire(_Transport(bodies))
+    result = _acquire(_Transport(bodies))
+    closures = {item.trade_date: item.reason for item in result.schedule.closures}
+    assert closures[date(2026, 8, 26)] == (
+        "UNRESOLVED_REGULAR_OPEN_AGAINST_CLOSURE:Conflicting closure"
+    )
 
 
-def test_special_session_is_rejected_without_caller_corroboration_surface() -> None:
+def test_special_session_is_contained_without_caller_corroboration_surface() -> None:
     bodies = _bodies()
     upstox = json.loads(_UPSTOX)
     upstox["data"][0]["holiday_type"] = "SPECIAL_TIMING"
     bodies[api.UPSTOX_HOLIDAYS_URL] = (json.dumps(upstox).encode(), "application/json")
 
-    with pytest.raises(
-        api.CurrentEvidenceAcquisitionError,
-        match="^SPECIAL_SESSION_UNCORROBORATED$",
-    ):
-        _acquire(_Transport(bodies))
+    result = _acquire(_Transport(bodies))
+    closures = {item.trade_date: item.reason for item in result.schedule.closures}
+    assert closures[date(2026, 8, 26)] == "UNRESOLVED_SPECIAL_SESSION"
     assert not hasattr(api, "OfficialSpecialSessionV1")
 
 
@@ -866,11 +867,11 @@ def test_cross_year_twenty_one_sessions_use_two_masters_and_bounded_daily_eviden
 @pytest.mark.parametrize(
     ("fault_date", "start", "end", "expected"),
     [
-        (date(2025, 12, 9), time(10), time(12), "SPECIAL_SESSION_UNCORROBORATED"),
-        (date(2025, 12, 10), None, None, "SOURCE_MALFORMED"),
+        (date(2025, 12, 9), time(10), time(12), "UNRESOLVED_SPECIAL_SESSION"),
+        (date(2025, 12, 10), None, None, "UNRESOLVED_MISSING_TIMING"),
     ],
 )
-def test_cross_year_prior_evidence_fails_closed_when_incomplete_or_special(
+def test_cross_year_prior_evidence_contains_date_local_gaps(
     fault_date: date,
     start: time | None,
     end: time | None,
@@ -892,13 +893,14 @@ def test_cross_year_prior_evidence_fails_closed_when_incomplete_or_special(
         json.dumps({"status": "success", "data": rows}).encode(),
         "application/json",
     )
-    with pytest.raises(api.CurrentEvidenceAcquisitionError, match=f"^{expected}$"):
-        api.acquire_current_sprint14_evidence_v1(
-            transport=_Transport(bodies),
-            clock=lambda: as_of,
-            coverage_from=coverage_from,
-            as_of=as_of,
-        )
+    result = api.acquire_current_sprint14_evidence_v1(
+        transport=_Transport(bodies),
+        clock=lambda: as_of,
+        coverage_from=coverage_from,
+        as_of=as_of,
+    )
+    closures = {item.trade_date: item.reason for item in result.schedule.closures}
+    assert closures[fault_date] == expected
 
 
 def test_public_bounds_reject_wrong_types_coverage_urls_and_timestamp_overflow() -> (

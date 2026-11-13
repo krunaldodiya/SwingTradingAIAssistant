@@ -229,6 +229,22 @@ def _mapping_binding(
     return mapping._admit(rebuilt)  # pyright: ignore[reportPrivateUsage]
 
 
+def _limitations_admitted(value: object) -> bool:
+    if value == list(producer._LIMITATIONS):  # pyright: ignore[reportPrivateUsage]
+        return True
+    if type(value) is not list:
+        return False
+    items = cast(list[object], value)
+    if len(items) != len(producer._LIMITATIONS) + 1:  # pyright: ignore[reportPrivateUsage]
+        return False
+    extra = items[-1]
+    return (
+        tuple(cast(list[str], items[:-1])) == producer._LIMITATIONS  # pyright: ignore[reportPrivateUsage]
+        and type(extra) is str
+        and extra.startswith("calendar_unresolved:")
+    )
+
+
 def _rebuild(
     root: Path, lease: StorageRootLease, value: object
 ) -> producer.CurrentStockResearchResultV2:
@@ -238,7 +254,7 @@ def _rebuild(
         != {item.name for item in fields(producer.CurrentStockResearchResultV2)}
         or data["question"] not in _QUESTIONS
         or data["runtime_code_identity_sha256"] != producer._runtime_identity()  # pyright: ignore[reportPrivateUsage]
-        or data["limitations"] != list(producer._LIMITATIONS)  # pyright: ignore[reportPrivateUsage]
+        or not _limitations_admitted(data["limitations"])
     ):  # pyright: ignore[reportPrivateUsage]
         raise ValueError("unsupported observation producer")
     packet = None

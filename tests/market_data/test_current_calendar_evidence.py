@@ -288,7 +288,7 @@ def test_calendar_only_rejects_malformed_source_without_unrelated_requests() -> 
     assert transport.requests == [api.UPSTOX_HOLIDAYS_URL]
 
 
-def test_calendar_only_preserves_conflict_and_special_session_failures() -> None:
+def test_calendar_only_contains_date_local_conflicts_and_special_sessions() -> None:
     coverage_from = date(2026, 8, 1)
     conflict = _bodies(coverage_from, _NOW)
     conflict[api.UPSTOX_HOLIDAYS_URL] = (
@@ -308,8 +308,17 @@ def test_calendar_only_preserves_conflict_and_special_session_failures() -> None
         ).encode(),
         "application/json",
     )
-    with pytest.raises(api.CurrentEvidenceAcquisitionError, match="^SOURCE_CONFLICT$"):
-        _acquire(_CalendarTransport(conflict), coverage_from=coverage_from)
+    conflict_result = _acquire(
+        _CalendarTransport(conflict), coverage_from=coverage_from
+    )
+    conflict_closures = {
+        item.trade_date: item.reason for item in conflict_result.schedule.closures
+    }
+    assert conflict_closures[date(2026, 8, 26)] == "UNRESOLVED_PROVIDER_CLOSURE"
+    assert all(
+        item.trade_date != date(2026, 8, 26)
+        for item in conflict_result.schedule.sessions
+    )
 
     special = _bodies(coverage_from, _NOW)
     special[api.UPSTOX_HOLIDAYS_URL] = (
@@ -339,11 +348,11 @@ def test_calendar_only_preserves_conflict_and_special_session_failures() -> None
         ).encode(),
         "application/json",
     )
-    with pytest.raises(
-        api.CurrentEvidenceAcquisitionError,
-        match="^SPECIAL_SESSION_UNCORROBORATED$",
-    ):
-        _acquire(_CalendarTransport(special), coverage_from=coverage_from)
+    special_result = _acquire(_CalendarTransport(special), coverage_from=coverage_from)
+    special_closures = {
+        item.trade_date: item.reason for item in special_result.schedule.closures
+    }
+    assert special_closures[date(2026, 8, 26)] == "UNRESOLVED_SPECIAL_SESSION"
 
 
 def test_special_timing_opening_never_overrides_official_closure() -> None:
@@ -456,7 +465,7 @@ def test_weekday_special_timing_opening_against_closure_is_closed() -> None:
     )
 
 
-def test_weekday_special_timing_opening_without_closure_still_fails() -> None:
+def test_weekday_special_timing_opening_without_closure_is_contained() -> None:
     as_of = datetime(2026, 11, 9, 15, 0, tzinfo=UTC)
     coverage_from = date(2026, 10, 5)
     bodies = _bodies(coverage_from, as_of)
@@ -481,11 +490,15 @@ def test_weekday_special_timing_opening_without_closure_still_fails() -> None:
         "application/json",
     )
 
-    with pytest.raises(
-        api.CurrentEvidenceAcquisitionError,
-        match="^SPECIAL_SESSION_UNCORROBORATED$",
-    ):
-        _acquire(_CalendarTransport(bodies), coverage_from=coverage_from, as_of=as_of)
+    result = _acquire(
+        _CalendarTransport(bodies), coverage_from=coverage_from, as_of=as_of
+    )
+
+    closures = {item.trade_date: item.reason for item in result.schedule.closures}
+    assert closures[date(2026, 11, 9)] == "UNRESOLVED_SPECIAL_SESSION"
+    assert all(
+        item.trade_date != date(2026, 11, 9) for item in result.schedule.sessions
+    )
 
 
 def test_prior_year_non_regular_timing_against_closure_is_closed() -> None:

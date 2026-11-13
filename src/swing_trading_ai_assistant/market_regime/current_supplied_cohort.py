@@ -33,6 +33,9 @@ from swing_trading_ai_assistant.market_data.current_cohort import (
     available_ledger_entry_v1,
     current_fact_archive_directory_matches_v1,
 )
+from swing_trading_ai_assistant.market_data.current_evidence_acquisition import (
+    first_unresolved_window_closure,
+)
 from swing_trading_ai_assistant.market_data.schedule_evidence import (
     MAX_SCHEDULE_BYTES,
     ScheduleEvidenceStore,
@@ -1716,6 +1719,17 @@ class DirectCurrentCohortScheduleResolverV1:
             if x.close_at <= decision_cutoff
         )
         if len(applicable) < 21:
+            return ScheduleReadResultV1(
+                "INSUFFICIENT_EVIDENCE", None, ("SCHEDULE_CONTINUITY_UNPROVEN",)
+            )
+        unresolved = first_unresolved_window_closure(
+            schedule.closures,
+            tuple(item.trade_date for item in applicable),
+            (21,),
+            sessions_back=0,
+            selection_date=cutoff_date,
+        )
+        if unresolved is not None:
             return ScheduleReadResultV1(
                 "INSUFFICIENT_EVIDENCE", None, ("SCHEDULE_CONTINUITY_UNPROVEN",)
             )

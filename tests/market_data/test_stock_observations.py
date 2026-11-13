@@ -17,6 +17,12 @@ from pathlib import Path
 import pytest
 
 from swing_trading_ai_assistant.market_data import stock_observations_cli as cli
+from swing_trading_ai_assistant.market_data.current_stock_research_v2 import (
+    _LIMITATIONS,
+)
+from swing_trading_ai_assistant.market_data.stock_observations import (
+    _limitations_admitted,
+)
 
 _HELPER = Path(__file__).with_name("test_current_stock_observation_comparison.py")
 _SPEC = importlib.util.spec_from_file_location(
@@ -522,3 +528,14 @@ def test_installed_stock_observations_verifier_contract(tmp_path, monkeypatch):
     assert outcomes["original_readback"] == "exact"
     assert outcomes["console_comparison"] == "COMPARABLE"
     assert outcomes["missing_baseline"] == "explicit"
+
+
+def test_calendar_unresolved_limitation_is_admitted() -> None:
+    assert _limitations_admitted(list(_LIMITATIONS))
+    assert _limitations_admitted(
+        [
+            *_LIMITATIONS,
+            "calendar_unresolved:2026-08-26:UNRESOLVED_SPECIAL_SESSION",
+        ]
+    )
+    assert not _limitations_admitted([*_LIMITATIONS, "unrelated"])

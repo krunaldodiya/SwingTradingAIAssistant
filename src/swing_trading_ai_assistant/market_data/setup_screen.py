@@ -64,6 +64,7 @@ def _validate_diagnostic(result: CurrentStockResearchResultV2) -> None:
             ("deadline", "ACQUISITION_DEADLINE_EXPIRED"),
         }
         | {("calendar", code.value) for code in CurrentEvidenceAcquisitionFailureCode}
+        | {("calendar", "CALENDAR_UNRESOLVED")}
     )
     if result.status == "INSUFFICIENT_EVIDENCE":
         valid = (result.stage, result.code) == (
@@ -130,10 +131,20 @@ def _project(  # noqa: C901 - explicit admission and causal failures precede pro
     if result.runtime_code_identity_sha256 != producer_runtime:
         raise ValueError("setup producer runtime mismatch")
     _validate_diagnostic(result)
+    reason = result.code
+    if result.code == "CALENDAR_UNRESOLVED":
+        reason = next(
+            (
+                item
+                for item in result.limitations
+                if item.startswith("calendar_unresolved:")
+            ),
+            result.code,
+        )
     row: dict[str, object] = {
         "requested_symbol": symbol,
         "status": "UNKNOWN",
-        "reason": result.code,
+        "reason": reason,
         "research_status": result.status,
         "research_stage": result.stage,
         "research_runtime_code_identity_sha256": result.runtime_code_identity_sha256,
