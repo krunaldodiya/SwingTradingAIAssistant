@@ -9,6 +9,6 @@ SIGNAL_DECISIONS_SCAN_RUNTIME_SOURCE_SHA256_V3: Final[dict[str, str]] = {
     "src/swing_trading_ai_assistant/market_data/signal_decisions_v3.py": "f86a2167283ea3ba4bc1bd93ba7cdff0fd4fc98e80c4805c2f0fb17fbb826969",
     "src/swing_trading_ai_assistant/market_data/scanner_observation_pair_state_v1.py": "fcf1bc0f2b370a73baa3e1f7d0dd5fc8c826b0f84dc2104211201ec4285ebcdb",
     "src/swing_trading_ai_assistant/market_data/stock_observations.py": "01e59ddaa39d3d0020c5e7ee51dfa5a88a0ffee6d5f950f88f2a3ceabe0d585e",
-    "src/swing_trading_ai_assistant/market_data/current_stock_research_v2.py": "4c96b206bbb4198ab748c980500623e37ef55282447a8fccb00df6badf18c664",
+    "src/swing_trading_ai_assistant/market_data/current_stock_research_v2.py": "d4f70e47ccbe25810dca48fc6eb16d72b8648e2a59594e1b91e177e9839304e2",
     "src/swing_trading_ai_assistant/market_data/runtime_source_verifier.py": "834fb3261a269b35e582d91b7c497be276bd102078bb9d71816fe2f77a4c721a",
 }

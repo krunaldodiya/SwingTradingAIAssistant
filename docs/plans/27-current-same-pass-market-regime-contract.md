@@ -471,6 +471,16 @@ The composition policy is `nse-equity-composed-calendar@v2`; retained `@v1`
 schedules remain historical records. This prevents one special-session date in
 the 40-day lookback from stopping every symbol for the whole window.
 
+**Amendment 2026-11-13 (Issue #420).** A date-local ambiguity is retained as an
+`UNRESOLVED_<reason>` closure and composition continues. Research blocks only a
+question whose required session window contains that date, returning
+`CALENDAR_UNRESOLVED` with the exact date and reason; other windows, other
+questions, and every other symbol continue. The earlier clauses that made a
+weekday special opening without a closure `SPECIAL_SESSION_UNCORROBORATED`, or a
+regular opening against a closure `SOURCE_CONFLICT`, are superseded: both become
+unresolved dates. Total source failures (HTTP, malformed input, duplicate or
+invalid source rows) still fail closed.
+
 The observed 2026-08-26 composition has an Upstox
 `SETTLEMENT_HOLIDAY` row with NSE explicitly open `09:15..15:30` and no
 2026-08-26 closure in NSE `CM`. Entries dated 2026-08-26 in other NSE root
