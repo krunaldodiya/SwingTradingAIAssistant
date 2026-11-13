@@ -3,7 +3,7 @@
 from typing import Final
 
 CURRENT_EVIDENCE_ACQUISITION_RUNTIME_SOURCE_SHA256_V1: Final = {
-    "src/swing_trading_ai_assistant/market_data/current_evidence_acquisition.py": "0e6055ac79b3b3269d1dff64d641aba8f0812ad95b0a80b3b71e64ac4fae8e2c",
+    "src/swing_trading_ai_assistant/market_data/current_evidence_acquisition.py": "8f7221fcdd83fd2b5a7c8f6b5e4be6ba3494a16f4d0c9fe16ea3a4130f10a53c",
     "src/swing_trading_ai_assistant/market_data/current_event_notice.py": "0bf3a93e1b777a5d0062b99814681f02b0d9e206448e46f7edcb8fbebff12fef",
     "src/swing_trading_ai_assistant/market_data/current_industry_classification.py": "04df27c6fe19c43dd448c42e6e7ea9a38a0ccda67c6a7ad2fd6e8209de02381c",
     "src/swing_trading_ai_assistant/market_data/http.py": "ef5becb9960502f2808c3353099fc285de4d908d2eae7da65816266e2d02cd6e",

@@ -457,10 +457,19 @@ Every explicit regular NSE opening must equal exactly `09:15..15:30
 Asia/Kolkata`. Any explicit non-regular opening, including `SPECIAL_TIMING`, is
 `SPECIAL_SESSION_UNCORROBORATED` until exact bounded official circular bytes
 are fetched, parsed, and sealed. No caller assertion or inferred special timing
-exists. An Upstox weekday closure absent from NSE `CM`, an Upstox NSE open
-against an NSE `CM` closure, duplicate/conflicting rows, invalid/nonlocal times,
-or an unrecognized type fails closed. Every covered date is exactly one session
-or closure.
+exists. An Upstox weekday closure absent from NSE `CM`, a regular Upstox NSE
+open against an NSE `CM` closure, duplicate/conflicting rows,
+invalid/nonlocal times, or an unrecognized type fails closed. Every covered date
+is exactly one session or closure.
+
+**Amendment 2026-11-13 (Issue #418).** A non-regular provider opening is
+inadmissible evidence, not a conflicting fact. Against an official `CM` closure
+the closure applies; against a weekend the weekend policy applies; on a weekday
+without a closure it remains `SPECIAL_SESSION_UNCORROBORATED`. Only a regular
+provider opening against an official `CM` closure remains `SOURCE_CONFLICT`.
+The composition policy is `nse-equity-composed-calendar@v2`; retained `@v1`
+schedules remain historical records. This prevents one special-session date in
+the 40-day lookback from stopping every symbol for the whole window.
 
 The observed 2026-08-26 composition has an Upstox
 `SETTLEMENT_HOLIDAY` row with NSE explicitly open `09:15..15:30` and no
