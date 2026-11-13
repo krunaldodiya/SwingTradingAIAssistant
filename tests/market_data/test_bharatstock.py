@@ -13,6 +13,7 @@ from swing_trading_ai_assistant.market_data.bharatstock import (
     BharatStockClient,
     BharatStockError,
     BharatStockInstrument,
+    KeyProviderExhausted,
 )
 from swing_trading_ai_assistant.market_data.http import (
     HttpResponse,
@@ -338,6 +339,33 @@ def test_one_client_does_not_rotate_accounts_when_environment_changes(
     )
     client.history(_MEMBER, _START, _END)
     assert keys == ["first-synthetic-key", "first-synthetic-key"]
+
+
+def test_explicit_key_provider_rotates_each_request_and_fails_closed() -> None:
+    issued = iter(("pool-key-one", "pool-key-two"))
+    keys: list[str] = []
+
+    class Recording(_Transport):
+        def get(self, url: str, headers: dict[str, str]) -> HttpResponse:
+            keys.append(headers["X-API-Key"])
+            return super().get(url, headers)
+
+    client = BharatStockClient(
+        key_provider=lambda: next(issued),
+        transport=Recording(_identity(), _page([_row("2026-08-28")])),
+    )
+    client.history(_MEMBER, _START, _END)
+    assert keys == ["pool-key-one", "pool-key-two"]
+
+    def exhausted() -> str:
+        raise KeyProviderExhausted("pool exhausted")
+
+    with pytest.raises(BharatStockError) as error:
+        BharatStockClient(
+            key_provider=exhausted, transport=_Transport(_identity())
+        ).history(_MEMBER, _START, _END)
+    assert error.value.category == "RATE_LIMITED"
+    assert not error.value.member_local
 
 
 def test_session_cache_reuses_complete_and_fetches_only_missing(tmp_path) -> None:

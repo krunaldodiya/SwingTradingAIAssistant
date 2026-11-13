@@ -73,6 +73,7 @@ from .instrument_snapshot import (
     SnapshotInstrumentNotFoundError,
     SnapshotInstrumentUnsupportedError,
 )
+from .key_pool import key_provider
 from .runtime_source_verifier import runtime_source_sha256
 from .schedule_evidence import ScheduleEvidenceStore, ScheduleOutcome
 from .storage_root_lease import StorageRootLeaseError
@@ -479,11 +480,14 @@ def _capture_window(
     price_client: BharatStockClient | None,
     *,
     refresh: bool,
+    terminal_refresh: bool,
 ) -> tuple[CaptureResultV2, CaptureRequestV2]:
     attempted: list[CaptureRequestV2] = []
     if price_client is None:
         price_client = BharatStockClient(
-            session_cache_root=root, refresh_terminal=refresh
+            session_cache_root=root,
+            refresh_terminal=terminal_refresh,
+            key_provider=key_provider(),
         )
     try:
         result = legacy._prepare_capture(  # pyright: ignore[reportPrivateUsage]
@@ -802,6 +806,10 @@ def _research_current_stock_v2(  # noqa: C901 - explicit stage boundaries are in
                     window,
                     price_client,
                     refresh=refresh,
+                    # A sessions-back reconstruction binds an already completed
+                    # historical session; reuse its retained cache instead of
+                    # re-fetching the terminal row that the current pass refreshes.
+                    terminal_refresh=refresh and sessions_back == 0,
                 )
                 captures[count] = capture
                 submitted_requests[count] = submitted

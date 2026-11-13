@@ -109,6 +109,10 @@ class BharatStockError(RuntimeError):
         super().__init__(f"BharatStock acquisition failed: {category}")
 
 
+class KeyProviderExhausted(RuntimeError):
+    """The configured key pool has no eligible key left for the provider day."""
+
+
 @dataclass(frozen=True, slots=True)
 class BharatStockInstrument:
     isin: str
@@ -344,6 +348,7 @@ class BharatStockClient:
         self,
         *,
         api_key: str | None = None,
+        key_provider: Callable[[], str] | None = None,
         transport: HttpTransport | None = None,
         max_requests: int = 2000,
         session_cache_root: Path | None = None,
@@ -353,7 +358,10 @@ class BharatStockClient:
             raise ValueError("invalid BharatStock request budget")
         if session_cache_root is not None and not session_cache_root.is_absolute():
             raise ValueError("invalid session cache root")
+        if key_provider is not None and not callable(key_provider):
+            raise ValueError("invalid BharatStock key provider")
         self._api_key = api_key
+        self._key_provider = key_provider
         self._transport = _transport() if transport is None else transport
         self._max_requests = max_requests
         self._session_cache_root = session_cache_root
@@ -374,9 +382,15 @@ class BharatStockClient:
             self._stop(self._shared_failure)
         if self._requests_used >= self._max_requests:
             self._stop("REQUEST_BUDGET_EXHAUSTED")
-        if self._api_key is None:
-            self._api_key = os.environ.get("BHARATSTOCK_API_KEY")
-        key = self._api_key
+        if self._key_provider is not None:
+            try:
+                key = self._key_provider()
+            except KeyProviderExhausted:
+                self._stop("RATE_LIMITED")
+        else:
+            if self._api_key is None:
+                self._api_key = os.environ.get("BHARATSTOCK_API_KEY")
+            key = self._api_key
         if (
             type(key) is not str
             or not 1 <= len(key) <= 512

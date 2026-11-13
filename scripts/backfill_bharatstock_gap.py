@@ -24,6 +24,7 @@ from swing_trading_ai_assistant.market_data.bharatstock import (
     BharatStockError,
     BharatStockInstrument,
 )
+from swing_trading_ai_assistant.market_data.key_pool import key_provider
 
 CACHE_DIR = "bharatstock-session-cache-v1"
 CHECKPOINT_VERSION = 1
@@ -116,7 +117,11 @@ def _save_checkpoint(path: Path, value: dict[str, object]) -> None:
 def _fetch(
     storage_root: Path, instrument: BharatStockInstrument, start: date, end: date
 ) -> None:
-    client = BharatStockClient(session_cache_root=storage_root, max_requests=8)
+    client = BharatStockClient(
+        session_cache_root=storage_root,
+        max_requests=8,
+        key_provider=key_provider(),
+    )
     client.history(instrument, start, end)
 
 
