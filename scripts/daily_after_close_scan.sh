@@ -172,7 +172,7 @@ capture_service_active() {
     # shellcheck disable=SC2086 # the override is an explicit status command
     $SWING_CAPTURE_SERVICE_STATUS > /dev/null 2>&1
   else
-    systemctl is-active --quiet "$CAPTURE_SERVICE" > /dev/null 2>&1
+    systemctl --user is-active --quiet "$CAPTURE_SERVICE" > /dev/null 2>&1
   fi
 }
 
