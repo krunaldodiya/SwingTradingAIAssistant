@@ -5,7 +5,7 @@ from typing import Final
 AGENT_RESEARCH_RUN_RUNTIME_SOURCE_SHA256_V1: Final[dict[str, str]] = {
     "src/swing_trading_ai_assistant/market_data/agent_loss_context.py": "2c90515d853cfcdb86d5ab24f29121e2ee7431937009ae4e445d5678c4ffbabe",
     "src/swing_trading_ai_assistant/market_data/loss_scenario.py": "0b4629570406b662b68df543264383b01dd75ff76a4d1bc1894f0161b16d46a1",
-    "src/swing_trading_ai_assistant/market_data/loss_scenario_runtime_identity_manifest.py": "c9d9b355a24e0b7dec52244dd263c99e24314789fbe596596cf6420f760c671c",
+    "src/swing_trading_ai_assistant/market_data/loss_scenario_runtime_identity_manifest.py": "7d77d906cf0dc1991e3ea856c033c27720ef51a488baf9024bdd818fa058132b",
     "src/swing_trading_ai_assistant/market_data/agent_analysis_context.py": "630ce056ae043bafb711bd5305d0db2312f265b5c3d9dcea7e2c333b9b3c8726",
     "src/swing_trading_ai_assistant/market_data/agent_cohort_context.py": "4eb98ec71058e45b68f540322b6c62d5d2cf43ecb08cdf166c64dfa4a30d4454",
     "src/swing_trading_ai_assistant/market_data/agent_cohort_industry.py": "4fdce59d5e3536a54111b681bcd16f1fa9e545cf4f76f961505bd7aea4ed9adb",
@@ -19,5 +19,5 @@ AGENT_RESEARCH_RUN_RUNTIME_SOURCE_SHA256_V1: Final[dict[str, str]] = {
     "src/swing_trading_ai_assistant/volume_analysis/request.py": "241fa165aa3e684037499a187d18779f835997ce9c064a6a32a2c542dc6ecc97",
     "src/swing_trading_ai_assistant/volume_analysis/service.py": "3c23777c5825f2b4c46c6b5ff9de184826c25910688ef2ec432dfc86da096893",
     "src/swing_trading_ai_assistant/market_data/setup_screen.py": "23dad05aae687deff03e1bbd0670cef93332c1d19d5e1abd92968181df84fa60",
-    "src/swing_trading_ai_assistant/market_data/setup_screen_runtime_identity_manifest.py": "30b8d557f29ea5a8e22ed217a3d5d0a2ca89a39dea1376f7817802badd4a5da2",
+    "src/swing_trading_ai_assistant/market_data/setup_screen_runtime_identity_manifest.py": "264690eb8e985ef3306a0a2da5f82ec375aef1697c050513dacc397d928b2527",
 }

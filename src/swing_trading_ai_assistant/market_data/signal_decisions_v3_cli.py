@@ -88,6 +88,7 @@ class _ScanRequest:
     refresh: bool
     retain_decision_evidence: bool
     sessions_back: int | None = None
+    reuse_captured_terminal: bool = False
 
 
 @dataclass(frozen=True)
@@ -141,6 +142,7 @@ def _parser() -> argparse.ArgumentParser:
     scan_group.add_argument("--symbol", action="append", dest="symbols")
     scan.add_argument("--output", choices=("json", "table"), default="json")
     scan.add_argument("--refresh", action="store_true")
+    scan.add_argument("--reuse-captured-terminal", action="store_true")
     scan.add_argument("--retain-decision-evidence", action="store_true")
     scan.add_argument("--sessions-back", type=int, default=None)
     read_evidence = commands.add_parser("read-decision-evidence")
@@ -238,6 +240,7 @@ def _valid_request(  # noqa: C901 - command-specific closed request validation
             refresh,
             retain_decision_evidence,
             sessions_back,
+            bool(getattr(args, "reuse_captured_terminal", False)),
         )
     if command == "track":
         log_scan_raw: object = getattr(args, "log_scan", None)
@@ -485,6 +488,7 @@ def _run_scan(request: _ScanRequest) -> int:
             symbols=request.symbols,
             universe=request.universe,
             refresh=request.refresh,
+            reuse_captured_terminal=request.reuse_captured_terminal,
             evidence_rows=rows,
             warnings=warnings,
             sessions_back=request.sessions_back,

@@ -1,7 +1,7 @@
 [Unit]
 Description=Daily after-close Nifty 200 scan and G09 diary page
 Documentation=file://@REPO@/docs/workflows/automated-nifty100-scan.md
-After=network-online.target
+After=network-online.target swing-data-capture.service
 Wants=network-online.target
 
 [Service]

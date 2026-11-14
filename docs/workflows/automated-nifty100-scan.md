@@ -462,11 +462,19 @@ off-device copy part of the pass rather than a later hope. Set
 `SWING_RCLONE_BIN`, `SWING_LEDGER_REMOTE` or `SWING_SYNC_LOG_DIR` to override the
 defaults.
 
+The same installer also enables `swing-data-capture.timer` at 20:15 IST. It
+runs `scripts/capture_provider_data.sh`, which writes the raw session cache
+research reads and the adjusted benchmark store from the retained Nifty 200
+snapshot. It reads no exchange calendar, pair state, safety policy, or research
+result; the 20:30 scan starts after it and reuses a complete capture receipt
+without re-fetching the terminal session. Existing sessions and request stores
+are reused; only missing or new data is fetched.
+
 The same installer also enables `research-ledger-sync.timer`, an hourly one-way
 `rclone copy` for entries written outside a scheduled run (backfills, manual
 passes). Both paths copy new and changed files only and never delete anything on
-the Drive side. Keep both schedules installed together: a ledger written but
-never synced is still single copy. `scripts/install_research_schedule.sh --check` fails when either schedule
+the Drive side. Keep all three schedules installed together: a ledger written but
+never synced is still single copy. `scripts/install_research_schedule.sh --check` fails when any of the three schedules
 is missing, so a vanished home directory is detected rather than assumed healthy.
 
 The writer refuses a degenerate page because recording it would create a false

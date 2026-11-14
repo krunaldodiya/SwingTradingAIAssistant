@@ -830,6 +830,7 @@ def _scan_stock(  # noqa: C901 - multi-family screening and anti-manipulation ga
     seeded_symbols: list[str] | None = None,
     sessions_back: int = 0,
     bound_symbols: list[str] | None = None,
+    reuse_captured_terminal: bool = False,
 ) -> tuple[dict[str, object], bool, str, str | None, str | None, str, str | None]:
     """Execute the canonical pair policy, safety eligibility, and brief generation.
 
@@ -864,6 +865,7 @@ def _scan_stock(  # noqa: C901 - multi-family screening and anti-manipulation ga
                 question="CURRENT_STRUCTURE",
                 refresh=refresh,
                 sessions_back=sessions_back,
+                reuse_captured_terminal=reuse_captured_terminal,
             )
             handle = record_stock_observation_v1(storage_root, obs_result)
     except Exception:
@@ -1173,6 +1175,7 @@ def scan_signal_decisions_v3(  # noqa: C901 - lifecycle orchestration
     symbols: Sequence[str] | None = None,
     universe: str | None = None,
     refresh: bool = False,
+    reuse_captured_terminal: bool = False,
     clock: Callable[[], datetime] | None = None,
     evidence_rows: list[dict[str, object]] | None = None,
     warnings: list[str] | None = None,
@@ -1252,6 +1255,7 @@ def scan_signal_decisions_v3(  # noqa: C901 - lifecycle orchestration
                         None,
                         seeded_symbols=seeded_prior,
                         sessions_back=selected_back + 1,
+                        reuse_captured_terminal=reuse_captured_terminal,
                     )
                 bootstrap_pair = bool(seeded_prior)
 
@@ -1275,6 +1279,7 @@ def scan_signal_decisions_v3(  # noqa: C901 - lifecycle orchestration
             seeded_symbols,
             sessions_back=selected_back,
             bound_symbols=bound_symbols,
+            reuse_captured_terminal=reuse_captured_terminal,
         )
         trends.append(trend)
         if evidence_rows is not None:

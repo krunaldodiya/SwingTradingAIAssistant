@@ -1,0 +1,16 @@
+[Unit]
+Description=Independent BharatStock capture before research
+Documentation=file://@REPO@/docs/workflows/automated-nifty100-scan.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=@REPO@
+ExecStart=@REPO@/scripts/capture_provider_data.sh
+Environment=SWING_STORAGE_ROOT=@STORE@
+Environment=SWING_DOPPLER_PROJECT=@PROJECT@
+Environment=SWING_DOPPLER_CONFIG=@CONFIG@
+# Raw session capture plus two bounded adjusted batches; must finish before
+# the 20:30 scan so the shared storage-root lease cannot collide.
+TimeoutStartSec=600

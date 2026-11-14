@@ -109,11 +109,34 @@ cd "$REPO" || exit 1
 # request consumes the whole pass and systemd eventually kills the unit, leaving
 # an empty page and no record. Fail fast, name the stage, and leave no artifact.
 SCAN_TIMEOUT=${SWING_SCAN_TIMEOUT:-1200}
+SCAN_ARGS=(--storage-root "$STORE" --nifty200 --refresh --retain-decision-evidence --output json)
+CAPTURE_RECEIPT="$LOG/capture-$STAMP.json"
+if [ -f "$CAPTURE_RECEIPT" ]; then
+  CAPTURE_REUSE=$(
+    python3 - "$CAPTURE_RECEIPT" <<'PY'
+import json
+import sys
+
+try:
+    value = json.load(open(sys.argv[1]))
+except (OSError, ValueError):
+    print("0")
+else:
+    sessions = value.get("sessions") or {}
+    complete = (
+        value.get("status") == "COMPLETE"
+        and sessions.get("status") == "COMPLETE"
+        and sessions.get("remaining_pending") == 0
+    )
+    print("1" if complete else "0")
+PY
+  )
+  [ "$CAPTURE_REUSE" = "1" ] && SCAN_ARGS+=(--reuse-captured-terminal)
+fi
 timeout "$SCAN_TIMEOUT" "$DOPPLER" run \
   --project "$DOPPLER_PROJECT_NAME" --config "$DOPPLER_CONFIG_NAME" -- \
   "$REPO/.venv/bin/signal-decisions" scan \
-  --storage-root "$STORE" \
-  --nifty200 --refresh --retain-decision-evidence --output json \
+  "${SCAN_ARGS[@]}" \
   > "$PAGE" 2> "$LOG/scan-$STAMP.err"
 code=$?
 echo "$(date -Is) exit_code=$code scan_timeout_s=$SCAN_TIMEOUT" >> "$LOG/scan-$STAMP.err"

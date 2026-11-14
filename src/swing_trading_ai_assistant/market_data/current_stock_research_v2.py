@@ -481,11 +481,13 @@ def _capture_window(
     price_client: BharatStockClient | None,
     *,
     refresh: bool,
+    reuse_captured_terminal: bool = False,
 ) -> tuple[CaptureResultV2, CaptureRequestV2]:
     attempted: list[CaptureRequestV2] = []
     if price_client is None:
         price_client = BharatStockClient(
-            session_cache_root=root, refresh_terminal=refresh
+            session_cache_root=root,
+            refresh_terminal=refresh and not reuse_captured_terminal,
         )
     try:
         result = legacy._prepare_capture(  # pyright: ignore[reportPrivateUsage]
@@ -533,6 +535,7 @@ def research_current_stock_v2(
     *,
     question: QuestionV2,
     refresh: bool = False,
+    reuse_captured_terminal: bool = False,
     clock: legacy.CurrentStockResearchClockV1 | None = None,
     calendar_transport: HttpTransport | None = None,
     snapshot_transport: HttpTransport | None = None,
@@ -553,6 +556,7 @@ def research_current_stock_v2(
             storage_root,
             question=question,
             refresh=refresh,
+            reuse_captured_terminal=reuse_captured_terminal,
             clock=clock,
             calendar_transport=calendar_transport,
             snapshot_transport=snapshot_transport,
@@ -591,6 +595,7 @@ def research_previous_completed_stock_v2(
             storage_root,
             question="INTEGRATED_CURRENT_RESEARCH",
             refresh=False,
+            reuse_captured_terminal=False,
             clock=clock,
             calendar_transport=calendar_transport,
             snapshot_transport=snapshot_transport,
@@ -624,6 +629,7 @@ def confirm_latest_completed_stock_v2(
             storage_root,
             question="LATEST_COMPLETED_CANDLE",
             refresh=True,
+            reuse_captured_terminal=False,
             clock=clock,
             calendar_transport=calendar_transport,
             snapshot_transport=snapshot_transport,
@@ -643,6 +649,7 @@ def _research_current_stock_v2(  # noqa: C901 - explicit stage boundaries are in
     *,
     question: QuestionV2,
     refresh: bool,
+    reuse_captured_terminal: bool,
     clock: legacy.CurrentStockResearchClockV1 | None,
     calendar_transport: HttpTransport | None,
     snapshot_transport: HttpTransport | None,
@@ -824,6 +831,7 @@ def _research_current_stock_v2(  # noqa: C901 - explicit stage boundaries are in
                     window,
                     price_client,
                     refresh=refresh,
+                    reuse_captured_terminal=reuse_captured_terminal,
                 )
                 captures[count] = capture
                 submitted_requests[count] = submitted

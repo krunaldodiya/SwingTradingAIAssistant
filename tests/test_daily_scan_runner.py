@@ -647,3 +647,35 @@ def test_scan_timeout_discards_the_page_and_reports_124(tmp_path: Path) -> None:
     err = (log / "scan-2026-10-23.err").read_text()
     assert "exit_code=124" in err
     assert "scan exceeded 1s; page discarded" in err
+
+
+def test_runner_reuses_complete_capture_receipt(tmp_path: Path) -> None:
+    script = Path(__file__).parents[1] / "scripts" / "daily_after_close_scan.sh"
+    _schedule(tmp_path, closed=None)
+    log = tmp_path / "log"
+    log.mkdir()
+    source = tmp_path / "scan-source.json"
+    _page(source, [])
+    _page(log / "scan-2026-10-23.json", [])
+    doppler = tmp_path / "doppler"
+    stub_log = tmp_path / "calls.log"
+    _stub_doppler(doppler, stub_log, log / "scan-2026-10-23.json")
+    (log / "capture-2026-10-23.json").write_text(
+        json.dumps(
+            {
+                "status": "COMPLETE",
+                "sessions": {
+                    "status": "COMPLETE",
+                    "remaining_pending": 0,
+                },
+            }
+        )
+    )
+
+    result = _run_full(script, tmp_path, log, doppler, stub_log, source)
+
+    assert result.returncode == 0
+    scan_call = next(
+        call for call in stub_log.read_text().splitlines() if " scan " in call
+    )
+    assert "--reuse-captured-terminal" in scan_call
