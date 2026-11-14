@@ -37,9 +37,7 @@ def _universe(root: Path, count: int) -> None:
 
 def _downloader(path: Path, exit_code: int = 0) -> None:
     path.write_text(
-        "#!/usr/bin/env bash\n"
-        'printf "%s\\n" "$*" >> "$STUB_LOG"\n'
-        f"exit {exit_code}\n"
+        f'#!/usr/bin/env bash\nprintf "%s\\n" "$*" >> "$STUB_LOG"\nexit {exit_code}\n'
     )
     path.chmod(0o755)
 
