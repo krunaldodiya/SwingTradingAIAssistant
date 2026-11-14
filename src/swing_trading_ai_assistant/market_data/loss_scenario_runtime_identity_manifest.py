@@ -8,5 +8,5 @@ LOSS_SCENARIO_RUNTIME_SOURCE_SHA256_V1: Final[dict[str, str]] = {
     "src/swing_trading_ai_assistant/market_data/loss_scenario.py": "0b4629570406b662b68df543264383b01dd75ff76a4d1bc1894f0161b16d46a1",
     "src/swing_trading_ai_assistant/market_data/runtime_source_verifier.py": "834fb3261a269b35e582d91b7c497be276bd102078bb9d71816fe2f77a4c721a",
     "src/swing_trading_ai_assistant/market_data/setup_screen.py": "23dad05aae687deff03e1bbd0670cef93332c1d19d5e1abd92968181df84fa60",
-    "src/swing_trading_ai_assistant/market_data/setup_screen_runtime_identity_manifest.py": "30b8d557f29ea5a8e22ed217a3d5d0a2ca89a39dea1376f7817802badd4a5da2",
+    "src/swing_trading_ai_assistant/market_data/setup_screen_runtime_identity_manifest.py": "264690eb8e985ef3306a0a2da5f82ec375aef1697c050513dacc397d928b2527",
 }

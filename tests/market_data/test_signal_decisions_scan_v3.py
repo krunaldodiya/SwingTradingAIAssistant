@@ -8,6 +8,7 @@ import os
 from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
 from typing import cast
 
 import pyarrow as pa
@@ -1560,3 +1561,44 @@ def test_nifty200_industry_mapping_rejects_tampering(tmp_path: Path) -> None:
     raw = next((tmp_path / ".nifty200-industry-mapping-v1").glob("raw-*.csv"))
     raw.write_bytes(b"tampered\n")
     assert scan_module._load_industry_mapping(tmp_path) == {}
+
+
+def test_scan_probe_reuses_the_captured_terminal_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The session-back probe must not issue a duplicate terminal request.
+
+    ``scan_signal_decisions_v3`` probes the first member before the per-symbol
+    pass. With a complete capture receipt the caller passes
+    ``reuse_captured_terminal``; the probe must forward it so the captured
+    terminal session is read from cache instead of re-fetched.
+    """
+    calls: list[dict[str, object]] = []
+
+    def _research(*_args: object, **kwargs: object) -> object:
+        calls.append(dict(kwargs))
+        return SimpleNamespace(
+            question="CURRENT_STRUCTURE",
+            symbol=_SYMBOL,
+            status="INCOMPLETE",
+            packet=None,
+            limitations=(),
+        )
+
+    monkeypatch.setattr(scan_module, "research_current_stock_v2", _research)
+
+    scan_signal_decisions_v3(
+        tmp_path,
+        symbols=(_SYMBOL,),
+        refresh=True,
+        reuse_captured_terminal=True,
+        clock=lambda: _NOW,
+    )
+
+    assert calls
+    probe = calls[0]
+    assert probe["refresh"] is True
+    assert probe["question"] == "CURRENT_STRUCTURE"
+    assert probe["sessions_back"] == 0
+    assert probe["reuse_captured_terminal"] is True
+    assert all(call["reuse_captured_terminal"] is True for call in calls)

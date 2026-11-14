@@ -1,0 +1,17 @@
+[Unit]
+Description=Independent BharatStock capture before research
+Documentation=file://@REPO@/docs/workflows/automated-nifty100-scan.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=@REPO@
+ExecStart=@REPO@/scripts/capture_provider_data.sh
+Environment=SWING_STORAGE_ROOT=@STORE@
+Environment=SWING_DOPPLER_PROJECT=@PROJECT@
+Environment=SWING_DOPPLER_CONFIG=@CONFIG@
+# Raw session capture plus two bounded adjusted batches. A 25-minute head-start
+# budget leaves the 20:30 preflight to wait for an active capture or resume its
+# checkpoint.
+TimeoutStartSec=1500

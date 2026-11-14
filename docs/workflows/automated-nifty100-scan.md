@@ -462,11 +462,97 @@ off-device copy part of the pass rather than a later hope. Set
 `SWING_RCLONE_BIN`, `SWING_LEDGER_REMOTE` or `SWING_SYNC_LOG_DIR` to override the
 defaults.
 
+The same installer also installs and enables `swing-data-capture.timer` at
+20:00 IST. The PRD treats this head start as optional. `--check` requires all
+six unit files (including both capture units) to be installed and the scan/sync
+timers to be enabled; a capture timer that is installed but disabled is reported
+as `optional:` rather than a failure, and a missing capture unit file is still a
+failure. It runs `scripts/capture_provider_data.sh`, which writes the raw session cache
+research reads and updates the adjusted benchmark store, using only the governed
+retained Nifty 200 snapshot and the date. It reads no exchange calendar, pair
+state, safety policy, or research result. The snapshot is admitted by
+`historical_nifty_universe` (schema, official source URLs, digests, counts, and
+membership consistency) before any provider effect, and its identity is recorded
+in the receipt.
+
+Capture is incremental and additive. The raw stage reads each member's newest
+retained `bharatstock-session-cache-v1` session and requests only the newer
+range; a member that already reaches the requested end makes no provider
+request. When that successor range has no provider session yet (a weekend,
+holiday, or unpublished close), the member is recorded as `NO_NEWER_SESSION`
+with the retained session kept as the latest fact, not as a data failure; a
+non-trading run therefore does not look like a capture failure. An empty history
+for a member with no retained session is still a failure. A valid cache record is accepted only when it matches the client's full
+reader: identity, record digest, OHLC and volume constraints, response digest
+tuple, and a UTC retrieval instant. Returned session files are verified after
+the client write; a missing or invalid write fails the member instead of being
+reported as captured.
+
+The adjusted stage works per 100-member cohort. It reads the retained
+`adjusted_daily` store per instrument using the production `isin`, `exchange`,
+`symbol`, and `session` columns, skips a cohort only when every one of its
+instruments already has the requested session, and otherwise requests only that
+cohort's still-missing members from the range after its oldest missing
+instrument's latest session. Because one start serves the cohort, a missing
+member whose own gap begins later re-fetches that bounded overlap (at most the
+stage window, never a fully current member, and never a whole cohort that is
+current). After each batch it re-reads the store and requires the whole cohort
+to be current; a partial or member-local failure leaves that cohort `INCOMPLETE`.
+When the only requested session is the stamp itself, the raw stage's completed
+capture observed no member session at the stamp, every missing member already
+has a retained prior session, and the downloader reports no valid requested
+member history, the cohort is `NO_NEWER_SESSION`: the same typed no-op the raw
+stage uses for a weekend, holiday, or unpublished close, not a data failure. A
+stamp with an older multi-day gap, or a raw stage that failed and cannot
+corroborate the stamp, is still a failure. The
+adjusted stage is `COMPLETE` only when every cohort is `COMPLETE`, `SKIPPED`, or
+`NO_NEWER_SESSION`. Existing sessions and request stores are reused; no retained data is
+deleted, and a fully current cohort makes no provider request.
+
+The 20:30 research runner performs the same capture as its first step, before
+any scan, research, or analysis, so a later calendar or research failure cannot
+discard the day's provider data. It reads the capture unit state with
+`systemctl --user show -p ActiveState --value` and treats `activating`,
+`deactivating`, and `reloading` as busy, so a starting or stopping head start is
+never duplicated. It also probes the storage-root `.ingestion.lock` without
+waiting or creating state, so a manually started capture is detected even when
+no unit is involved. An unknown or failed probe is treated as busy rather than
+free. Busy is checked before a complete receipt is accepted, so an older receipt
+cannot let the scan start beside a capture still writing the root. If the unit
+or the lease is busy it waits; if free and the receipt is complete it skips; if
+the head start timed out or failed it resumes from the checkpoint. It never
+kills, discards, or duplicates the active capture. The raw capture script holds
+the same lease for its run, so a raw-only manual capture is visible to the
+probe; the separate `scripts/backfill_bharatstock_gap.py` operator tool does not
+participate in that lease.
+
+One 1740 s preflight deadline covers the unit wait, the lease wait, and the
+capture resume. If the holder is still busy at the deadline, the pass fails
+closed (exit 75) and does not start the scan, because capture and research must
+not run concurrently. When the preflight instead finishes capture, the scan runs
+and reuses the receipt. The preflight capture is bounded with `timeout
+--kill-after` so a terminated capture leaves no provider child behind. The full
+pass fits `swing-daily-scan.service` (`TimeoutStartSec=3600`): preflight 1740 s
++ capture kill-after grace 30 s + scan 1200 s + post-scan
+analysis/research/ledger reserve 600 s = 3570 s.
+
+`$SWING_LOG_DIR/capture-<date>.json` (`provider-capture@v3`) records per-symbol
+status, failed ISINs, per-cohort adjusted status, quota per stage, the latest
+session, the universe snapshot identity, runtime identity (raw script, adjusted
+cohort planner, downloader core, and composite script), and timestamps. Quota
+is never summed across unlike units: the raw stage reports actual provider
+requests including failed attempts, and the adjusted stage reports the
+downloader's own request count with an explicit completeness flag plus a
+separate submitted-instrument count and configured budget. Only a complete
+receipt makes the scan reuse the captured terminal session; an incomplete one is
+recorded as `CAPTURE_INCOMPLETE` in the scan error log and the scan fetches
+without that reuse flag.
+
 The same installer also enables `research-ledger-sync.timer`, an hourly one-way
 `rclone copy` for entries written outside a scheduled run (backfills, manual
 passes). Both paths copy new and changed files only and never delete anything on
-the Drive side. Keep both schedules installed together: a ledger written but
-never synced is still single copy. `scripts/install_research_schedule.sh --check` fails when either schedule
+the Drive side. Keep all three schedules installed together: a ledger written but
+never synced is still single copy. `scripts/install_research_schedule.sh --check` fails when any of the three schedules
 is missing, so a vanished home directory is detected rather than assumed healthy.
 
 The writer refuses a degenerate page because recording it would create a false

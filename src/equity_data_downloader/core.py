@@ -125,10 +125,16 @@ class DownloadReceipt:
     row_count: int
     rows_by_instrument: tuple[tuple[str, int], ...]
     outcome: str
+    provider_requests_used: int | None = None
 
     def __post_init__(self) -> None:
         if self.outcome not in {"INSERTED", "REUSED"}:
             raise ValueError("invalid download receipt")
+        if self.provider_requests_used is not None and (
+            type(self.provider_requests_used) is not int
+            or self.provider_requests_used < 0
+        ):
+            raise ValueError("invalid provider request count")
 
 
 @dataclass(frozen=True, slots=True)
@@ -219,11 +225,18 @@ def download_daily_ohlcv(
                         request_identity_sha256=request_identity,
                         provider_version=provider_version,
                         outcome="REUSED",
+                        provider_requests_used=0,
                     )
                 finally:
                     _close_directories(existing_chain)
             provider = BharatStockClient() if client is None else client
             rows = _download_rows(provider, instruments, start, end)
+            observed_requests = getattr(provider, "requests_used", None)
+            provider_requests_used = (
+                observed_requests
+                if type(observed_requests) is int and observed_requests >= 0
+                else None
+            )
             operation.ensure_live()
             retrieved_at = datetime.now(UTC)
             table = _parquet_table(
@@ -254,6 +267,7 @@ def download_daily_ohlcv(
                     provider_version=provider_version,
                     outcome="INSERTED",
                     held_descriptor=published_descriptor,
+                    provider_requests_used=provider_requests_used,
                 )
             finally:
                 if published_descriptor is not None:
@@ -765,6 +779,7 @@ def _receipt_from_existing(
     provider_version: str,
     outcome: str,
     held_descriptor: int | None = None,
+    provider_requests_used: int | None = None,
 ) -> DownloadReceipt:
     descriptor = held_descriptor
     owns_descriptor = held_descriptor is None
@@ -896,6 +911,7 @@ def _receipt_from_existing(
         row_count=table.num_rows,
         rows_by_instrument=tuple((symbol, counts[symbol]) for symbol in symbols),
         outcome=outcome,
+        provider_requests_used=provider_requests_used,
     )
 
 
