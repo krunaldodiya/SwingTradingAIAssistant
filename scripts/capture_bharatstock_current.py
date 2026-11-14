@@ -277,7 +277,12 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901 - stage boundaries
         if resuming
         else {}
     )
-    pending = [(isin, symbol) for isin, symbol in members if isin not in completed]
+    # Every member is re-checked against its retained cache each run; the
+    # checkpoint only orders still-missing members first and bounds --limit.
+    # This keeps per-symbol status truthful even if a cached file was removed.
+    pending: list[tuple[str, str]] = [
+        (isin, symbol) for isin, symbol in members if isin not in completed
+    ] + [(isin, symbol) for isin, symbol in members if isin in completed]
     if args.limit is not None:
         pending = pending[: args.limit]
 

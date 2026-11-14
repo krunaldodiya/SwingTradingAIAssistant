@@ -271,6 +271,8 @@ def test_rerun_makes_no_provider_call_for_captured_members(
     # checkpoint and cache both prevent a provider request; only the
     # still-missing member is fetched.
     assert [call[0] for call in _FakeClient.calls] == ["S1"]
+    assert second["symbols"]["S0"]["status"] == "SKIPPED"
+    assert second["skipped"] == 1
     assert second["requests_used"] == 1
     assert second["remaining_pending"] == 0
     assert second["status"] == "COMPLETE"
