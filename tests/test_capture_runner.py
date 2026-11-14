@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import importlib.util
 import io
 import json
 import os
@@ -18,7 +19,15 @@ from swing_trading_ai_assistant.market_data.historical_nifty_universe import (
     retain_historic_nifty_universe,
 )
 
-SCRIPT = Path(__file__).parents[1] / "scripts" / "capture_provider_data.sh"
+_ROOT = Path(__file__).parents[1]
+SCRIPT = _ROOT / "scripts" / "capture_provider_data.sh"
+_PLANNER_SPEC = importlib.util.spec_from_file_location(
+    "capture_adjusted_cohorts",
+    _ROOT / "scripts" / "capture_adjusted_cohorts.py",
+)
+assert _PLANNER_SPEC is not None and _PLANNER_SPEC.loader is not None
+planner = importlib.util.module_from_spec(_PLANNER_SPEC)
+_PLANNER_SPEC.loader.exec_module(planner)
 STAMP = "2026-11-14"
 STAGE_START = "2026-10-01"
 _NIFTY50 = tuple(f"A{index:03d}" for index in range(50))
@@ -82,7 +91,16 @@ def _cohort_keys(index: int) -> tuple[str, ...]:
     return tuple(_key(position) for position in range(index * 100, (index + 1) * 100))
 
 
+def _identity_columns(keys: tuple[str, ...]) -> dict[str, list[str]]:
+    return {
+        "isin": [key.split(":")[0] for key in keys],
+        "exchange": [key.split(":")[1] for key in keys],
+        "symbol": [key.split(":")[2] for key in keys],
+    }
+
+
 def _adjusted(store: Path, keys: tuple[str, ...], session: str) -> None:
+    """Write the production adjusted schema: separate identity columns."""
     import pyarrow as pa  # noqa: PLC0415 - test-only optional dependency
     import pyarrow.parquet as pq  # noqa: PLC0415
 
@@ -94,10 +112,15 @@ def _adjusted(store: Path, keys: tuple[str, ...], session: str) -> None:
     pq.write_table(
         pa.table(
             {
-                "symbol": list(keys),
+                **_identity_columns(keys),
                 "session": pa.array(
                     [date.fromisoformat(session)] * len(keys), type=pa.date32()
                 ),
+                "open": [100.0] * len(keys),
+                "high": [101.0] * len(keys),
+                "low": [99.0] * len(keys),
+                "close": [100.5] * len(keys),
+                "volume": [1000] * len(keys),
             }
         ),
         directory / "data.parquet",
@@ -125,6 +148,7 @@ def _raw_script(
         "failed_isins": [] if failed == 0 else ["INE000000000"],
         "requests_used": requests_used,
         "requests_configured_max": configured_max,
+        "no_newer_session": 1,
         "requests_configured_max_basis": (
             "MAX_REQUESTS_PER_MEMBER * PER_MEMBER_ATTEMPTS * symbols_considered"
         ),
@@ -148,6 +172,7 @@ def _raw_script(
         "symbols": {
             "S0": {"status": "FAILED" if failed else "COMPLETE", "requests_used": 1},
             "S1": {"status": "SKIPPED", "requests_used": 0},
+            "S2": {"status": "NO_NEWER_SESSION", "requests_used": 1},
         },
     }
     path.write_text(
@@ -188,13 +213,21 @@ if os.environ.get("STUB_WRITE", "1") == "1" and written:
         "request=" + format(count, "064d"),
     )
     os.makedirs(directory, exist_ok=True)
+    parts = [value.split(":") for value in written]
     pq.write_table(
         pa.table(
             {{
-                "symbol": written,
+                "isin": [part[0] for part in parts],
+                "exchange": [part[1] for part in parts],
+                "symbol": [part[2] for part in parts],
                 "session": pa.array(
                     [date.fromisoformat(end)] * len(written), type=pa.date32()
                 ),
+                "open": [100.0] * len(written),
+                "high": [101.0] * len(written),
+                "low": [95.0] * len(written),
+                "close": [99.0] * len(written),
+                "volume": [1000] * len(written),
             }}
         ),
         os.path.join(directory, "data.parquet"),
@@ -408,6 +441,27 @@ def test_quota_labels_requests_and_instruments_separately(tmp_path: Path) -> Non
     assert quota["adjusted"]["basis"] == "DOWNLOADER_CLI_RECEIPT"
     adjusted = cast(dict[str, object], receipt["adjusted"])
     assert "requests_used" not in adjusted
+    raw_stage = cast(
+        dict[str, object], cast(dict[str, object], receipt["stages"])["raw"]
+    )
+    assert raw_stage["no_newer_session"] == 1
+    assert receipt["symbols_no_newer_session"] == 1
+    runtime = cast(dict[str, object], receipt["runtime"])
+    adjusted_runtime = cast(dict[str, object], runtime["adjusted"])
+    planner_runtime = cast(dict[str, object], adjusted_runtime["planner"])
+    downloader_runtime = cast(dict[str, object], adjusted_runtime["downloader"])
+    assert (
+        planner_runtime["sha256"]
+        == hashlib.sha256(
+            (_ROOT / "scripts" / "capture_adjusted_cohorts.py").read_bytes()
+        ).hexdigest()
+    )
+    assert (
+        downloader_runtime["sha256"]
+        == hashlib.sha256(
+            (_ROOT / "src" / "equity_data_downloader" / "core.py").read_bytes()
+        ).hexdigest()
+    )
 
 
 def test_raw_failure_is_an_incomplete_nonzero_receipt(tmp_path: Path) -> None:
@@ -466,3 +520,57 @@ def test_invalid_universe_snapshot_fails_before_any_provider_call(
     assert "capture_invalid" in result.stderr
     assert _calls(tmp_path) == []
     assert not (tmp_path / "log" / f"capture-{STAMP}.json").exists()
+
+
+def test_planner_reads_the_production_identity_columns(tmp_path: Path) -> None:
+    """The retained store stores bare symbols plus isin/exchange, not keys."""
+    _governed_snapshot(tmp_path / "store")
+    _adjusted(tmp_path / "store", _cohort_keys(0), STAMP)
+
+    retained = planner.retained_sessions(tmp_path / "store")
+
+    assert retained[_key(0)] == date.fromisoformat(STAMP)
+    # A bare symbol is not a universe key on its own.
+    assert "C000" not in retained
+    value = planner.plan(
+        tmp_path / "store",
+        date.fromisoformat(STAMP),
+        date.fromisoformat(STAGE_START),
+    )
+    cohorts = cast(list[dict[str, object]], value["cohorts"])
+    assert cohorts[0]["status"] == "SKIPPED"
+    assert cohorts[1]["status"] == "PENDING"
+    assert (
+        cast(dict[str, object], value["runtime"])["sha256"]
+        == hashlib.sha256(
+            (_ROOT / "scripts" / "capture_adjusted_cohorts.py").read_bytes()
+        ).hexdigest()
+    )
+
+
+def test_mixed_age_cohort_uses_the_oldest_missing_start(tmp_path: Path) -> None:
+    """Only missing members ship; the bounded overlap re-fetch is explicit."""
+    raw, downloader, doppler = _fixture(tmp_path)
+    _adjusted(tmp_path / "store", _cohort_keys(0), STAMP)
+    _adjusted(tmp_path / "store", _cohort_keys(1)[:10], STAMP)
+    _adjusted(tmp_path / "store", _cohort_keys(1)[10:15], "2026-11-12")
+    _adjusted(tmp_path / "store", _cohort_keys(1)[15:], "2026-11-10")
+
+    result = _run(tmp_path, raw, downloader, doppler)
+
+    assert result.returncode == 0, result.stderr
+    calls = _calls(tmp_path)
+    assert len(calls) == 1
+    call = calls[0]
+    # The oldest missing member is 2026-11-10, so the cohort request starts at
+    # 2026-11-11 for every missing member, including the five newer at
+    # 2026-11-12 (bounded overlap re-fetch, never the full stage window).
+    assert "--start 2026-11-11" in call
+    assert call.count("--instrument") == 90
+    assert _cohort_keys(1)[10] in call
+    assert _cohort_keys(1)[15] in call
+    receipt = _receipt(tmp_path)
+    adjusted = cast(dict[str, object], receipt["adjusted"])
+    cohorts = cast(list[dict[str, object]], adjusted["cohorts"])
+    assert cohorts[1]["start"] == "2026-11-11"
+    assert cast(dict[str, object], adjusted["range"])["start"] == "2026-11-11"

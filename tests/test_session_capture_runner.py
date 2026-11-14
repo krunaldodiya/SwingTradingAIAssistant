@@ -192,6 +192,13 @@ class _FlakyClient(_FakeClient):
         return super().history(instrument, start, end)
 
 
+class _NoNewerClient(_FakeClient):
+    def history(self, instrument: BharatStockInstrument, start: date, end: date):
+        type(self).calls.append((instrument.symbol, start, end))
+        self.requests_used = 1
+        raise capture.BharatStockError("EMPTY_HISTORY", member_local=True)
+
+
 class _RateLimitedClient(_FakeClient):
     def history(self, instrument: BharatStockInstrument, start: date, end: date):
         self.requests_used = 1
@@ -462,3 +469,42 @@ def test_rate_limit_is_a_nonzero_typed_result(
     assert summary["completed"] == 0
     assert summary["requests_used"] == 1
     assert summary["symbols"]["A000"]["status"] == "RATE_LIMITED"
+
+
+def test_no_newer_session_is_a_typed_noop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A weekend/holiday successor range is not a member data failure."""
+    _universe(tmp_path / "store")
+    isin, symbol = _member(0)
+    _write_session(tmp_path / "store", isin, symbol, "2026-11-12")
+    _reset()
+    monkeypatch.setattr(capture, "BharatStockClient", _NoNewerClient)
+
+    code, summary = _run(tmp_path, "--limit", "1")
+
+    assert code == 1  # the other 199 members are still pending
+    record = summary["symbols"][symbol]
+    assert record["status"] == "NO_NEWER_SESSION"
+    assert record["error"] is None
+    assert record["latest_session"] == "2026-11-12"
+    assert summary["no_newer_session"] == 1
+    assert summary["failed"] == 0
+    assert summary["failed_isins"] == []
+
+
+def test_empty_history_without_a_retained_session_is_a_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _universe(tmp_path / "store")
+    _reset()
+    monkeypatch.setattr(capture, "BharatStockClient", _NoNewerClient)
+
+    code, summary = _run(tmp_path, "--limit", "1")
+
+    assert code == 1
+    record = summary["symbols"][_NIFTY200[0]]
+    assert record["status"] == "FAILED"
+    assert record["error"] == "EMPTY_HISTORY"
+    assert summary["no_newer_session"] == 0
+    assert summary["failed"] == 1

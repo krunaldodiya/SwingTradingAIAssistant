@@ -62,6 +62,19 @@ def _universe_members(storage_root: Path) -> tuple[str, ...]:
     return tuple(members)
 
 
+def _runtime_identity() -> dict[str, object]:
+    path = Path(__file__).resolve()
+    try:
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        digest = None
+    return {
+        "path": str(path),
+        "sha256": digest,
+        "python": sys.version.split()[0],
+    }
+
+
 def _snapshot_identity(storage_root: Path) -> dict[str, object]:
     universe = read_historic_nifty_universe(storage_root)
     path = storage_root / SNAPSHOT_RELATIVE
@@ -98,21 +111,41 @@ def _session_date(value: object) -> date | None:
 
 
 def retained_sessions(storage_root: Path) -> dict[str, date]:
-    """Newest retained adjusted session per instrument key across every dataset."""
+    """Newest retained adjusted session per composite instrument key.
+
+    The production dataset stores ``isin``, ``exchange``, and ``symbol`` as
+    separate columns; the universe key is their composite. Reading only
+    ``symbol`` would never match a cohort member.
+    """
     newest: dict[str, date] = {}
     for path in sorted(
         (storage_root / ADJUSTED_RELATIVE).rglob("*.parquet"),
     ):
         try:
-            table = pq.read_table(path, columns=["symbol", "session"])
+            table = pq.read_table(
+                path, columns=["isin", "exchange", "symbol", "session"]
+            )
+            isins = table.column("isin").to_pylist()
+            exchanges = table.column("exchange").to_pylist()
             symbols = table.column("symbol").to_pylist()
             sessions = table.column("session").to_pylist()
         except Exception:  # noqa: BLE001, S112 - unreadable dataset is not coverage
             continue
-        for key, raw_session in zip(symbols, sessions, strict=True):
+        for isin, exchange, symbol, raw_session in zip(
+            isins, exchanges, symbols, sessions, strict=True
+        ):
             session = _session_date(raw_session)
-            if type(key) is not str or session is None:
+            if (
+                type(isin) is not str
+                or not isin
+                or type(exchange) is not str
+                or not exchange
+                or type(symbol) is not str
+                or not symbol
+                or session is None
+            ):
                 continue
+            key = _instrument_key(isin, exchange, symbol)
             observed = newest.get(key)
             if observed is None or session > observed:
                 newest[key] = session
@@ -191,6 +224,7 @@ def plan(storage_root: Path, stamp: date, stage_start: date) -> dict[str, object
             else "PENDING"
         ),
         "universe": _snapshot_identity(storage_root),
+        "runtime": _runtime_identity(),
         "cohorts": cohorts,
     }
 

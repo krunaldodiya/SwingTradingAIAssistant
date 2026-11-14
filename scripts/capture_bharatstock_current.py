@@ -46,7 +46,7 @@ SESSION_CACHE_DIRECTORY = "bharatstock-session-cache-v1"
 SESSION_CACHE_SCHEMA = "bharatstock-session-cache@v1"
 _SESSION_FILE = re.compile(r"session=(\d{4}-\d{2}-\d{2})\.json\Z")
 _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
-_COMPLETE_STATUSES = frozenset({"COMPLETE", "SKIPPED"})
+_COMPLETE_STATUSES = frozenset({"COMPLETE", "SKIPPED", "NO_NEWER_SESSION"})
 
 
 GOVERNED_SNAPSHOT = Path("universe_snapshots") / "nifty-universe-v3.json"
@@ -279,6 +279,25 @@ def _capture_member(
         except BharatStockError as error:
             requests_used += client.requests_used
             category = error.category
+            if (
+                category == "EMPTY_HISTORY"
+                and newest is not None
+                and fetch_start > start
+            ):
+                # Only the successor range was requested and the provider has no
+                # session there yet (a weekend, holiday, or unpublished close).
+                # The retained session stays the latest fact; this is a typed
+                # no-newer-session outcome, not a data failure. A full bounded
+                # window with no retained session is still a real failure.
+                record.update(
+                    {
+                        "status": "NO_NEWER_SESSION",
+                        "latest_session": newest.isoformat(),
+                        "requests_used": requests_used,
+                        "error": None,
+                    }
+                )
+                return record
             if category in {"PROVIDER_UNAVAILABLE", "TRANSPORT_FAILED"} and (
                 attempt < len(RETRY_DELAYS)
             ):
@@ -451,6 +470,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901 - stage boundaries
     latest_session: date | None = None
     completed_this_run = 0
     skipped_this_run = 0
+    no_newer_this_run = 0
 
     def persist() -> None:
         _save_checkpoint(
@@ -486,6 +506,8 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901 - stage boundaries
             completed_this_run += 1
         elif status == "SKIPPED":
             skipped_this_run += 1
+        elif status == "NO_NEWER_SESSION":
+            no_newer_this_run += 1
         persist()
         if status == "RATE_LIMITED":
             summary.update(
@@ -493,6 +515,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901 - stage boundaries
                     "status": "RATE_LIMITED",
                     "completed": completed_this_run,
                     "skipped": skipped_this_run,
+                    "no_newer_session": no_newer_this_run,
                     "failed": len(failed),
                     "failed_isins": sorted(failed),
                     "requests_used": requests_used,
@@ -518,6 +541,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901 - stage boundaries
             "status": "COMPLETE" if complete else "INCOMPLETE",
             "completed": completed_this_run,
             "skipped": skipped_this_run,
+            "no_newer_session": no_newer_this_run,
             "failed": len(failed),
             "failed_isins": sorted(failed),
             "requests_used": requests_used,

@@ -2,7 +2,7 @@
 # Install (or reinstall) the repository-owned research scheduling units.
 #
 # Three independent schedules live here, all owned by this repository:
-#   swing-data-capture.timer   captures provider data before research
+#   swing-data-capture.timer   optional 20:00 head start (PRD: not required)
 #   swing-daily-scan.timer     runs the after-close Nifty 200 research pass
 #   research-ledger-sync.timer mirrors the private ledger to Google Drive hourly
 #
@@ -10,7 +10,7 @@
 #   scripts/install_research_schedule.sh            # install and enable all
 #   scripts/install_research_schedule.sh --status   # show current state
 #   scripts/install_research_schedule.sh --uninstall
-#   scripts/install_research_schedule.sh --check    # verify units are installed
+#   scripts/install_research_schedule.sh --check    # required units installed
 #
 # Environment overrides:
 #   SWING_STORAGE_ROOT, SWING_DOPPLER_PROJECT, SWING_DOPPLER_CONFIG,
@@ -39,7 +39,7 @@ status() {
 
 verify() {
   local failed=0
-  for unit in "$CAPTURE_TIMER" "$SCAN_TIMER" "$SYNC_TIMER"; do
+  for unit in "$SCAN_TIMER" "$SYNC_TIMER"; do
     if systemctl --user is-enabled "$unit" >/dev/null 2>&1; then
       echo "enabled: $unit"
     else
@@ -47,6 +47,14 @@ verify() {
       failed=1
     fi
   done
+  # The 20:00 head start is optional under the PRD; an installed unit is enough
+  # and a disabled timer must not fail the check. The 20:30 preflight is the
+  # correctness mechanism.
+  if systemctl --user is-enabled "$CAPTURE_TIMER" >/dev/null 2>&1; then
+    echo "enabled: $CAPTURE_TIMER"
+  else
+    echo "optional: $CAPTURE_TIMER (installed, not enabled)"
+  fi
   for unit in "$CAPTURE_SERVICE" "$SCAN_SERVICE" "$SYNC_SERVICE"; do
     if [ -f "$UNIT_DST/$unit" ]; then
       echo "installed: $unit"

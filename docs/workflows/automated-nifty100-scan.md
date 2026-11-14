@@ -462,7 +462,10 @@ off-device copy part of the pass rather than a later hope. Set
 `SWING_RCLONE_BIN`, `SWING_LEDGER_REMOTE` or `SWING_SYNC_LOG_DIR` to override the
 defaults.
 
-The same installer also enables `swing-data-capture.timer` at 20:00 IST. It
+The same installer also installs and enables `swing-data-capture.timer` at
+20:00 IST. The PRD treats this head start as optional; `--check` requires the
+service and timer files to be installed and the scan/sync timers to be enabled,
+but a disabled capture timer is reported as optional rather than a failure. It
 runs `scripts/capture_provider_data.sh`, which writes the raw session cache
 research reads and updates the adjusted benchmark store, using only the governed
 retained Nifty 200 snapshot and the date. It reads no exchange calendar, pair
@@ -474,37 +477,54 @@ in the receipt.
 Capture is incremental and additive. The raw stage reads each member's newest
 retained `bharatstock-session-cache-v1` session and requests only the newer
 range; a member that already reaches the requested end makes no provider
-request. A valid cache record is accepted only when it matches the client's full
+request. When that successor range has no provider session yet (a weekend,
+holiday, or unpublished close), the member is recorded as `NO_NEWER_SESSION`
+with the retained session kept as the latest fact, not as a data failure; a
+non-trading run therefore does not look like a capture failure. An empty history
+for a member with no retained session is still a failure. A valid cache record is accepted only when it matches the client's full
 reader: identity, record digest, OHLC and volume constraints, response digest
 tuple, and a UTC retrieval instant. Returned session files are verified after
 the client write; a missing or invalid write fails the member instead of being
 reported as captured.
 
 The adjusted stage works per 100-member cohort. It reads the retained
-`adjusted_daily` store per instrument, skips a cohort only when every one of its
+`adjusted_daily` store per instrument using the production `isin`, `exchange`,
+`symbol`, and `session` columns, skips a cohort only when every one of its
 instruments already has the requested session, and otherwise requests only that
 cohort's still-missing members from the range after its oldest missing
-instrument's latest session. After each batch it re-reads the store and requires
-the whole cohort to be current; a partial or member-local failure leaves that
-cohort `INCOMPLETE`. The adjusted stage is `COMPLETE` only when every cohort is
-`COMPLETE` or `SKIPPED`. Existing sessions and request stores are reused;
-nothing is deleted or re-downloaded.
+instrument's latest session. Because one start serves the cohort, a missing
+member whose own gap begins later re-fetches that bounded overlap (at most the
+stage window, never a fully current member, and never a whole cohort that is
+current). After each batch it re-reads the store and requires the whole cohort
+to be current; a partial or member-local failure leaves that cohort `INCOMPLETE`.
+The adjusted stage is `COMPLETE` only when every cohort is `COMPLETE` or
+`SKIPPED`. Existing sessions and request stores are reused; no retained data is
+deleted, and a fully current cohort makes no provider request.
 
 The 20:30 research runner performs the same capture as its first step, before
 any scan, research, or analysis, so a later calendar or research failure cannot
 discard the day's provider data. It reads the capture unit state with
 `systemctl --user show -p ActiveState --value` and treats `activating`,
 `deactivating`, and `reloading` as busy, so a starting or stopping head start is
-never duplicated. If the unit is busy it waits (600 s), if the receipt is
-complete it skips, and if the head start timed out or failed it resumes from the
-checkpoint. It never kills, discards, or duplicates the active capture. The
-preflight capture is bounded at 1200 s with `timeout --kill-after` so a
-terminated capture leaves no provider child behind; wait + capture + scan
-(600 + 1200 + 1200 s) stay inside the scan service's 3600 s deadline.
+never duplicated. It also probes the storage-root `.ingestion.lock` without
+waiting or creating state, so a manually started capture is detected even when
+no unit is involved. If the unit or the lease is busy it waits; if the receipt is
+complete it skips; if the head start timed out or failed it resumes from the
+checkpoint. It never kills, discards, or duplicates the active capture.
+
+One 1800 s preflight deadline covers the unit wait, the lease wait, and the
+capture resume. If the holder is still busy at the deadline, the pass fails
+closed (exit 75) and does not start the scan, because capture and research must
+not run concurrently. When the preflight instead finishes capture, the scan runs
+and reuses the receipt. The preflight capture is bounded with `timeout
+--kill-after` so a terminated capture leaves no provider child behind. The full
+pass fits `swing-daily-scan.service` (`TimeoutStartSec=3600`): preflight 1800 s
++ scan 1200 s + post-scan analysis/research/ledger reserve 600 s.
 
 `$SWING_LOG_DIR/capture-<date>.json` (`provider-capture@v3`) records per-symbol
 status, failed ISINs, per-cohort adjusted status, quota per stage, the latest
-session, the universe snapshot identity, runtime identity, and timestamps. Quota
+session, the universe snapshot identity, runtime identity (raw script, adjusted
+cohort planner, downloader core, and composite script), and timestamps. Quota
 is never summed across unlike units: the raw stage reports actual provider
 requests including failed attempts, and the adjusted stage reports the
 downloader's own request count with an explicit completeness flag plus a

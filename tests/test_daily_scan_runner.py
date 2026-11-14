@@ -10,6 +10,11 @@ from pathlib import Path
 
 import pytest
 
+from swing_trading_ai_assistant.market_data.storage_root_lease import (
+    LeaseOutcome,
+    StorageRootLease,
+)
+
 
 def _schedule(root: Path, *, closed: str | None) -> None:
     directory = root / "calendar-schedules" / "sha256"
@@ -159,7 +164,8 @@ def _capture_env(
         "SWING_CAPTURE_COMMAND": str(stub),
         "SWING_CAPTURE_SERVICE": "swing-data-capture-test.service",
         "SWING_CAPTURE_SERVICE_STATE_COMMAND": "printf 'inactive\\n'",
-        "SWING_CAPTURE_WAIT_SECONDS": "0",
+        "SWING_CAPTURE_LEASE_STATE_COMMAND": "printf 'FREE\\n'",
+        "SWING_CAPTURE_PREFLIGHT_BUDGET": "0",
         "SWING_CAPTURE_POLL_SECONDS": "0",
         "CAPTURE_STUB_LOG": str(calls),
         "CAPTURE_STUB_SOURCE": str(source),
@@ -840,7 +846,7 @@ def test_runner_waits_for_an_active_head_start_without_duplicating_it(
             _capture_env(root, log)
             | {
                 "SWING_CAPTURE_SERVICE_STATE_COMMAND": str(status),
-                "SWING_CAPTURE_WAIT_SECONDS": "30",
+                "SWING_CAPTURE_PREFLIGHT_BUDGET": "30",
                 "SWING_CAPTURE_POLL_SECONDS": "0",
                 "STATUS_COUNT": str(root / "status.count"),
             }
@@ -887,7 +893,7 @@ def test_runner_never_duplicates_a_head_start_that_outlasts_the_wait(
             _capture_env(root, log)
             | {
                 "SWING_CAPTURE_SERVICE_STATE_COMMAND": str(active),
-                "SWING_CAPTURE_WAIT_SECONDS": "0",
+                "SWING_CAPTURE_PREFLIGHT_BUDGET": "0",
                 "SWING_CAPTURE_POLL_SECONDS": "0",
             }
         ),
@@ -898,15 +904,16 @@ def test_runner_never_duplicates_a_head_start_that_outlasts_the_wait(
         [str(script)], env=env, capture_output=True, text=True, check=False
     )
 
-    assert result.returncode == 0
+    # Capture and research must not run concurrently: no scan is started.
+    assert result.returncode == 75
     assert _capture_calls(root) == []
     preflight = (log / "capture-preflight-2026-10-23.log").read_text()
-    assert "not starting a duplicate" in preflight
-    scan_call = next(
-        call for call in stub_log.read_text().splitlines() if " scan " in call
-    )
-    assert "--reuse-captured-terminal" not in scan_call
-    assert "CAPTURE_INCOMPLETE" in (log / "scan-2026-10-23.err").read_text()
+    assert "still busy" in preflight
+    assert "scan " not in stub_log.read_text()
+    assert not (log / "scan-2026-10-23.json").exists()
+    err = (log / "scan-2026-10-23.err").read_text()
+    assert "CAPTURE_INCOMPLETE" in err
+    assert "scan_not_started=unit" in err
 
 
 def test_preflight_budget_fits_the_scan_service_timeout() -> None:
@@ -920,13 +927,17 @@ def test_preflight_budget_fits_the_scan_service_timeout() -> None:
         assert match is not None, name
         return int(match.group(1))
 
-    wait = default("SWING_CAPTURE_WAIT_SECONDS")
+    preflight = default("SWING_CAPTURE_PREFLIGHT_BUDGET")
     capture = default("SWING_CAPTURE_TIMEOUT")
     scan = default("SWING_SCAN_TIMEOUT")
     service = re.search(r"^TimeoutStartSec=([0-9]+)$", unit, re.M)
     assert service is not None
-    assert (wait, capture, scan) == (600, 1200, 1200)
-    assert wait + capture + scan <= int(service.group(1))
+    assert (preflight, capture, scan) == (1800, 1200, 1200)
+    assert capture <= preflight
+    # The deadline covers the preflight (unit/lease wait + capture resume),
+    # the scan, and the post-scan analysis/research/ledger stages.
+    post_scan_reserve = 600
+    assert preflight + scan + post_scan_reserve <= int(service.group(1))
 
 
 def test_timed_out_preflight_does_not_leave_a_child_process(
@@ -952,7 +963,8 @@ def test_timed_out_preflight_does_not_leave_a_child_process(
         "SWING_RCLONE_BIN": "/bin/true",
         "SWING_CAPTURE_COMMAND": str(stub),
         "SWING_CAPTURE_SERVICE_STATE_COMMAND": "printf 'inactive\\n'",
-        "SWING_CAPTURE_WAIT_SECONDS": "0",
+        "SWING_CAPTURE_LEASE_STATE_COMMAND": "printf 'FREE\\n'",
+        "SWING_CAPTURE_PREFLIGHT_BUDGET": "0",
         "SWING_CAPTURE_POLL_SECONDS": "0",
         "SWING_CAPTURE_TIMEOUT": "1",
         "SWING_CAPTURE_KILL_AFTER": "1",
@@ -978,3 +990,56 @@ def test_timed_out_preflight_does_not_leave_a_child_process(
         call for call in stub_log.read_text().splitlines() if " scan " in call
     )
     assert "--reuse-captured-terminal" not in scan_call
+
+
+def test_preflight_waits_for_a_manual_storage_lease(tmp_path: Path) -> None:
+    """A manual capture holds the root lease, not a unit; do not collide."""
+    script, log, source, doppler, stub_log, root = _preflight_fixture(tmp_path)
+    env = os.environ | {
+        "SWING_STORAGE_ROOT": str(root),
+        "SWING_LOG_DIR": str(log),
+        "SWING_DATE_OVERRIDE": "2026-10-23",
+        "SWING_ALLOW_OVERWRITE": "1",
+        "SWING_REPO": str(script.parents[1]),
+        "DOPPLER_BIN": str(doppler),
+        "STUB_LOG": str(stub_log),
+        "STUB_SOURCE": str(source),
+        "SWING_LEDGER_ROOT": str(root / "ledger"),
+        "SWING_RCLONE_BIN": "/bin/true",
+        **_capture_env(root, log),
+    }
+    # Exercise the real storage-lease probe, not the test override.
+    env.pop("SWING_CAPTURE_LEASE_STATE_COMMAND")
+    (root / "ledger" / "entries" / "2026").mkdir(parents=True, exist_ok=True)
+
+    held = StorageRootLease.try_acquire(root)
+    assert held.outcome is LeaseOutcome.ACQUIRED and held.lease is not None
+    try:
+        blocked = subprocess.run(  # noqa: S603 - trusted repository test script
+            [str(script)], env=env, capture_output=True, text=True, check=False
+        )
+    finally:
+        held.lease.close()
+
+    assert blocked.returncode == 75
+    assert _capture_calls(root) == []
+    assert "scan " not in stub_log.read_text()
+    err = (log / "scan-2026-10-23.err").read_text()
+    assert "CAPTURE_INCOMPLETE" in err
+    assert "scan_not_started=lease" in err
+    assert (
+        "storage-root lease busy"
+        in (log / "capture-preflight-2026-10-23.log").read_text()
+    )
+
+    # Once the manual holder releases the lease the preflight runs and scans.
+    released = subprocess.run(  # noqa: S603 - trusted repository test script
+        [str(script)], env=env, capture_output=True, text=True, check=False
+    )
+
+    assert released.returncode == 0
+    assert len(_capture_calls(root)) == 1
+    scan_call = next(
+        call for call in stub_log.read_text().splitlines() if " scan " in call
+    )
+    assert "--reuse-captured-terminal" in scan_call

@@ -183,9 +183,25 @@ fi
 ADJ_STAGE="$LOG/capture-adjusted-stage-$STAMP.json"
 "$PYTHON" - "$ADJ_STAGE" "$ADJ_PLAN_JSON" "$ADJ_RESULTS" "$STAMP" "$START" \
   "$ADJ_BUDGET" "$ADJ_ERROR" <<'PY'
+import hashlib
+import importlib
 import json
 import sys
 import time
+from pathlib import Path
+
+
+def _module_identity(module_name):
+    try:
+        module = importlib.import_module(module_name)
+        path = Path(str(module.__file__))
+        return {
+            "path": str(path),
+            "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        }
+    except Exception:  # noqa: BLE001 - an unavailable module is reported unknown
+        return {"path": None, "sha256": None}
+
 
 (
     path,
@@ -298,6 +314,10 @@ payload = {
         "end": stamp,
     },
     "universe": plan.get("universe"),
+    "runtime": {
+        "planner": plan.get("runtime"),
+        "downloader": _module_identity("equity_data_downloader.core"),
+    },
     "error": plan_error or None,
     "completed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
 }
@@ -379,6 +399,11 @@ receipt = {
         for record in symbols.values()
         if isinstance(record, dict) and record.get("status") == "SKIPPED"
     ),
+    "symbols_no_newer_session": sum(
+        1
+        for record in symbols.values()
+        if isinstance(record, dict) and record.get("status") == "NO_NEWER_SESSION"
+    ),
     "failed_isins": failed_isins,
     "universe": raw.get("universe"),
     "universe_snapshot": raw.get("universe_snapshot"),
@@ -410,6 +435,7 @@ receipt = {
             "provider_requests_used": raw_requests,
             "requests_configured_max": raw_max,
             "sessions_written": raw.get("sessions_written"),
+            "no_newer_session": raw.get("no_newer_session"),
             "latest_session": raw.get("latest_session"),
         },
         "adjusted": {
@@ -430,6 +456,7 @@ receipt = {
     },
     "runtime": {
         "raw": raw.get("runtime"),
+        "adjusted": adjusted.get("runtime"),
         "composite": {
             "path": script_path,
             "sha256": script_sha256,

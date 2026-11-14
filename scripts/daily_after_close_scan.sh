@@ -19,7 +19,9 @@
 #   SWING_CAPTURE_COMMAND, SWING_CAPTURE_SERVICE (capture preflight target)
 #   SWING_CAPTURE_SERVICE_STATE_COMMAND (ActiveState command for tests)
 #   SWING_CAPTURE_SERVICE_STATUS (explicit executable override, exit 0 = busy)
-#   SWING_CAPTURE_WAIT_SECONDS, SWING_CAPTURE_POLL_SECONDS
+#   SWING_CAPTURE_LEASE_STATE_COMMAND (storage lease probe: FREE or BUSY)
+#   SWING_CAPTURE_LEASE_PYTHON (interpreter for the default lease probe)
+#   SWING_CAPTURE_PREFLIGHT_BUDGET, SWING_CAPTURE_POLL_SECONDS
 #   SWING_CAPTURE_TIMEOUT, SWING_CAPTURE_KILL_AFTER
 set -u
 
@@ -127,9 +129,13 @@ SCAN_ARGS=(--storage-root "$STORE" --nifty200 --refresh --retain-decision-eviden
 CAPTURE_RECEIPT="$LOG/capture-$STAMP.json"
 CAPTURE_COMMAND=${SWING_CAPTURE_COMMAND:-$REPO/scripts/capture_provider_data.sh}
 CAPTURE_SERVICE=${SWING_CAPTURE_SERVICE:-swing-data-capture.service}
-# Bounded inside swing-daily-scan.service TimeoutStartSec=3600:
-#   wait 600 + preflight capture 1200 + scan 1200 = 3000 seconds.
-CAPTURE_WAIT_SECONDS=${SWING_CAPTURE_WAIT_SECONDS:-600}
+# The whole pass must fit swing-daily-scan.service TimeoutStartSec=3600:
+#   preflight (unit/lease wait + capture resume) 1800
+#   + scan 1200
+#   + post-scan analysis/research/ledger reserve 600.
+# The preflight budget is one deadline shared by the unit wait, the storage
+# lease wait, and the capture resume, so no path can exceed it.
+CAPTURE_PREFLIGHT_BUDGET=${SWING_CAPTURE_PREFLIGHT_BUDGET:-1800}
 CAPTURE_POLL_SECONDS=${SWING_CAPTURE_POLL_SECONDS:-10}
 CAPTURE_TIMEOUT=${SWING_CAPTURE_TIMEOUT:-1200}
 CAPTURE_KILL_AFTER=${SWING_CAPTURE_KILL_AFTER:-30}
@@ -195,33 +201,100 @@ capture_service_active() {
   esac
 }
 
+# A manually started capture holds the storage-root lease rather than a unit.
+# Probe it without waiting or creating the lock; only an explicit BUSY blocks.
+capture_lease_state() {
+  if [ -n "${SWING_CAPTURE_LEASE_STATE_COMMAND:-}" ]; then
+    bash -c "$SWING_CAPTURE_LEASE_STATE_COMMAND" 2> /dev/null || echo UNKNOWN
+    return
+  fi
+  PYTHONPATH="$REPO/src${PYTHONPATH:+:$PYTHONPATH}" \
+    "${SWING_CAPTURE_LEASE_PYTHON:-python3}" - "$STORE" <<'PY'
+import os
+import sys
+from pathlib import Path
+
+try:
+    from swing_trading_ai_assistant.market_data.storage_root_lease import (
+        LeaseOutcome,
+        StorageRootLease,
+    )
+except Exception:  # noqa: BLE001 - an unavailable probe is not proof of a holder
+    print("UNKNOWN")
+    raise SystemExit(0)
+
+root = Path(sys.argv[1])
+try:
+    if not os.path.lexists(root / ".ingestion.lock"):
+        print("FREE")
+    else:
+        identity = StorageRootLease.admit_existing_private_identity(root)
+        if identity is None:
+            print("BUSY")
+        else:
+            result = StorageRootLease.try_acquire_existing_identity(root, identity)
+            if result.outcome is LeaseOutcome.ACQUIRED and result.lease is not None:
+                result.lease.close()
+                print("FREE")
+            else:
+                print("BUSY")
+except Exception:  # noqa: BLE001 - fail closed for a held or unsafe root
+    print("BUSY")
+PY
+}
+
+capture_lease_busy() {
+  [ "$(capture_lease_state)" = "BUSY" ]
+}
+
+CAPTURE_STATE=INCOMPLETE
+CAPTURE_BUSY=""
 if capture_receipt_complete; then
   CAPTURE_STATE=COMPLETE
   echo "$(date -Is) capture preflight: receipt complete; scan reuses it" \
     >> "$CAPTURE_LOG"
 else
-  CAPTURE_STATE=INCOMPLETE
+  preflight_deadline=$(( $(date +%s) + CAPTURE_PREFLIGHT_BUDGET ))
   if capture_service_active; then
     echo "$(date -Is) capture preflight: waiting for $CAPTURE_SERVICE" \
       >> "$CAPTURE_LOG"
-    capture_deadline=$(( $(date +%s) + CAPTURE_WAIT_SECONDS ))
     while capture_service_active; do
-      if [ "$(date +%s)" -ge "$capture_deadline" ]; then
+      if [ "$(date +%s)" -ge "$preflight_deadline" ]; then
         break
       fi
       sleep "$CAPTURE_POLL_SECONDS"
     done
   fi
   if capture_service_active; then
-    echo "$(date -Is) capture preflight: $CAPTURE_SERVICE still active after ${CAPTURE_WAIT_SECONDS}s; not starting a duplicate" \
+    CAPTURE_BUSY="unit"
+    echo "$(date -Is) capture preflight: $CAPTURE_SERVICE still busy after the ${CAPTURE_PREFLIGHT_BUDGET}s preflight budget" \
       >> "$CAPTURE_LOG"
   elif capture_receipt_complete; then
     CAPTURE_STATE=COMPLETE
     echo "$(date -Is) capture preflight: $CAPTURE_SERVICE completed the capture" \
       >> "$CAPTURE_LOG"
-  else
-    echo "$(date -Is) capture preflight: running $CAPTURE_COMMAND" >> "$CAPTURE_LOG"
-    timeout --kill-after="${CAPTURE_KILL_AFTER}s" "$CAPTURE_TIMEOUT" \
+  elif capture_lease_busy; then
+    echo "$(date -Is) capture preflight: storage-root lease busy; waiting" \
+      >> "$CAPTURE_LOG"
+    while capture_lease_busy; do
+      if [ "$(date +%s)" -ge "$preflight_deadline" ]; then
+        break
+      fi
+      sleep "$CAPTURE_POLL_SECONDS"
+    done
+    if capture_lease_busy; then
+      CAPTURE_BUSY="lease"
+      echo "$(date -Is) capture preflight: storage-root lease still busy after the ${CAPTURE_PREFLIGHT_BUDGET}s preflight budget" \
+        >> "$CAPTURE_LOG"
+    fi
+  fi
+  if [ -z "$CAPTURE_BUSY" ] && [ "$CAPTURE_STATE" != "COMPLETE" ]; then
+    remaining=$(( preflight_deadline - $(date +%s) ))
+    [ "$remaining" -gt 0 ] || remaining=1
+    [ "$remaining" -le "$CAPTURE_TIMEOUT" ] || remaining=$CAPTURE_TIMEOUT
+    echo "$(date -Is) capture preflight: running $CAPTURE_COMMAND (bounded ${remaining}s)" \
+      >> "$CAPTURE_LOG"
+    timeout --kill-after="${CAPTURE_KILL_AFTER}s" "$remaining" \
       "$CAPTURE_COMMAND" >> "$CAPTURE_LOG" 2>&1
     preflight_code=$?
     echo "$(date -Is) capture preflight: exit_code=$preflight_code" \
@@ -230,6 +303,18 @@ else
       CAPTURE_STATE=COMPLETE
     fi
   fi
+fi
+
+if [ -n "$CAPTURE_BUSY" ]; then
+  # Capture and research must not run concurrently. A unit or a manual holder
+  # that outlasts the preflight budget means this pass cannot both finish the
+  # capture and scan inside the service deadline, so fail closed instead of
+  # scanning beside it.
+  echo "$(date -Is) CAPTURE_INCOMPLETE receipt=$CAPTURE_RECEIPT scan_not_started=$CAPTURE_BUSY" \
+    >> "$CAPTURE_LOG"
+  echo "$(date -Is) CAPTURE_INCOMPLETE receipt=$CAPTURE_RECEIPT scan_not_started=$CAPTURE_BUSY" \
+    >> "$LOG/scan-$STAMP.err"
+  exit 75
 fi
 
 if [ "$CAPTURE_STATE" = "COMPLETE" ]; then
