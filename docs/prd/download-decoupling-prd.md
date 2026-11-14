@@ -27,7 +27,7 @@ The attempted fix in PR #425 was closed because it:
 It did not delete existing data. The close was about the wrong cache, lock
 overlap, missing quota observability, and missing tests.
 
-A 20:15 head-start timer alone is not a correctness guarantee. The guarantee is
+A 20:00 head-start timer alone is not a correctness guarantee. The guarantee is
 that the 20:30 research runner performs the capture preflight before it starts
 any scan, research, or analysis.
 
@@ -35,7 +35,7 @@ any scan, research, or analysis.
 
 Run a bounded provider capture **before** research, as the first step of the
 research runner, with its own failure domain. Existing data stays in place; the
-capture is additive and fetches only missing or new sessions. A separate 20:15
+capture is additive and fetches only missing or new sessions. A separate 20:00
 timer is an optional head start, not the correctness mechanism.
 
 ## 3. Non-goals
@@ -71,12 +71,12 @@ nothing is migrated or deleted.
 
 | ID | Requirement |
 |---|---|
-| FR1 | The daily research runner performs the capture as its **first step**, before any scan, research, or analysis. A separate 20:15 timer MAY run the same capture earlier as an optional head start. |
+| FR1 | The daily research runner performs the capture as its **first step**, before any scan, research, or analysis. A separate 20:00 timer MAY run the same capture earlier as an optional head start. |
 | FR2 | Capture reads only the retained official Nifty 200 universe and the date. It never reads the exchange calendar, scanner pair state, safety eligibility, or research output. |
 | FR3 | Capture writes the existing raw session cache used by research, not only the adjusted benchmark store. |
 | FR4 | Capture is additive: existing session files and existing adjusted request stores are reused; only missing/new sessions are fetched. Existing data is not deleted or overwritten with a different basis. |
 | FR5 | Capture is bounded, checkpointed, resumable, and idempotent. A re-run for the same date makes no provider request for sessions already present. |
-| FR6 | At 20:30, the research runner checks the capture state: if the 20:15 head start is still active, it **waits**; if complete, it **skips**; if timed out or failed, it **resumes from the checkpoint**. It never kills or discards the active 20:15 work and never starts a duplicate capture. The 15-minute gap is a head-start budget, not a hard data-download limit. |
+| FR6 | At 20:30, the research runner checks the capture state: if the 20:00 head start is still active, it **waits**; if complete, it **skips**; if timed out or failed, it **resumes from the checkpoint**. It never kills or discards the active 20:00 work and never starts a duplicate capture. The 30-minute gap is a head-start budget, not a hard data-download limit. |
 | FR7 | The research scan reuses a valid capture receipt and does not request the freshly captured terminal session again. If capture is incomplete, the preflight runs/resumes first; the scan records `CAPTURE_INCOMPLETE` and never fabricates a terminal fact. |
 | FR8 | Quota use is observable per stage: requests used, configured maximum, symbols processed, sessions written/skipped, and outcome. No secret is logged. |
 | FR9 | Research or calendar failure cannot prevent capture. Capture failure does not fabricate research facts; it blocks only the exact claim that depends on the missing capture. |
@@ -105,12 +105,12 @@ Each sub-step has its own result. One failing does not stop the other.
 
 - `swing-daily-scan.timer` (existing): 20:30 IST. Its runner performs the
   capture preflight as its first step, then scan/research/analysis.
-- `swing-data-capture.timer` (optional): 20:15 IST. It runs the same capture as
+- `swing-data-capture.timer` (optional): 20:00 IST. It runs the same capture as
   an early head start; it is not a correctness dependency.
-- If the 20:15 capture is still active when the 20:30 runner starts, the runner
+- If the 20:00 capture is still active when the 20:30 runner starts, the runner
   waits for it. If it completed, the preflight is a no-op. If it timed out or
   failed, the preflight resumes from its checkpoint.
-- The 20:15 service uses a clean head-start budget. On reaching that budget it
+- The 20:00 service uses a clean 25-minute head-start budget. On reaching that budget it
   stops gracefully, leaves the checkpoint, and the 20:30 preflight continues.
 - The research service may start later than 20:30 when the preflight takes
   longer; the 20:30 timer is a start trigger, not a deadline for the data.
@@ -118,8 +118,8 @@ Each sub-step has its own result. One failing does not stop the other.
   very large backfill exceeds it, captured data remains checkpointed and the
   research retries.
 - The scan service also carries `After=swing-data-capture.service` as a
-  secondary ordering guard when the 20:15 head start is installed as a systemd
-  service. A manual 20:15 capture is detected by the storage lock/checkpoint;
+  secondary ordering guard when the 20:00 head start is installed as a systemd
+  service. A manual 20:00 capture is detected by the storage lock/checkpoint;
   the 20:30 runner waits rather than duplicating it.
 
 ### 7.3 Capture receipt and scan handshake
@@ -139,9 +139,9 @@ and never fabricates a terminal fact.
 
 ### 7.4 Locking and wait semantics
 
-The 20:15 capture and the 20:30 research must not run concurrently:
+The 20:00 capture and the 20:30 research must not run concurrently:
 
-- If the 20:15 capture is active at 20:30, the research runner waits.
+- If the 20:00 capture is active at 20:30, the research runner waits.
 - If it completed, the preflight skips.
 - If it timed out or failed, the preflight resumes from the checkpoint.
 - The runner never kills the active capture, never discards completed work, and
@@ -159,10 +159,10 @@ The 20:15 capture and the 20:30 research must not run concurrently:
    intact.
 3. **Re-run:** a second capture for the same date makes no provider request for
    sessions already present.
-4. **20:15 active at 20:30:** the 20:30 runner waits; it does not kill or
+4. **20:00 active at 20:30:** the 20:30 runner waits; it does not kill or
    duplicate the capture; research starts after the capture finishes or its
    checkpoint is resumed.
-5. **20:15 timed out/failed:** the 20:30 preflight resumes from the checkpoint
+5. **20:00 timed out/failed:** the 20:30 preflight resumes from the checkpoint
    and fetches only what is still missing.
 6. **Scan reuse:** after a complete preflight, the scan makes no duplicate
    terminal provider request for that member.
@@ -170,17 +170,17 @@ The 20:15 capture and the 20:30 research must not run concurrently:
    including failed attempts.
 8. **No data loss:** existing session files and adjusted request stores remain;
    no full re-download; no deletion of retained data.
-9. **Tests:** both failure domains, the 20:15-active wait, the timed-out resume,
+9. **Tests:** both failure domains, the 20:00-active wait, the timed-out resume,
    resumable re-run, receipt status, quota, lock ordering, and actual scan reuse
    are covered by deterministic tests with no live provider dependency.
 
 ## 9. Rollout
 
 1. Owner approves this PRD and D1–D4.
-2. Implement the 20:30 preflight, the optional 20:15 head start, and the
+2. Implement the 20:30 preflight, the optional 20:00 head start, and the
    wait/resume behavior.
 3. Add tests and independent functional/security review.
-4. Merge; install/verify the optional 20:15 timer and verify the 20:30 preflight.
+4. Merge; install/verify the optional 20:00 timer and verify the 20:30 preflight.
 5. Close #421 only after the acceptance evidence exists.
 
 ## 10. Approved decisions
@@ -192,7 +192,7 @@ Owner approved 2026-11-14.
 | D1 | Capture the adjusted benchmark store in the same stage as the raw session cache, as two independent sub-steps; one failure must not stop the other. |
 | D2 | Use the retained official Nifty 200 snapshot the scan admits; do not read the exchange calendar. |
 | D3 | Receipt-driven scan reuse; when the receipt is missing or incomplete, refresh and record `CAPTURE_INCOMPLETE`. |
-| D4 | The 20:30 research runner performs the capture preflight. The 20:15 timer is an optional head start. At 20:30: wait for an active capture, skip if complete, resume the checkpoint if timed out/failed; never discard, kill, or re-run from zero. The 15-minute gap is a head-start budget, not a data-download limit. |
+| D4 | The 20:30 research runner performs the capture preflight. The 20:00 timer is an optional head start. At 20:30: wait for an active capture, skip if complete, resume the checkpoint if timed out/failed; never discard, kill, or re-run from zero. The 30-minute gap is a head-start budget, not a data-download limit. |
 
 ## 11. References
 
