@@ -74,11 +74,13 @@ class _Client:
     def __init__(self, failures: dict[str, BharatStockError] | None = None) -> None:
         self.calls: list[BharatStockInstrument] = []
         self.failures = {} if failures is None else failures
+        self.requests_used = 0
 
     def history(
         self, instrument: BharatStockInstrument, start: date, end: date
     ) -> BharatStockHistory:
         self.calls.append(instrument)
+        self.requests_used += 2
         if instrument.isin in self.failures:
             raise self.failures[instrument.isin]
         return _history(instrument)
@@ -706,6 +708,15 @@ def test_one_hundred_canonical_members_are_retained(tmp_path: Path) -> None:
     assert receipt.row_count == 200
 
 
+def test_receipt_reports_the_actual_provider_request_count(tmp_path: Path) -> None:
+    client = _Client()
+
+    receipt = _download(tmp_path, client)
+
+    assert client.requests_used == 2
+    assert receipt.provider_requests_used == 2
+
+
 def test_cli_reports_canonical_receipt_and_reuses_without_key(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -731,6 +742,7 @@ def test_cli_reports_canonical_receipt_and_reuses_without_key(
     assert result["instruments"] == [
         {"isin": _MEMBER.isin, "exchange": "NSE", "symbol": _MEMBER.symbol}
     ]
+    assert result["provider_requests_used"] == 0
 
 
 def test_cli_rejects_retired_adjustment_flag_before_effect(

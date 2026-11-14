@@ -2,12 +2,13 @@
 # Independent, incremental provider capture, run before research.
 #
 # Sub-step 1 writes the raw session cache research reads. Sub-step 2 updates the
-# adjusted-daily benchmark store. Both read only the retained universe snapshot
-# and the date; neither reads the exchange calendar, pair state, safety policy,
-# or research result. Existing data is reused: a member whose newest retained
-# session already reaches the requested end is skipped without a provider
-# request, and the adjusted stage is skipped when its retained history is
-# already current. One sub-step failing does not stop the other.
+# adjusted-daily benchmark store per 100-member cohort. Both read only the
+# governed retained Nifty 200 snapshot and the date; neither reads the exchange
+# calendar, pair state, safety policy, or research result. Existing data is
+# reused: a member whose newest retained session already reaches the requested
+# end is skipped without a provider request, and an adjusted cohort is skipped
+# only when every one of its instruments already has the requested session.
+# One sub-step failing does not stop the other.
 set -u
 
 SCRIPT_PATH=${BASH_SOURCE[0]}
@@ -18,6 +19,7 @@ PROJECT=${SWING_DOPPLER_PROJECT:-swing-trading}
 CONFIG=${SWING_DOPPLER_CONFIG:-dev}
 PYTHON=${SWING_CAPTURE_PYTHON:-$REPO/.venv/bin/python}
 RAW=${SWING_CAPTURE_RAW_SCRIPT:-$REPO/scripts/capture_bharatstock_current.py}
+ADJUSTED_COHORTS=${SWING_CAPTURE_ADJUSTED_SCRIPT:-$REPO/scripts/capture_adjusted_cohorts.py}
 DOWNLOADER=${SWING_CAPTURE_DOWNLOADER:-$REPO/.venv/bin/equity-data-download}
 START_DAYS=${SWING_CAPTURE_START_DAYS:-45}
 LOG=${SWING_LOG_DIR:-$STORE/daily-scan}
@@ -30,40 +32,62 @@ STARTED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 [ -f "$UNIVERSE" ] || { echo "capture_invalid: universe snapshot unavailable: $UNIVERSE" >&2; exit 2; }
 mkdir -p "$LOG" || exit 1
 
+# The capture scripts and helpers must run this checkout's admitted readers and
+# downloader module, not a stale site-packages copy.
+if [ -d "$REPO/src" ]; then
+  export PYTHONPATH="$REPO/src${PYTHONPATH:+:$PYTHONPATH}"
+fi
+
 START=${SWING_CAPTURE_START:-$(date -d "$STAMP - $START_DAYS days" +%F)}
 [ -n "$START" ] || { echo "capture_invalid: invalid start date" >&2; exit 2; }
 
 INSTRUMENTS=$(mktemp) || exit 1
-trap 'rm -f "$INSTRUMENTS"' EXIT
-"$PYTHON" - "$UNIVERSE" > "$INSTRUMENTS" <<'PY'
-import base64
-import csv
-import io
-import json
-import sys
+ADJ_RESULTS=$(mktemp) || exit 1
+trap 'rm -f "$INSTRUMENTS" "$ADJ_RESULTS"' EXIT
 
-with open(sys.argv[1], encoding="utf-8") as handle:
-    payload = json.load(handle)
-rows = list(
-    csv.DictReader(
-        io.StringIO(base64.b64decode(payload["nifty200_source_csv_base64"]).decode())
-    )
-)
-for row in rows:
-    isin = (row.get("ISIN Code") or "").strip()
-    symbol = (row.get("Symbol") or "").strip()
-    if isin and symbol:
-        print(f"{isin}:NSE:{symbol}")
-PY
-mapfile -t lines < "$INSTRUMENTS"
-[ "${#lines[@]}" -gt 0 ] || { echo "capture_invalid: no universe instruments" >&2; exit 2; }
+# Governed universe admission: schema, official URLs, digests, counts, and
+# membership consistency are validated before any provider effect.
+if ! "$PYTHON" "$ADJUSTED_COHORTS" members --storage-root "$STORE" \
+    > "$INSTRUMENTS" 2> "$LOG/capture-universe-$STAMP.err"; then
+  echo "capture_invalid: governed Nifty 200 snapshot is unavailable or invalid" >&2
+  exit 2
+fi
+[ -s "$INSTRUMENTS" ] || { echo "capture_invalid: no universe instruments" >&2; exit 2; }
+
+# A terminated preflight must not leave provider processes behind. `timeout`
+# signals this process group; the trap also stops the active child and exits
+# with the conventional signal status.
+CHILD_PID=""
+terminate_child() {
+  if [ -n "$CHILD_PID" ]; then
+    kill -TERM "$CHILD_PID" 2>/dev/null || true
+    wait "$CHILD_PID" 2>/dev/null || true
+    CHILD_PID=""
+  fi
+}
+on_signal() {
+  trap - TERM INT
+  terminate_child
+  exit "$1"
+}
+trap 'on_signal 143' TERM
+trap 'on_signal 130' INT
+run_child() {
+  # Never let a provider child consume the planner TSV on inherited stdin.
+  "$@" < /dev/null &
+  CHILD_PID=$!
+  local code=0
+  wait "$CHILD_PID" || code=$?
+  CHILD_PID=""
+  return "$code"
+}
 
 # --- Sub-step 1: raw session cache -----------------------------------------
 RAW_OUT="$LOG/capture-sessions-$STAMP.json"
 RAW_ERR="$LOG/capture-sessions-$STAMP.err"
 CHECKPOINT="$LOG/capture-sessions-$STAMP.checkpoint.json"
 : > "$RAW_OUT"
-"$DOPPLER" run --project "$PROJECT" --config "$CONFIG" -- \
+run_child "$DOPPLER" run --project "$PROJECT" --config "$CONFIG" -- \
   "$PYTHON" "$RAW" \
   --storage-root "$STORE" \
   --universe-snapshot "$UNIVERSE" \
@@ -72,40 +96,18 @@ CHECKPOINT="$LOG/capture-sessions-$STAMP.checkpoint.json"
   > "$RAW_OUT" 2> "$RAW_ERR"
 raw_code=$?
 
-# --- Sub-step 2: adjusted daily store --------------------------------------
-# The retained adjusted history decides the range: only sessions newer than the
-# newest retained dataset (if any) are requested. Nothing is re-downloaded.
-ADJUSTED_NEWEST=$("$PYTHON" - "$STORE" <<'PY'
-import glob
-import os
-import sys
-from datetime import date, datetime
-
-root = os.path.join(sys.argv[1], "adjusted_daily", "provider=bharatstock")
-newest = None
-for path in sorted(glob.glob(os.path.join(root, "**", "*.parquet"), recursive=True)):
-    try:
-        import pyarrow.parquet as pq
-
-        values = pq.read_table(path, columns=["session"]).column("session").to_pylist()
-    except Exception:  # noqa: BLE001 - an unreadable dataset is skipped
-        continue
-    for value in values:
-        if isinstance(value, datetime):
-            value = value.date()
-        elif isinstance(value, str):
-            try:
-                value = date.fromisoformat(value)
-            except ValueError:
-                continue
-        if type(value) is not date:
-            continue
-        if newest is None or value > newest:
-            newest = value
-print("" if newest is None else newest.isoformat())
-PY
-)
-adj_discovery_code=$?
+# --- Sub-step 2: adjusted daily store, per 100-member cohort ----------------
+ADJ_PLAN_JSON="$LOG/capture-adjusted-plan-$STAMP.json"
+ADJ_PLAN_TSV="$LOG/capture-adjusted-plan-$STAMP.tsv"
+ADJ_ERR="$LOG/capture-adjusted-$STAMP.err"
+ADJ_ERROR=""
+: > "$ADJ_PLAN_TSV"
+: > "$ADJ_RESULTS"
+if ! "$PYTHON" "$ADJUSTED_COHORTS" plan --storage-root "$STORE" \
+    --stamp "$STAMP" --stage-start "$START" \
+    --json-out "$ADJ_PLAN_JSON" --format tsv > "$ADJ_PLAN_TSV" 2>> "$ADJ_ERR"; then
+  ADJ_ERROR="ADJUSTED_PLAN_FAILED"
+fi
 
 ADJ_BUDGET=$("$PYTHON" - <<'PY'
 from equity_data_downloader.core import _CALL_CONFIGURATION
@@ -114,93 +116,189 @@ print(int(_CALL_CONFIGURATION["max_requests"]))  # pyright: ignore[reportPrivate
 PY
 )
 adj_budget_code=$?
-
-ADJ_START=$START
-ADJ_STATUS=INCOMPLETE
-ADJ_ERROR=""
-ADJ_INSTRUMENTS=0
-ADJ_BATCHES=0
-ADJ_CONFIGURED_MAX=0
-codes=()
-
-if [ "$adj_discovery_code" -ne 0 ]; then
-  ADJ_ERROR="ADJUSTED_DISCOVERY_FAILED"
-elif [ "$adj_budget_code" -ne 0 ]; then
+if [ -z "$ADJ_ERROR" ] && [ "$adj_budget_code" -ne 0 ]; then
   ADJ_ERROR="ADJUSTED_BUDGET_UNREADABLE"
-else
-  if [ -n "$ADJUSTED_NEWEST" ]; then
-    if [[ ! "$ADJUSTED_NEWEST" < "$STAMP" ]]; then
-      ADJ_STATUS=SKIPPED
-    else
-      ADJ_START=$(date -d "$ADJUSTED_NEWEST + 1 day" +%F)
+fi
+
+if [ -z "$ADJ_ERROR" ]; then
+  while IFS='|' read -r c_index c_status c_members c_start c_missing_count \
+      c_missing c_oldest; do
+    [ -n "$c_index" ] || continue
+    if [ "$c_status" = "SKIPPED" ]; then
+      printf '%s|SKIPPED|%s|%s|0||||0|0|0|\n' \
+        "$c_index" "$c_members" "$c_members" >> "$ADJ_RESULTS"
+      continue
     fi
-  fi
-  if [ "$ADJ_STATUS" != "SKIPPED" ]; then
-    for ((offset = 0; offset < ${#lines[@]}; offset += 100)); do
-      args=()
-      batch=0
-      for line in "${lines[@]:offset:100}"; do
-        args+=(--instrument "$line")
-        batch=$((batch + 1))
-      done
-      "$DOPPLER" run --project "$PROJECT" --config "$CONFIG" -- \
-        "$DOWNLOADER" "${args[@]}" --start "$ADJ_START" --end "$STAMP" \
-        --storage-root "$STORE" \
-        >> "$LOG/capture-adjusted-$STAMP.json" 2>> "$LOG/capture-adjusted-$STAMP.err"
-      codes+=("$?")
-      ADJ_BATCHES=$((ADJ_BATCHES + 1))
-      ADJ_INSTRUMENTS=$((ADJ_INSTRUMENTS + batch))
+    IFS=',' read -r -a missing_keys <<< "$c_missing"
+    args=()
+    for key in "${missing_keys[@]}"; do
+      args+=(--instrument "$key")
     done
-    ADJ_CONFIGURED_MAX=$((ADJ_BUDGET * ADJ_BATCHES))
-    ADJ_STATUS=COMPLETE
-    if [ "$ADJ_BATCHES" -eq 0 ]; then
-      ADJ_STATUS=INCOMPLETE
-      ADJ_ERROR="ADJUSTED_NO_BATCHES"
+    batch_out="$LOG/capture-adjusted-$STAMP-cohort-$c_index.json"
+    : > "$batch_out"
+    run_child "$DOPPLER" run --project "$PROJECT" --config "$CONFIG" -- \
+      "$DOWNLOADER" "${args[@]}" --start "$c_start" --end "$STAMP" \
+      --storage-root "$STORE" \
+      > "$batch_out" 2>> "$ADJ_ERR"
+    code=$?
+    requests=$("$PYTHON" - "$batch_out" <<'PY'
+import json
+import sys
+
+count = None
+try:
+    with open(sys.argv[1], encoding="utf-8") as handle:
+        for line in reversed(handle.read().splitlines()):
+            if line.strip():
+                value = json.loads(line)
+                count = value.get("provider_requests_used")
+                break
+except (OSError, ValueError):
+    count = None
+print(count if type(count) is int and count >= 0 else "")
+PY
+)
+    verify=$("$PYTHON" "$ADJUSTED_COHORTS" verify --storage-root "$STORE" \
+      --stamp "$STAMP" --cohort-index "$c_index" --format tsv \
+      2>> "$ADJ_ERR") || verify="|INCOMPLETE|0|"
+    IFS='|' read -r _v_index v_status v_missing_count _v_missing <<< "$verify"
+    cohort_status=COMPLETE
+    cohort_error=""
+    if [ "$code" -ne 0 ]; then
+      cohort_status=INCOMPLETE
+      cohort_error="COHORT_BATCH_FAILED"
+    elif [ "$v_status" != "COMPLETE" ]; then
+      cohort_status=INCOMPLETE
+      cohort_error="COHORT_INCOMPLETE_AFTER_BATCH"
     fi
-    if [ "${#codes[@]}" -gt 0 ]; then
-      for code in "${codes[@]}"; do
-        if [ "$code" -ne 0 ]; then
-          ADJ_STATUS=INCOMPLETE
-          ADJ_ERROR="ADJUSTED_BATCH_FAILED"
-        fi
-      done
-    fi
-  fi
+    [ -n "$ADJ_ERROR" ] || ADJ_ERROR="$cohort_error"
+    printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
+      "$c_index" "$cohort_status" "$c_members" \
+      "$(( c_members - v_missing_count ))" "$c_missing_count" \
+      "$c_start" "$c_oldest" "$code" "$requests" "${#missing_keys[@]}" \
+      "$v_missing_count" "$cohort_error" >> "$ADJ_RESULTS"
+  done < "$ADJ_PLAN_TSV"
 fi
 
 ADJ_STAGE="$LOG/capture-adjusted-stage-$STAMP.json"
-"$PYTHON" - "$ADJ_STAGE" "$ADJ_STATUS" "$ADJ_START" "$STAMP" \
-  "$ADJ_INSTRUMENTS" "$ADJ_BATCHES" "$ADJ_CONFIGURED_MAX" "${ADJUSTED_NEWEST}" \
-  "$ADJ_ERROR" ${codes[@]+"${codes[@]}"} <<'PY'
+"$PYTHON" - "$ADJ_STAGE" "$ADJ_PLAN_JSON" "$ADJ_RESULTS" "$STAMP" "$START" \
+  "$ADJ_BUDGET" "$ADJ_ERROR" <<'PY'
 import json
 import sys
 import time
 
 (
     path,
-    status,
-    start,
-    end,
-    instruments,
-    batches,
-    configured_max,
-    newest_before,
-    error,
-) = sys.argv[1:10]
-codes = [int(value) for value in sys.argv[10:]]
+    plan_path,
+    results_path,
+    stamp,
+    stage_start,
+    budget,
+    plan_error,
+) = sys.argv[1:8]
+try:
+    with open(plan_path, encoding="utf-8") as handle:
+        plan_value = json.load(handle)
+    plan = plan_value if isinstance(plan_value, dict) else {}
+except (OSError, ValueError):
+    plan = {}
+cohorts = []
+try:
+    with open(results_path, encoding="utf-8") as handle:
+        for line in handle:
+            fields = line.rstrip("\n").split("|")
+            if len(fields) != 12:
+                continue
+            (
+                index,
+                status,
+                members,
+                current,
+                missing_count,
+                start,
+                oldest_missing,
+                exit_code,
+                requests,
+                submitted,
+                missing_after,
+                error,
+            ) = fields
+            cohorts.append(
+                {
+                    "index": int(index),
+                    "status": status,
+                    "members": int(members),
+                    "current": int(current),
+                    "missing": int(missing_count),
+                    "start": start or None,
+                    "oldest_missing": oldest_missing or None,
+                    "batch_exit_code": int(exit_code) if exit_code else None,
+                    "provider_requests_used": int(requests) if requests else None,
+                    "instruments_submitted": int(submitted),
+                    "missing_after_batch": int(missing_after),
+                    "error": error or None,
+                }
+            )
+except (OSError, ValueError):
+    cohorts = []
+statuses = {cohort["status"] for cohort in cohorts}
+if plan_error or not cohorts:
+    status = "INCOMPLETE"
+elif statuses == {"SKIPPED"}:
+    status = "SKIPPED"
+elif statuses <= {"COMPLETE", "SKIPPED"}:
+    status = "COMPLETE"
+else:
+    status = "INCOMPLETE"
+invoked = [
+    cohort
+    for cohort in cohorts
+    if cohort["batch_exit_code"] is not None
+]
+known = [
+    cohort["provider_requests_used"]
+    for cohort in invoked
+    if cohort["provider_requests_used"] is not None
+]
+starts = [cohort["start"] for cohort in cohorts if cohort["start"]]
 payload = {
-    "schema": "adjusted-capture-stage@v1",
+    "schema": "adjusted-capture-stage@v2",
     "status": status,
-    "range": {"start": start, "end": end},
-    "newest_retained_before": newest_before or None,
-    "requests_used": 0 if status == "SKIPPED" else int(instruments),
-    "requests_used_basis": "INSTRUMENTS_SUBMITTED",
-    "requests_configured_max": int(configured_max),
-    "requests_configured_max_basis": "DOWNLOADER_MAX_REQUESTS_PER_INVOCATION * BATCHES",
-    "instruments_submitted": 0 if status == "SKIPPED" else int(instruments),
-    "batches": int(batches),
-    "batch_exit_codes": codes,
-    "error": error or None,
+    "cohort_size": int(plan.get("cohort_size") or 100),
+    "members": int(plan.get("members") or 0),
+    "cohorts": cohorts,
+    "cohorts_complete": sum(
+        1 for cohort in cohorts if cohort["status"] == "COMPLETE"
+    ),
+    "cohorts_skipped": sum(
+        1 for cohort in cohorts if cohort["status"] == "SKIPPED"
+    ),
+    "cohorts_incomplete": sum(
+        1 for cohort in cohorts if cohort["status"] == "INCOMPLETE"
+    ),
+    "provider_requests_used": (
+        sum(known) if known else (0 if not invoked else None)
+    ),
+    "provider_requests_complete": all(
+        cohort["provider_requests_used"] is not None for cohort in invoked
+    ),
+    "provider_requests_basis": "DOWNLOADER_CLI_RECEIPT",
+    "instruments_submitted": sum(
+        cohort["instruments_submitted"] for cohort in cohorts
+    ),
+    "provider_request_budget": (
+        int(budget) if budget.isdigit() else 0
+    )
+    * len(invoked),
+    "provider_request_budget_basis": (
+        "DOWNLOADER_MAX_REQUESTS_PER_INVOCATION * BATCHES_INVOKED"
+    ),
+    "range": {
+        "start": min(starts) if starts else (stage_start or stamp),
+        "end": stamp,
+    },
+    "universe": plan.get("universe"),
+    "error": plan_error or None,
     "completed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
 }
 with open(path, "w", encoding="utf-8") as handle:
@@ -260,10 +358,10 @@ failed_isins = raw.get("failed_isins")
 failed_isins = failed_isins if isinstance(failed_isins, list) else []
 raw_requests = int(raw.get("requests_used") or 0)
 raw_max = int(raw.get("requests_configured_max") or 0)
-adj_requests = int(adjusted.get("requests_used") or 0)
-adj_max = int(adjusted.get("requests_configured_max") or 0)
+adj_requests = adjusted.get("provider_requests_used")
+adj_budget = int(adjusted.get("provider_request_budget") or 0)
 receipt = {
-    "schema": "provider-capture@v2",
+    "schema": "provider-capture@v3",
     "stamp": stamp,
     "status": "COMPLETE" if complete else "INCOMPLETE",
     "failed": failed,
@@ -282,43 +380,54 @@ receipt = {
         if isinstance(record, dict) and record.get("status") == "SKIPPED"
     ),
     "failed_isins": failed_isins,
+    "universe": raw.get("universe"),
     "universe_snapshot": raw.get("universe_snapshot"),
     "universe_snapshot_sha256": raw.get("universe_snapshot_sha256"),
+    # Unlike units are never summed: the raw stage counts actual provider
+    # requests, the adjusted stage reports the downloader's own request count
+    # (or an explicit unknown), and instrument counts stay separate.
     "quota": {
         "raw": {
-            "requests_used": raw_requests,
+            "provider_requests_used": raw_requests,
             "requests_configured_max": raw_max,
             "max_requests_per_member": raw.get("max_requests_per_member"),
-            "basis": raw.get("requests_configured_max_basis"),
+            "basis": "PROVIDER_REQUESTS_INCLUDING_FAILED_ATTEMPTS",
         },
         "adjusted": {
-            "requests_used": adj_requests,
-            "requests_configured_max": adj_max,
-            "basis": adjusted.get("requests_configured_max_basis"),
+            "provider_requests_used": adj_requests,
+            "provider_requests_complete": adjusted.get(
+                "provider_requests_complete"
+            ),
+            "provider_request_budget": adj_budget,
+            "instruments_submitted": adjusted.get("instruments_submitted"),
+            "basis": adjusted.get("provider_requests_basis"),
         },
     },
     "stages": {
         "raw": {
             "status": raw_status,
             "exit_code": int(raw_code),
-            "requests_used": raw_requests,
+            "provider_requests_used": raw_requests,
             "requests_configured_max": raw_max,
             "sessions_written": raw.get("sessions_written"),
             "latest_session": raw.get("latest_session"),
         },
         "adjusted": {
             "status": adjusted_status,
-            "requests_used": adj_requests,
-            "requests_configured_max": adj_max,
-            "batches": adjusted.get("batches"),
-            "batch_exit_codes": adjusted.get("batch_exit_codes"),
+            "provider_requests_used": adj_requests,
+            "provider_requests_complete": adjusted.get(
+                "provider_requests_complete"
+            ),
+            "provider_request_budget": adj_budget,
+            "instruments_submitted": adjusted.get("instruments_submitted"),
+            "cohorts": adjusted.get("cohorts"),
+            "cohorts_complete": adjusted.get("cohorts_complete"),
+            "cohorts_skipped": adjusted.get("cohorts_skipped"),
+            "cohorts_incomplete": adjusted.get("cohorts_incomplete"),
             "range": adjusted.get("range"),
-            "newest_retained_before": adjusted.get("newest_retained_before"),
             "error": adjusted.get("error"),
         },
     },
-    "requests_used": raw_requests + adj_requests,
-    "requests_configured_max": raw_max + adj_max,
     "runtime": {
         "raw": raw.get("runtime"),
         "composite": {

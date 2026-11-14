@@ -82,6 +82,7 @@ def main(argv: list[str] | None = None) -> int:
         "retrieved_at": receipt.retrieved_at.isoformat().replace("+00:00", "Z"),
         "row_count": receipt.row_count,
         "rows_by_instrument": dict(receipt.rows_by_instrument),
+        "provider_requests_used": receipt.provider_requests_used,
         "request_identity_sha256": receipt.request_identity_sha256,
         "start": receipt.start.isoformat(),
         "instruments": [

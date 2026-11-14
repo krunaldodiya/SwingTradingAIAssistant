@@ -464,26 +464,54 @@ defaults.
 
 The same installer also enables `swing-data-capture.timer` at 20:00 IST. It
 runs `scripts/capture_provider_data.sh`, which writes the raw session cache
-research reads and the adjusted benchmark store from the retained Nifty 200
-snapshot. It reads no exchange calendar, pair state, safety policy, or research
-result. Capture is incremental and additive: for each member it reads the newest
+research reads and updates the adjusted benchmark store, using only the governed
+retained Nifty 200 snapshot and the date. It reads no exchange calendar, pair
+state, safety policy, or research result. The snapshot is admitted by
+`historical_nifty_universe` (schema, official source URLs, digests, counts, and
+membership consistency) before any provider effect, and its identity is recorded
+in the receipt.
+
+Capture is incremental and additive. The raw stage reads each member's newest
 retained `bharatstock-session-cache-v1` session and requests only the newer
-range, skipping a member that already reaches the requested end, and it skips
-the adjusted stage when `adjusted_daily` already retains that session. Existing
-sessions and request stores are reused; nothing is deleted or re-downloaded.
+range; a member that already reaches the requested end makes no provider
+request. A valid cache record is accepted only when it matches the client's full
+reader: identity, record digest, OHLC and volume constraints, response digest
+tuple, and a UTC retrieval instant. Returned session files are verified after
+the client write; a missing or invalid write fails the member instead of being
+reported as captured.
+
+The adjusted stage works per 100-member cohort. It reads the retained
+`adjusted_daily` store per instrument, skips a cohort only when every one of its
+instruments already has the requested session, and otherwise requests only that
+cohort's still-missing members from the range after its oldest missing
+instrument's latest session. After each batch it re-reads the store and requires
+the whole cohort to be current; a partial or member-local failure leaves that
+cohort `INCOMPLETE`. The adjusted stage is `COMPLETE` only when every cohort is
+`COMPLETE` or `SKIPPED`. Existing sessions and request stores are reused;
+nothing is deleted or re-downloaded.
 
 The 20:30 research runner performs the same capture as its first step, before
 any scan, research, or analysis, so a later calendar or research failure cannot
-discard the day's provider data. If the 20:00 capture is still active it waits
-for it, if the receipt is complete it skips, and if the head start timed out or
-failed it resumes from the checkpoint. It never kills, discards, or duplicates
-the active capture. The head start has a 25-minute budget before the 20:30
-preflight takes over. `$SWING_LOG_DIR/capture-<date>.json` records per-symbol
-status, failed ISINs, requests used and configured maximum per stage, the latest
-session, the universe snapshot digest, runtime identity, and timestamps. Only a
-complete receipt makes the scan reuse the captured terminal session; an
-incomplete one is recorded as `CAPTURE_INCOMPLETE` in the scan error log and the
-scan fetches without that reuse flag.
+discard the day's provider data. It reads the capture unit state with
+`systemctl --user show -p ActiveState --value` and treats `activating`,
+`deactivating`, and `reloading` as busy, so a starting or stopping head start is
+never duplicated. If the unit is busy it waits (600 s), if the receipt is
+complete it skips, and if the head start timed out or failed it resumes from the
+checkpoint. It never kills, discards, or duplicates the active capture. The
+preflight capture is bounded at 1200 s with `timeout --kill-after` so a
+terminated capture leaves no provider child behind; wait + capture + scan
+(600 + 1200 + 1200 s) stay inside the scan service's 3600 s deadline.
+
+`$SWING_LOG_DIR/capture-<date>.json` (`provider-capture@v3`) records per-symbol
+status, failed ISINs, per-cohort adjusted status, quota per stage, the latest
+session, the universe snapshot identity, runtime identity, and timestamps. Quota
+is never summed across unlike units: the raw stage reports actual provider
+requests including failed attempts, and the adjusted stage reports the
+downloader's own request count with an explicit completeness flag plus a
+separate submitted-instrument count and configured budget. Only a complete
+receipt makes the scan reuse the captured terminal session; an incomplete one is
+recorded as `CAPTURE_INCOMPLETE` in the scan error log and the scan fetches
+without that reuse flag.
 
 The same installer also enables `research-ledger-sync.timer`, an hourly one-way
 `rclone copy` for entries written outside a scheduled run (backfills, manual

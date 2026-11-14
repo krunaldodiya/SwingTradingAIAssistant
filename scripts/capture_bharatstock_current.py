@@ -12,7 +12,6 @@ into a research fact.
 from __future__ import annotations
 
 import argparse
-import base64
 import csv
 import hashlib
 import io
@@ -21,17 +20,23 @@ import os
 import re
 import sys
 import time
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 from typing import cast
 
 from swing_trading_ai_assistant.market_data.bharatstock import (
+    _MAX_PAGES,
     PRICE_BASIS,
     PROVIDER_SOURCE,
     VOLUME_BASIS,
     BharatStockClient,
+    BharatStockDailyPrice,
     BharatStockError,
     BharatStockInstrument,
+)
+from swing_trading_ai_assistant.market_data.historical_nifty_universe import (
+    read_historic_nifty_universe,
 )
 
 RETRY_DELAYS = (5.0, 15.0)
@@ -40,22 +45,57 @@ PER_MEMBER_ATTEMPTS = 1 + len(RETRY_DELAYS)
 SESSION_CACHE_DIRECTORY = "bharatstock-session-cache-v1"
 SESSION_CACHE_SCHEMA = "bharatstock-session-cache@v1"
 _SESSION_FILE = re.compile(r"session=(\d{4}-\d{2}-\d{2})\.json\Z")
+_DIGEST = re.compile(r"[0-9a-f]{64}\Z")
 _COMPLETE_STATUSES = frozenset({"COMPLETE", "SKIPPED"})
 
 
-def _universe(path: Path) -> list[tuple[str, str]]:
-    payload = json.loads(path.read_text())
-    encoded = payload.get("nifty200_source_csv_base64")
-    if not isinstance(encoded, str):
-        raise ValueError("universe snapshot has no nifty200 CSV")
-    rows = list(csv.DictReader(io.StringIO(base64.b64decode(encoded).decode())))
+GOVERNED_SNAPSHOT = Path("universe_snapshots") / "nifty-universe-v3.json"
+MAX_CACHED_REQUEST_COUNT = _MAX_PAGES + 1
+
+
+def _governed_universe(
+    storage_root: Path, snapshot: Path
+) -> tuple[list[tuple[str, str]], dict[str, object]]:
+    """Admit membership only through the governed official-snapshot reader."""
+    if snapshot != storage_root / GOVERNED_SNAPSHOT:
+        raise ValueError("universe snapshot is not the governed retained path")
+    universe = read_historic_nifty_universe(storage_root)
+    try:
+        raw = snapshot.read_bytes()
+        payload = json.loads(raw)
+    except (OSError, ValueError):
+        raise ValueError("retained universe snapshot is unreadable") from None
+    if type(payload) is not dict or type(payload.get("schema")) is not str:
+        raise ValueError("retained universe snapshot schema is invalid")
+    try:
+        rows = list(
+            csv.DictReader(io.StringIO(universe.nifty200_source_csv.decode("utf-8")))
+        )
+    except (UnicodeDecodeError, csv.Error):
+        raise ValueError("governed Nifty 200 CSV is invalid") from None
     members: list[tuple[str, str]] = []
     for row in rows:
         isin = (row.get("ISIN Code") or "").strip()
         symbol = (row.get("Symbol") or "").strip()
-        if isin and symbol:
-            members.append((isin, symbol))
-    return members
+        if not isin or not symbol:
+            raise ValueError("governed Nifty 200 membership is invalid")
+        members.append((isin, symbol))
+    if (
+        len(members) != 200
+        or len({item[0] for item in members}) != 200
+        or tuple(universe.nifty200) != tuple(symbol for _isin, symbol in members)
+    ):
+        raise ValueError("governed Nifty 200 membership is invalid")
+    return members, {
+        "path": str(snapshot),
+        "sha256": hashlib.sha256(raw).hexdigest(),
+        "schema": payload["schema"],
+        "members": len(members),
+        "nifty200_source_sha256": universe.nifty200_source_sha256,
+        "window_start": universe.window_start.isoformat(),
+        "window_end": universe.window_end.isoformat(),
+        "retrieved_at": universe.retrieved_at.isoformat(),
+    }
 
 
 def _load_checkpoint(path: Path) -> dict[str, object]:
@@ -94,17 +134,33 @@ def _session_directory(storage_root: Path, isin: str, exchange: str) -> Path:
     )
 
 
+def _session_path(
+    storage_root: Path, isin: str, exchange: str, symbol: str, session: date
+) -> Path:
+    return (
+        _session_directory(storage_root, isin, exchange)
+        / f"session={session.isoformat()}.json"
+    )
+
+
 def _cached_session_record(
-    path: Path, isin: str, exchange: str, symbol: str, session: date
+    storage_root: Path,
+    isin: str,
+    exchange: str,
+    symbol: str,
+    session: date,
 ) -> bool:
-    """Mirror the cache reader's exact validity checks without a provider call."""
+    """Mirror the client cache reader, including the row and digest checks.
+
+    Identity and the record digest alone do not make a cache entry usable: the
+    client also validates the OHLC/volume row, the response digest tuple, and
+    the retrieval instant. A record that fails any of those is treated as
+    absent so capture cannot skip a member on unusable data.
+    """
     try:
-        raw = path.read_bytes()
-    except OSError:
-        return False
-    try:
+        raw = _session_path(storage_root, isin, exchange, symbol, session).read_bytes()
         value: object = json.loads(raw)
-    except ValueError:
+    except (OSError, ValueError):
         return False
     if type(value) is not dict:
         return False
@@ -113,17 +169,52 @@ def _cached_session_record(
     body = json.dumps(
         payload, ensure_ascii=True, sort_keys=True, separators=(",", ":")
     ).encode()
-    return (
-        type(record_sha) is str
-        and record_sha == hashlib.sha256(body).hexdigest()
-        and payload.get("schema") == SESSION_CACHE_SCHEMA
-        and payload.get("provider") == PROVIDER_SOURCE
-        and payload.get("price_basis") == PRICE_BASIS
-        and payload.get("volume_basis") == VOLUME_BASIS
-        and payload.get("session") == session.isoformat()
-        and payload.get("isin") == isin
-        and payload.get("exchange") == exchange
-        and payload.get("symbol") == symbol
+    if (
+        type(record_sha) is not str
+        or record_sha != hashlib.sha256(body).hexdigest()
+        or payload.get("schema") != SESSION_CACHE_SCHEMA
+        or payload.get("provider") != PROVIDER_SOURCE
+        or payload.get("price_basis") != PRICE_BASIS
+        or payload.get("volume_basis") != VOLUME_BASIS
+        or payload.get("session") != session.isoformat()
+        or payload.get("isin") != isin
+        or payload.get("exchange") != exchange
+        or payload.get("symbol") != symbol
+    ):
+        return False
+    try:
+        BharatStockDailyPrice(
+            session,
+            Decimal(str(payload["open"])),
+            Decimal(str(payload["high"])),
+            Decimal(str(payload["low"])),
+            Decimal(str(payload["close"])),
+            int(cast(int, payload["volume"])),
+            (
+                Decimal(str(payload["adjusted_close"]))
+                if payload.get("adjusted_close") is not None
+                else None
+            ),
+            (
+                Decimal(str(payload["adjustment_factor"]))
+                if payload.get("adjustment_factor") is not None
+                else None
+            ),
+        )
+        raw_digests = cast(list[object], payload["response_sha256s"])
+        digests = tuple(cast(list[str], raw_digests))
+        request_count = int(cast(int, payload["request_count"]))
+        retrieved_at = datetime.fromisoformat(cast(str, payload["retrieved_at"]))
+    except (KeyError, TypeError, ValueError, ArithmeticError):
+        return False
+    return not (
+        any(
+            type(item) is not str or _DIGEST.fullmatch(item) is None for item in digests
+        )
+        or request_count != len(digests)
+        or not 2 <= request_count <= MAX_CACHED_REQUEST_COUNT
+        or retrieved_at.tzinfo is None
+        or retrieved_at.utcoffset() != UTC.utcoffset(None)
     )
 
 
@@ -144,7 +235,7 @@ def _newest_cached_session(
             session = date.fromisoformat(match.group(1))
         except ValueError:
             continue
-        if _cached_session_record(directory / name, isin, exchange, symbol, session):
+        if _cached_session_record(storage_root, isin, exchange, symbol, session):
             return session
     return None
 
@@ -215,7 +306,29 @@ def _capture_member(
             )
             return record
         requests_used += client.requests_used
-        latest = max((row.session for row in history.rows), default=None)
+        expected = tuple(row.session for row in history.rows)
+        verified = tuple(
+            session
+            for session in expected
+            if _cached_session_record(storage_root, isin, "NSE", symbol, session)
+        )
+        latest = max(expected, default=None)
+        if len(verified) != len(expected):
+            missing = tuple(
+                session.isoformat() for session in expected if session not in verified
+            )
+            record.update(
+                {
+                    "status": "FAILED",
+                    "latest_session": (None if latest is None else latest.isoformat()),
+                    "sessions_written": len(verified),
+                    "sessions_expected": len(expected),
+                    "missing_sessions": list(missing),
+                    "requests_used": requests_used,
+                    "error": "SESSION_CACHE_WRITE_MISSING",
+                }
+            )
+            return record
         record.update(
             {
                 "status": "COMPLETE",
@@ -224,7 +337,8 @@ def _capture_member(
                     if latest is not None
                     else record["latest_session"]
                 ),
-                "sessions_written": len(history.rows),
+                "sessions_written": len(verified),
+                "sessions_expected": len(expected),
                 "requests_used": requests_used,
             }
         )
@@ -252,7 +366,13 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901 - stage boundaries
         return 2
     args.checkpoint.parent.mkdir(parents=True, exist_ok=True)
 
-    members = _universe(args.universe_snapshot)
+    try:
+        members, universe_identity = _governed_universe(
+            args.storage_root, args.universe_snapshot
+        )
+    except ValueError as error:
+        sys.stderr.write(f"capture_invalid: {error}\n")
+        return 2
     end_stamp = args.end.isoformat()
     checkpoint = _load_checkpoint(args.checkpoint)
     # A checkpoint for a different requested end cannot vouch for this run: the
@@ -309,10 +429,9 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901 - stage boundaries
         "start": args.start.isoformat(),
         "end": end_stamp,
         "checkpoint": str(args.checkpoint),
+        "universe": universe_identity,
         "universe_snapshot": str(args.universe_snapshot),
-        "universe_snapshot_sha256": hashlib.sha256(
-            args.universe_snapshot.read_bytes()
-        ).hexdigest(),
+        "universe_snapshot_sha256": universe_identity["sha256"],
         "runtime": _script_identity(),
         "started_at": started_at,
         "symbols": {},

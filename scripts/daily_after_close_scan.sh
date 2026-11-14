@@ -17,8 +17,10 @@
 #   SWING_DRY_RUN=1 (print the decision, do not scan)
 #   SWING_ALLOW_OVERWRITE=1 (allow a second page for the same date)
 #   SWING_CAPTURE_COMMAND, SWING_CAPTURE_SERVICE (capture preflight target)
-#   SWING_CAPTURE_SERVICE_STATUS (testable service-active command)
-#   SWING_CAPTURE_WAIT_SECONDS, SWING_CAPTURE_POLL_SECONDS, SWING_CAPTURE_TIMEOUT
+#   SWING_CAPTURE_SERVICE_STATE_COMMAND (ActiveState command for tests)
+#   SWING_CAPTURE_SERVICE_STATUS (explicit executable override, exit 0 = busy)
+#   SWING_CAPTURE_WAIT_SECONDS, SWING_CAPTURE_POLL_SECONDS
+#   SWING_CAPTURE_TIMEOUT, SWING_CAPTURE_KILL_AFTER
 set -u
 
 REPO=${SWING_REPO:-/home/krunaldodiya/WorkSpace/Code/SwingTradingAIAssistant}
@@ -125,9 +127,12 @@ SCAN_ARGS=(--storage-root "$STORE" --nifty200 --refresh --retain-decision-eviden
 CAPTURE_RECEIPT="$LOG/capture-$STAMP.json"
 CAPTURE_COMMAND=${SWING_CAPTURE_COMMAND:-$REPO/scripts/capture_provider_data.sh}
 CAPTURE_SERVICE=${SWING_CAPTURE_SERVICE:-swing-data-capture.service}
-CAPTURE_WAIT_SECONDS=${SWING_CAPTURE_WAIT_SECONDS:-1800}
+# Bounded inside swing-daily-scan.service TimeoutStartSec=3600:
+#   wait 600 + preflight capture 1200 + scan 1200 = 3000 seconds.
+CAPTURE_WAIT_SECONDS=${SWING_CAPTURE_WAIT_SECONDS:-600}
 CAPTURE_POLL_SECONDS=${SWING_CAPTURE_POLL_SECONDS:-10}
-CAPTURE_TIMEOUT=${SWING_CAPTURE_TIMEOUT:-1500}
+CAPTURE_TIMEOUT=${SWING_CAPTURE_TIMEOUT:-1200}
+CAPTURE_KILL_AFTER=${SWING_CAPTURE_KILL_AFTER:-30}
 CAPTURE_LOG="$LOG/capture-preflight-$STAMP.log"
 
 capture_receipt_complete() {
@@ -167,13 +172,27 @@ PY
   )" = "1" ]
 }
 
+capture_service_state() {
+  if [ -n "${SWING_CAPTURE_SERVICE_STATE_COMMAND:-}" ]; then
+    bash -c "$SWING_CAPTURE_SERVICE_STATE_COMMAND" 2> /dev/null || true
+  else
+    systemctl --user show -p ActiveState --value "$CAPTURE_SERVICE" 2> /dev/null \
+      || true
+  fi
+}
+
 capture_service_active() {
   if [ -n "${SWING_CAPTURE_SERVICE_STATUS:-}" ]; then
-    # shellcheck disable=SC2086 # the override is an explicit status command
-    $SWING_CAPTURE_SERVICE_STATUS > /dev/null 2>&1
-  else
-    systemctl --user is-active --quiet "$CAPTURE_SERVICE" > /dev/null 2>&1
+    # An explicit executable path override; never word-split the value.
+    "$SWING_CAPTURE_SERVICE_STATUS" > /dev/null 2>&1
+    return $?
   fi
+  # A unit that is activating, deactivating, or reloading still owns the
+  # capture; treating only "active" as busy could launch a duplicate.
+  case "$(capture_service_state)" in
+    active | activating | deactivating | reloading) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
 if capture_receipt_complete; then
@@ -202,7 +221,8 @@ else
       >> "$CAPTURE_LOG"
   else
     echo "$(date -Is) capture preflight: running $CAPTURE_COMMAND" >> "$CAPTURE_LOG"
-    timeout "$CAPTURE_TIMEOUT" "$CAPTURE_COMMAND" >> "$CAPTURE_LOG" 2>&1
+    timeout --kill-after="${CAPTURE_KILL_AFTER}s" "$CAPTURE_TIMEOUT" \
+      "$CAPTURE_COMMAND" >> "$CAPTURE_LOG" 2>&1
     preflight_code=$?
     echo "$(date -Is) capture preflight: exit_code=$preflight_code" \
       >> "$CAPTURE_LOG"

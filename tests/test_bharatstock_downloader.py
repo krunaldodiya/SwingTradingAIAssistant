@@ -58,6 +58,8 @@ def test_canonical_source_download_reuses_exact_parquet_without_acquisition(
     )
     assert receipt.provider == "BHARATSTOCK"
     assert receipt.price_basis == "BHARATSTOCK_SOURCE_REPORTED_OHLC"
+    # A client that does not expose its counter is reported as unknown, never 0.
+    assert receipt.provider_requests_used is None
     assert again.outcome == "REUSED"
     assert len(calls) == 1
     assert receipt.destination == again.destination

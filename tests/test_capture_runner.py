@@ -1,8 +1,7 @@
-"""Composite capture writes both stores incrementally and independently."""
+"""Composite capture writes both stores per cohort and independently."""
 
 from __future__ import annotations
 
-import base64
 import csv
 import hashlib
 import io
@@ -10,32 +9,98 @@ import json
 import os
 import subprocess
 import sys
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
+from typing import cast
+
+from swing_trading_ai_assistant.market_data.historical_nifty_universe import (
+    build_historic_nifty_universe,
+    retain_historic_nifty_universe,
+)
 
 SCRIPT = Path(__file__).parents[1] / "scripts" / "capture_provider_data.sh"
 STAMP = "2026-11-14"
+STAGE_START = "2026-10-01"
+_NIFTY50 = tuple(f"A{index:03d}" for index in range(50))
+_NIFTYNEXT50 = tuple(f"B{index:03d}" for index in range(50))
+_NIFTY100 = _NIFTY50 + _NIFTYNEXT50
+_NIFTY200 = _NIFTY100 + tuple(f"C{index:03d}" for index in range(100))
+_URLS = {
+    "nifty50": "https://nsearchives.nseindia.com/content/indices/ind_nifty50list.csv",
+    "niftynext50": (
+        "https://nsearchives.nseindia.com/content/indices/ind_niftynext50list.csv"
+    ),
+    "nifty100": "https://nsearchives.nseindia.com/content/indices/ind_nifty100list.csv",
+    "nifty200": "https://nsearchives.nseindia.com/content/indices/ind_nifty200list.csv",
+}
 
 
-def _universe(root: Path, count: int = 101) -> None:
-    rows = [
-        {"ISIN Code": f"INE{index:09d}", "Symbol": f"S{index}"}
-        for index in range(count)
-    ]
+def _csv(symbols: tuple[str, ...], *, isin_base: int) -> bytes:
     buffer = io.StringIO()
-    writer = csv.DictWriter(buffer, fieldnames=["ISIN Code", "Symbol"])
-    writer.writeheader()
-    writer.writerows(rows)
-    directory = root / "universe_snapshots"
-    directory.mkdir(parents=True)
-    (directory / "nifty-universe-v3.json").write_text(
-        json.dumps(
-            {
-                "nifty200_source_csv_base64": base64.b64encode(
-                    buffer.getvalue().encode()
-                ).decode()
-            }
+    writer = csv.writer(buffer)
+    writer.writerow(("Company Name", "Industry", "Symbol", "Series", "ISIN Code"))
+    for offset, symbol in enumerate(symbols):
+        writer.writerow(
+            (
+                f"Company {symbol}",
+                "Industry",
+                symbol,
+                "EQ",
+                f"INE{isin_base + offset:09d}",
+            )
         )
+    return buffer.getvalue().encode()
+
+
+def _governed_snapshot(store: Path) -> None:
+    universe = build_historic_nifty_universe(
+        _csv(_NIFTY50, isin_base=0),
+        _csv(_NIFTYNEXT50, isin_base=50),
+        _csv(_NIFTY100, isin_base=0),
+        _csv(_NIFTY200, isin_base=0),
+        window_start=date(2026, 1, 1),
+        window_end=date(2026, 12, 31),
+        nifty50_source_url=_URLS["nifty50"],
+        niftynext50_source_url=_URLS["niftynext50"],
+        nifty100_source_url=_URLS["nifty100"],
+        nifty200_source_url=_URLS["nifty200"],
+        retrieved_at=datetime(2026, 11, 14, tzinfo=UTC),
+    )
+    retain_historic_nifty_universe(store, universe)
+
+
+def _member_keys() -> tuple[tuple[str, str], ...]:
+    return tuple((f"INE{index:09d}", symbol) for index, symbol in enumerate(_NIFTY200))
+
+
+def _key(index: int) -> str:
+    isin, symbol = _member_keys()[index]
+    return f"{isin}:NSE:{symbol}"
+
+
+def _cohort_keys(index: int) -> tuple[str, ...]:
+    return tuple(_key(position) for position in range(index * 100, (index + 1) * 100))
+
+
+def _adjusted(store: Path, keys: tuple[str, ...], session: str) -> None:
+    import pyarrow as pa  # noqa: PLC0415 - test-only optional dependency
+    import pyarrow.parquet as pq  # noqa: PLC0415
+
+    identity = hashlib.sha256(",".join(keys).encode()).hexdigest()
+    directory = (
+        store / "adjusted_daily" / "provider=bharatstock" / f"request={identity}"
+    )
+    directory.mkdir(parents=True, exist_ok=True)
+    pq.write_table(
+        pa.table(
+            {
+                "symbol": list(keys),
+                "session": pa.array(
+                    [date.fromisoformat(session)] * len(keys), type=pa.date32()
+                ),
+            }
+        ),
+        directory / "data.parquet",
     )
 
 
@@ -53,8 +118,8 @@ def _raw_script(
     payload = {
         "schema": "raw-session-capture@v1",
         "status": status,
-        "members": 101,
-        "completed": 101 if complete else 100,
+        "members": 200,
+        "completed": 200 if complete else 199,
         "skipped": 0,
         "failed": failed,
         "failed_isins": [] if failed == 0 else ["INE000000000"],
@@ -67,13 +132,19 @@ def _raw_script(
         "sessions_written": 101,
         "latest_session": "2026-11-13",
         "remaining_pending": remaining_pending,
-        "start": "2026-10-01",
+        "start": STAGE_START,
         "end": STAMP,
+        "universe": {
+            "path": "universe.json",
+            "sha256": "f" * 64,
+            "schema": "retained-nifty-universe@v3",
+            "members": 200,
+        },
         "universe_snapshot": "universe.json",
         "universe_snapshot_sha256": "f" * 64,
         "runtime": {"path": str(path), "sha256": "e" * 64, "python": "3.14.0"},
-        "started_at": "2026-11-14T14:40:00+0530",
-        "completed_at": "2026-11-14T14:45:00+0530",
+        "started_at": "2026-11-14T14:40:00Z",
+        "completed_at": "2026-11-14T14:45:00Z",
         "symbols": {
             "S0": {"status": "FAILED" if failed else "COMPLETE", "requests_used": 1},
             "S1": {"status": "SKIPPED", "requests_used": 0},
@@ -88,20 +159,71 @@ def _raw_script(
     path.chmod(0o755)
 
 
-def _downloader(path: Path, *, fail_calls: tuple[int, ...] = ()) -> None:
+_DOWNLOADER = """#!{python}
+import json
+import os
+import sys
+from datetime import date
+
+args = sys.argv[1:]
+instruments = [args[index + 1] for index, value in enumerate(args) if value == "--instrument"]
+end = [args[index + 1] for index, value in enumerate(args) if value == "--end"][0]
+root = [args[index + 1] for index, value in enumerate(args) if value == "--storage-root"][0]
+with open(os.environ["STUB_LOG"], "a", encoding="utf-8") as handle:
+    handle.write(" ".join(args) + "\\n")
+count_path = os.environ["STUB_COUNT"]
+count = int(open(count_path, encoding="utf-8").read()) if os.path.exists(count_path) else 0
+count += 1
+open(count_path, "w", encoding="utf-8").write(str(count))
+limit = int(os.environ.get("STUB_WRITE_LIMIT", "0"))
+written = instruments[:limit] if limit else instruments
+if os.environ.get("STUB_WRITE", "1") == "1" and written:
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    directory = os.path.join(
+        root,
+        "adjusted_daily",
+        "provider=bharatstock",
+        "request=" + format(count, "064d"),
+    )
+    os.makedirs(directory, exist_ok=True)
+    pq.write_table(
+        pa.table(
+            {{
+                "symbol": written,
+                "session": pa.array(
+                    [date.fromisoformat(end)] * len(written), type=pa.date32()
+                ),
+            }}
+        ),
+        os.path.join(directory, "data.parquet"),
+    )
+if {exit_code} == 0 and os.environ.get("STUB_EMPTY", "0") != "1":
+    print(
+        json.dumps(
+            {{
+                "outcome": "INSERTED",
+                "provider_requests_used": {requests},
+            }}
+        )
+    )
+raise SystemExit({exit_code})
+"""
+
+
+def _downloader(
+    path: Path,
+    *,
+    provider_requests: int = 4,
+    exit_code: int = 0,
+) -> None:
     path.write_text(
-        f"#!{sys.executable}\n"
-        "import os\n"
-        "import sys\n"
-        'with open(os.environ["STUB_LOG"], "a", encoding="utf-8") as handle:\n'
-        '    handle.write(" ".join(sys.argv[1:]) + "\\n")\n'
-        'count_path = os.environ["STUB_COUNT"]\n'
-        "count = 0\n"
-        "if os.path.exists(count_path):\n"
-        '    count = int(open(count_path, encoding="utf-8").read())\n'
-        "count += 1\n"
-        'open(count_path, "w", encoding="utf-8").write(str(count))\n'
-        f"raise SystemExit(1 if count in {set(fail_calls)!r} else 0)\n"
+        _DOWNLOADER.format(
+            python=sys.executable,
+            requests=provider_requests,
+            exit_code=exit_code,
+        )
     )
     path.chmod(0o755)
 
@@ -116,39 +238,20 @@ def _doppler(path: Path) -> None:
     path.chmod(0o755)
 
 
-def _adjusted(store: Path, session: str) -> None:
-    """Retain one adjusted dataset whose newest session is ``session``."""
-    import pyarrow as pa  # noqa: PLC0415 - test-only optional dependency
-    import pyarrow.parquet as pq  # noqa: PLC0415
-
-    directory = (
-        store / "adjusted_daily" / "provider=bharatstock" / f"request={'a' * 64}"
-    )
-    directory.mkdir(parents=True)
-    pq.write_table(
-        pa.table(
-            {
-                "session": pa.array([date.fromisoformat(session)], type=pa.date32()),
-                "symbol": ["S0"],
-                "close": pa.array([100.5]),
-            }
-        ),
-        directory / "data.parquet",
-    )
-
-
 def _run(
     root: Path,
     raw: Path,
     downloader: Path,
     doppler: Path,
+    *,
+    extra_env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     env = os.environ | {
         "SWING_REPO": str(SCRIPT.parents[1]),
         "SWING_STORAGE_ROOT": str(root / "store"),
         "SWING_LOG_DIR": str(root / "log"),
         "SWING_DATE_OVERRIDE": STAMP,
-        "SWING_CAPTURE_START": "2026-10-01",
+        "SWING_CAPTURE_START": STAGE_START,
         "SWING_CAPTURE_PYTHON": sys.executable,
         "SWING_CAPTURE_RAW_SCRIPT": str(raw),
         "SWING_CAPTURE_DOWNLOADER": str(downloader),
@@ -156,13 +259,11 @@ def _run(
         "STUB_LOG": str(root / "calls.log"),
         "STUB_COUNT": str(root / "calls.count"),
     }
+    if extra_env:
+        env |= extra_env
     return subprocess.run(  # noqa: S603 - trusted repository test script
         [str(SCRIPT)], env=env, capture_output=True, text=True, check=False
     )
-
-
-def _requires_parquet() -> None:
-    __import__("pyarrow")
 
 
 def _calls(root: Path) -> list[str]:
@@ -174,108 +275,139 @@ def _receipt(root: Path) -> dict[str, object]:
     return json.loads((root / "log" / f"capture-{STAMP}.json").read_text())
 
 
-def test_capture_writes_both_stores_and_complete_receipt(tmp_path: Path) -> None:
-    _requires_parquet()
-    _universe(tmp_path / "store")
+def _fixture(
+    tmp_path: Path,
+) -> tuple[Path, Path, Path]:
+    _governed_snapshot(tmp_path / "store")
     raw = tmp_path / "raw.py"
     downloader = tmp_path / "downloader"
     doppler = tmp_path / "doppler"
     _raw_script(raw)
     _downloader(downloader)
     _doppler(doppler)
+    return raw, downloader, doppler
+
+
+def test_one_current_cohort_and_one_stale_cohort(
+    tmp_path: Path,
+) -> None:
+    raw, downloader, doppler = _fixture(tmp_path)
+    _adjusted(tmp_path / "store", _cohort_keys(0), STAMP)
 
     result = _run(tmp_path, raw, downloader, doppler)
 
     assert result.returncode == 0, result.stderr
-    receipt = _receipt(tmp_path)
-    assert receipt["schema"] == "provider-capture@v2"
-    assert receipt["status"] == "COMPLETE"
-    assert receipt["sessions"]["status"] == "COMPLETE"
-    assert receipt["failed"] == 0
-    assert receipt["remaining_pending"] == 0
-    assert receipt["latest_session"] == "2026-11-13"
-    assert receipt["universe_snapshot_sha256"] == "f" * 64
-    assert receipt["symbols"]["S1"]["status"] == "SKIPPED"
-    assert receipt["adjusted"]["status"] == "COMPLETE"
-    assert receipt["adjusted"]["batches"] == 2
-    assert receipt["adjusted"]["batch_exit_codes"] == [0, 0]
-    assert receipt["adjusted"]["requests_used"] == 101
-    assert receipt["quota"]["raw"]["requests_used"] == 101
-    assert receipt["quota"]["raw"]["requests_configured_max"] == 2400
-    assert receipt["quota"]["adjusted"]["requests_configured_max"] == 4000
-    assert receipt["runtime"]["raw"]["sha256"] == "e" * 64
-    assert (
-        receipt["runtime"]["composite"]["sha256"]
-        == hashlib.sha256(SCRIPT.read_bytes()).hexdigest()
-    )
-    assert receipt["timestamps"]["started_at"]
-    assert receipt["timestamps"]["completed_at"]
     calls = _calls(tmp_path)
-    assert len(calls) == 2
-    assert all("--start 2026-10-01" in call for call in calls)
-    assert all(f"--end {STAMP}" in call for call in calls)
-    assert not any("scan" in call or "research" in call for call in calls)
+    assert len(calls) == 1
+    call = calls[0]
+    # Only the stale cohort is requested, from its oldest missing instrument.
+    assert all(key in call for key in _cohort_keys(1)[:3])
+    assert all(key not in call for key in _cohort_keys(0))
+    assert f"--start {STAGE_START}" in call
+    receipt = _receipt(tmp_path)
+    adjusted = cast(dict[str, object], receipt["adjusted"])
+    cohorts = cast(list[dict[str, object]], adjusted["cohorts"])
+    assert cohorts[0]["status"] == "SKIPPED"
+    assert cohorts[0]["start"] is None
+    assert cohorts[1]["status"] == "COMPLETE"
+    assert cohorts[1]["oldest_missing"] == _cohort_keys(1)[0]
+    assert cohorts[1]["missing_after_batch"] == 0
+    assert receipt["status"] == "COMPLETE"
+    # A second run has both cohorts current and makes no downloader call.
+    result = _run(tmp_path, raw, downloader, doppler)
+    assert result.returncode == 0, result.stderr
+    assert len(_calls(tmp_path)) == 1
+    again = _receipt(tmp_path)
+    assert again["status"] == "COMPLETE"
+    assert cast(dict[str, object], again["adjusted"])["status"] == "SKIPPED"
+    assert cast(dict[str, object], again["adjusted"])["cohorts_skipped"] == 2
 
 
-def test_adjusted_current_is_skipped_without_a_downloader_call(
+def test_partial_cohort_batch_is_incomplete_and_rerun_requests_only_missing(
     tmp_path: Path,
 ) -> None:
-    _requires_parquet()
-    _universe(tmp_path / "store")
-    _adjusted(tmp_path / "store", STAMP)
-    raw = tmp_path / "raw.py"
-    downloader = tmp_path / "downloader"
-    doppler = tmp_path / "doppler"
-    _raw_script(raw)
-    _downloader(downloader)
-    _doppler(doppler)
+    raw, downloader, doppler = _fixture(tmp_path)
+    _adjusted(tmp_path / "store", _cohort_keys(0), STAMP)
+    _adjusted(tmp_path / "store", _cohort_keys(1), "2026-11-10")
+
+    first = _run(
+        tmp_path,
+        raw,
+        downloader,
+        doppler,
+        extra_env={"STUB_WRITE_LIMIT": "10"},
+    )
+
+    assert first.returncode == 1
+    receipt = _receipt(tmp_path)
+    assert receipt["status"] == "INCOMPLETE"
+    adjusted = cast(dict[str, object], receipt["adjusted"])
+    assert adjusted["status"] == "INCOMPLETE"
+    cohorts = cast(list[dict[str, object]], adjusted["cohorts"])
+    assert cohorts[1]["status"] == "INCOMPLETE"
+    assert cohorts[1]["error"] == "COHORT_INCOMPLETE_AFTER_BATCH"
+    assert cohorts[1]["missing_after_batch"] == 90
+    assert "--start 2026-11-11" in _calls(tmp_path)[0]
+
+    second = _run(tmp_path, raw, downloader, doppler)
+
+    assert second.returncode == 0, second.stderr
+    calls = _calls(tmp_path)
+    assert len(calls) == 2
+    second_call = calls[1]
+    assert second_call.count("--instrument") == 90
+    for key in _cohort_keys(1)[:10]:
+        assert key not in second_call
+    after = _receipt(tmp_path)
+    assert after["status"] == "COMPLETE"
+    assert cast(dict[str, object], after["adjusted"])["status"] == "COMPLETE"
+
+
+def test_all_cohorts_current_make_no_downloader_call(tmp_path: Path) -> None:
+    raw, downloader, doppler = _fixture(tmp_path)
+    _adjusted(tmp_path / "store", _cohort_keys(0), STAMP)
+    _adjusted(tmp_path / "store", _cohort_keys(1), STAMP)
 
     result = _run(tmp_path, raw, downloader, doppler)
 
     assert result.returncode == 0, result.stderr
     assert _calls(tmp_path) == []
     receipt = _receipt(tmp_path)
+    adjusted = cast(dict[str, object], receipt["adjusted"])
+    assert adjusted["status"] == "SKIPPED"
+    assert adjusted["cohorts_skipped"] == 2
+    assert adjusted["instruments_submitted"] == 0
+    assert adjusted["provider_requests_used"] == 0
+    assert adjusted["provider_request_budget"] == 0
     assert receipt["status"] == "COMPLETE"
-    assert receipt["adjusted"]["status"] == "SKIPPED"
-    assert receipt["adjusted"]["batches"] == 0
-    assert receipt["adjusted"]["requests_used"] == 0
-    assert receipt["adjusted"]["requests_configured_max"] == 0
-    assert receipt["adjusted"]["newest_retained_before"] == STAMP
 
 
-def test_adjusted_range_starts_after_the_newest_retained_session(
-    tmp_path: Path,
-) -> None:
-    _requires_parquet()
-    _universe(tmp_path / "store")
-    _adjusted(tmp_path / "store", "2026-11-10")
-    raw = tmp_path / "raw.py"
-    downloader = tmp_path / "downloader"
-    doppler = tmp_path / "doppler"
-    _raw_script(raw)
-    _downloader(downloader)
-    _doppler(doppler)
+def test_quota_labels_requests_and_instruments_separately(tmp_path: Path) -> None:
+    raw, downloader, doppler = _fixture(tmp_path)
+    _adjusted(tmp_path / "store", _cohort_keys(0), STAMP)
 
     result = _run(tmp_path, raw, downloader, doppler)
 
     assert result.returncode == 0, result.stderr
-    calls = _calls(tmp_path)
-    assert len(calls) == 2
-    assert all("--start 2026-11-11" in call for call in calls)
-    assert all(f"--end {STAMP}" in call for call in calls)
     receipt = _receipt(tmp_path)
-    assert receipt["adjusted"]["newest_retained_before"] == "2026-11-10"
+    assert "requests_used" not in receipt
+    quota = cast(dict[str, dict[str, object]], receipt["quota"])
+    assert quota["raw"]["provider_requests_used"] == 101
+    assert quota["raw"]["basis"] == "PROVIDER_REQUESTS_INCLUDING_FAILED_ATTEMPTS"
+    assert quota["adjusted"]["provider_requests_used"] == 4
+    assert quota["adjusted"]["provider_requests_complete"] is True
+    assert quota["adjusted"]["provider_request_budget"] == 2000
+    assert quota["adjusted"]["instruments_submitted"] == 100
+    assert quota["adjusted"]["basis"] == "DOWNLOADER_CLI_RECEIPT"
+    adjusted = cast(dict[str, object], receipt["adjusted"])
+    assert "requests_used" not in adjusted
 
 
 def test_raw_failure_is_an_incomplete_nonzero_receipt(tmp_path: Path) -> None:
-    _requires_parquet()
-    _universe(tmp_path / "store")
-    raw = tmp_path / "raw.py"
-    downloader = tmp_path / "downloader"
-    doppler = tmp_path / "doppler"
+    raw, downloader, doppler = _fixture(tmp_path)
     _raw_script(raw, status="INCOMPLETE", exit_code=1, failed=1, remaining_pending=1)
-    _downloader(downloader)
-    _doppler(doppler)
+    _adjusted(tmp_path / "store", _cohort_keys(0), STAMP)
+    _adjusted(tmp_path / "store", _cohort_keys(1), STAMP)
 
     result = _run(tmp_path, raw, downloader, doppler)
 
@@ -285,34 +417,45 @@ def test_raw_failure_is_an_incomplete_nonzero_receipt(tmp_path: Path) -> None:
     assert receipt["failed"] == 1
     assert receipt["remaining_pending"] == 1
     assert receipt["failed_isins"] == ["INE000000000"]
-    # One failing sub-step does not stop the other.
-    assert receipt["adjusted"]["status"] == "COMPLETE"
-    assert len(_calls(tmp_path)) == 2
+    assert cast(dict[str, object], receipt["adjusted"])["status"] == "SKIPPED"
 
 
 def test_adjusted_failure_preserves_raw_and_fails_the_receipt(
     tmp_path: Path,
 ) -> None:
-    _requires_parquet()
-    _universe(tmp_path / "store")
-    raw = tmp_path / "raw.py"
-    downloader = tmp_path / "downloader"
-    doppler = tmp_path / "doppler"
-    _raw_script(raw)
-    _downloader(downloader, fail_calls=(2,))
-    _doppler(doppler)
+    raw, downloader, doppler = _fixture(tmp_path)
+    _downloader(downloader, exit_code=1)
+    _adjusted(tmp_path / "store", _cohort_keys(0), STAMP)
+    _adjusted(tmp_path / "store", _cohort_keys(1), "2026-11-10")
 
     result = _run(tmp_path, raw, downloader, doppler)
 
     assert result.returncode == 1
     receipt = _receipt(tmp_path)
     assert receipt["status"] == "INCOMPLETE"
-    # Captured raw sessions are still recorded and readable.
-    assert receipt["sessions"]["status"] == "COMPLETE"
+    assert cast(dict[str, object], receipt["sessions"])["status"] == "COMPLETE"
     assert (tmp_path / "log" / f"capture-sessions-{STAMP}.json").is_file()
-    assert receipt["adjusted"]["status"] == "INCOMPLETE"
-    assert receipt["adjusted"]["batch_exit_codes"] == [0, 1]
-    assert receipt["adjusted"]["error"] == "ADJUSTED_BATCH_FAILED"
-    # The failed batch was still submitted, so quota counts its instruments.
-    assert receipt["adjusted"]["requests_used"] == 101
-    assert receipt["adjusted"]["requests_configured_max"] == 4000
+    adjusted = cast(dict[str, object], receipt["adjusted"])
+    assert adjusted["status"] == "INCOMPLETE"
+    assert adjusted["provider_requests_used"] is None
+    assert adjusted["provider_requests_complete"] is False
+    cohorts = cast(list[dict[str, object]], adjusted["cohorts"])
+    assert cohorts[1]["batch_exit_code"] == 1
+    assert cohorts[1]["error"] == "COHORT_BATCH_FAILED"
+
+
+def test_invalid_universe_snapshot_fails_before_any_provider_call(
+    tmp_path: Path,
+) -> None:
+    raw, downloader, doppler = _fixture(tmp_path)
+    snapshot = tmp_path / "store" / "universe_snapshots" / "nifty-universe-v3.json"
+    payload = json.loads(snapshot.read_text())
+    payload["schema"] = "retained-nifty-universe@v2"
+    snapshot.write_text(json.dumps(payload))
+
+    result = _run(tmp_path, raw, downloader, doppler)
+
+    assert result.returncode == 2
+    assert "capture_invalid" in result.stderr
+    assert _calls(tmp_path) == []
+    assert not (tmp_path / "log" / f"capture-{STAMP}.json").exists()

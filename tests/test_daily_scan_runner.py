@@ -2,9 +2,13 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
+import time
 from pathlib import Path
+
+import pytest
 
 
 def _schedule(root: Path, *, closed: str | None) -> None:
@@ -151,13 +155,10 @@ def _capture_env(
         f"exit {capture_exit}\n"
     )
     stub.chmod(0o755)
-    inactive = tmp_path / "capture-inactive"
-    inactive.write_text("#!/usr/bin/env bash\nexit 3\n")
-    inactive.chmod(0o755)
     return {
         "SWING_CAPTURE_COMMAND": str(stub),
         "SWING_CAPTURE_SERVICE": "swing-data-capture-test.service",
-        "SWING_CAPTURE_SERVICE_STATUS": str(inactive),
+        "SWING_CAPTURE_SERVICE_STATE_COMMAND": "printf 'inactive\\n'",
         "SWING_CAPTURE_WAIT_SECONDS": "0",
         "SWING_CAPTURE_POLL_SECONDS": "0",
         "CAPTURE_STUB_LOG": str(calls),
@@ -819,9 +820,9 @@ def test_runner_waits_for_an_active_head_start_without_duplicating_it(
         "#!/usr/bin/env bash\n"
         'count=0; [ -f "$STATUS_COUNT" ] && count=$(cat "$STATUS_COUNT")\n'
         'count=$((count + 1)); echo "$count" > "$STATUS_COUNT"\n'
-        'if [ "$count" -lt 3 ]; then exit 0; fi\n'
+        'if [ "$count" -lt 3 ]; then echo activating; exit 0; fi\n'
         'cp "$CAPTURE_STUB_SOURCE" "$CAPTURE_STUB_RECEIPT"\n'
-        "exit 3\n"
+        "echo inactive\n"
     )
     status.chmod(0o755)
     env = os.environ | {
@@ -838,7 +839,7 @@ def test_runner_waits_for_an_active_head_start_without_duplicating_it(
         **(
             _capture_env(root, log)
             | {
-                "SWING_CAPTURE_SERVICE_STATUS": str(status),
+                "SWING_CAPTURE_SERVICE_STATE_COMMAND": str(status),
                 "SWING_CAPTURE_WAIT_SECONDS": "30",
                 "SWING_CAPTURE_POLL_SECONDS": "0",
                 "STATUS_COUNT": str(root / "status.count"),
@@ -869,7 +870,7 @@ def test_runner_never_duplicates_a_head_start_that_outlasts_the_wait(
 ) -> None:
     script, log, source, doppler, stub_log, root = _preflight_fixture(tmp_path)
     active = root / "capture-active"
-    active.write_text("#!/usr/bin/env bash\nexit 0\n")
+    active.write_text("#!/usr/bin/env bash\necho deactivating\n")
     active.chmod(0o755)
     env = os.environ | {
         "SWING_STORAGE_ROOT": str(root),
@@ -885,7 +886,7 @@ def test_runner_never_duplicates_a_head_start_that_outlasts_the_wait(
         **(
             _capture_env(root, log)
             | {
-                "SWING_CAPTURE_SERVICE_STATUS": str(active),
+                "SWING_CAPTURE_SERVICE_STATE_COMMAND": str(active),
                 "SWING_CAPTURE_WAIT_SECONDS": "0",
                 "SWING_CAPTURE_POLL_SECONDS": "0",
             }
@@ -906,3 +907,74 @@ def test_runner_never_duplicates_a_head_start_that_outlasts_the_wait(
     )
     assert "--reuse-captured-terminal" not in scan_call
     assert "CAPTURE_INCOMPLETE" in (log / "scan-2026-10-23.err").read_text()
+
+
+def test_preflight_budget_fits_the_scan_service_timeout() -> None:
+    """Wait + preflight capture + scan must stay inside the service deadline."""
+    root = Path(__file__).parents[1]
+    script = (root / "scripts" / "daily_after_close_scan.sh").read_text()
+    unit = (root / "scripts" / "systemd" / "swing-daily-scan.service").read_text()
+
+    def default(name: str) -> int:
+        match = re.search(rf"\$\{{{name}:-([0-9]+)\}}", script)
+        assert match is not None, name
+        return int(match.group(1))
+
+    wait = default("SWING_CAPTURE_WAIT_SECONDS")
+    capture = default("SWING_CAPTURE_TIMEOUT")
+    scan = default("SWING_SCAN_TIMEOUT")
+    service = re.search(r"^TimeoutStartSec=([0-9]+)$", unit, re.M)
+    assert service is not None
+    assert (wait, capture, scan) == (600, 1200, 1200)
+    assert wait + capture + scan <= int(service.group(1))
+
+
+def test_timed_out_preflight_does_not_leave_a_child_process(
+    tmp_path: Path,
+) -> None:
+    script, log, source, doppler, stub_log, root = _preflight_fixture(tmp_path)
+    orphan = root / "orphan.pid"
+    stub = root / "capture-orphan"
+    stub.write_text(
+        '#!/usr/bin/env bash\nsleep 60 &\necho $! > "$ORPHAN_PID"\nsleep 60\n'
+    )
+    stub.chmod(0o755)
+    env = os.environ | {
+        "SWING_STORAGE_ROOT": str(root),
+        "SWING_LOG_DIR": str(log),
+        "SWING_DATE_OVERRIDE": "2026-10-23",
+        "SWING_ALLOW_OVERWRITE": "1",
+        "SWING_REPO": str(script.parents[1]),
+        "DOPPLER_BIN": str(doppler),
+        "STUB_LOG": str(stub_log),
+        "STUB_SOURCE": str(source),
+        "SWING_LEDGER_ROOT": str(root / "ledger"),
+        "SWING_RCLONE_BIN": "/bin/true",
+        "SWING_CAPTURE_COMMAND": str(stub),
+        "SWING_CAPTURE_SERVICE_STATE_COMMAND": "printf 'inactive\\n'",
+        "SWING_CAPTURE_WAIT_SECONDS": "0",
+        "SWING_CAPTURE_POLL_SECONDS": "0",
+        "SWING_CAPTURE_TIMEOUT": "1",
+        "SWING_CAPTURE_KILL_AFTER": "1",
+        "ORPHAN_PID": str(orphan),
+    }
+    (root / "ledger" / "entries" / "2026").mkdir(parents=True, exist_ok=True)
+
+    result = subprocess.run(  # noqa: S603 - trusted repository test script
+        [str(script)], env=env, capture_output=True, text=True, check=False
+    )
+
+    assert result.returncode == 0
+    pid = int(orphan.read_text().strip())
+    for _ in range(50):
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            break
+        time.sleep(0.1)
+    else:
+        pytest.fail("a timed-out preflight left its child process running")
+    scan_call = next(
+        call for call in stub_log.read_text().splitlines() if " scan " in call
+    )
+    assert "--reuse-captured-terminal" not in scan_call
