@@ -1,0 +1,15 @@
+[Unit]
+Description=Independent BharatStock capture at 20:15 IST
+Documentation=file://@REPO@/docs/workflows/automated-nifty100-scan.md
+
+[Timer]
+# Runs before the 20:30 research pass. It reads no exchange calendar, pair
+# state, safety policy, or research result, so a later research failure cannot
+# discard this captured provider data.
+OnCalendar=*-*-* 20:15:00 Asia/Kolkata
+Persistent=true
+AccuracySec=1min
+Unit=swing-data-capture.service
+
+[Install]
+WantedBy=timers.target

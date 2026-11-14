@@ -462,6 +462,13 @@ off-device copy part of the pass rather than a later hope. Set
 `SWING_RCLONE_BIN`, `SWING_LEDGER_REMOTE` or `SWING_SYNC_LOG_DIR` to override the
 defaults.
 
+The same installer also enables `swing-data-capture.timer` at 20:15 IST. It
+runs `scripts/capture_provider_data.sh`, which reads only the retained Nifty 200
+universe snapshot and the calendar date, never the exchange calendar, pair
+state, safety policy, or research result. It writes the existing adjusted-daily
+store in bounded 100-member provider batches, so a later scan/research failure
+cannot discard the captured data; the 20:30 scan reads that store.
+
 The same installer also enables `research-ledger-sync.timer`, an hourly one-way
 `rclone copy` for entries written outside a scheduled run (backfills, manual
 passes). Both paths copy new and changed files only and never delete anything on
