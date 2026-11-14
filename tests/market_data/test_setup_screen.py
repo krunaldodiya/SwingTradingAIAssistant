@@ -31,11 +31,17 @@ from swing_trading_ai_assistant.market_data.current_stock_research import (
     CurrentStockResearchInputError,
 )
 from swing_trading_ai_assistant.market_data.current_stock_research_v2 import (
+    _LIMITATIONS as _V2_LIMITATIONS,
+)
+from swing_trading_ai_assistant.market_data.current_stock_research_v2 import (
     CurrentStockResearchResultV2,
     _runtime_identity,
     research_current_stock_v2,
 )
-from swing_trading_ai_assistant.market_data.setup_screen import screen_setup_current
+from swing_trading_ai_assistant.market_data.setup_screen import (
+    _validate_diagnostic,
+    screen_setup_current,
+)
 from swing_trading_ai_assistant.market_data.storage_root_lease import StorageRootLease
 from swing_trading_ai_assistant.market_structure.current_live import (
     MarketStructureMathBarV1,
@@ -845,3 +851,23 @@ def test_alphabet_safe_forged_diagnostic_is_terminal(
     assert code == 2
     assert output.out == ""
     assert output.err == "internal_error\n"
+
+
+def test_calendar_unresolved_diagnostic_is_admitted() -> None:
+    result = CurrentStockResearchResultV2(
+        "current-stock-research@v2",
+        "UNAVAILABLE",
+        "calendar",
+        "CALENDAR_UNRESOLVED",
+        "CURRENT_STRUCTURE",
+        "PNB",
+        _NOW,
+        _NOW,
+        _runtime_identity(),
+        None,
+        _V2_LIMITATIONS
+        + ("calendar_unresolved:2026-08-26:UNRESOLVED_SPECIAL_SESSION",),
+        None,
+    )
+
+    _validate_diagnostic(result)

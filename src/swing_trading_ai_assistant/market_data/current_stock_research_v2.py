@@ -53,6 +53,7 @@ from .current_evidence_acquisition import (
     BoundedOfficialHttpSessionV1,
     CurrentEvidenceAcquisitionError,
     acquire_current_calendar_evidence_v1,
+    first_unresolved_window_closure,
 )
 from .current_research_binding_v2 import (
     AdmittedCurrentResearchBindingV2,
@@ -417,6 +418,7 @@ def _terminal(
     code: str,
     *,
     insufficient: bool = False,
+    extra_limitations: tuple[str, ...] = (),
 ) -> CurrentStockResearchResultV2:
     return CurrentStockResearchResultV2(
         CONTRACT_VERSION_V2,
@@ -429,7 +431,7 @@ def _terminal(
         window.deadline,
         runtime,
         None,
-        _LIMITATIONS,
+        _LIMITATIONS + extra_limitations,
     )
 
 
@@ -731,6 +733,26 @@ def _research_current_stock_v2(  # noqa: C901 - explicit stage boundaries are in
                     "calendar",
                     "INSUFFICIENT_COMPLETED_SESSIONS",
                     insufficient=True,
+                )
+            unresolved = first_unresolved_window_closure(
+                calendar.schedule.closures,
+                completed_sessions,
+                window_sizes,
+                sessions_back=sessions_back,
+                selection_date=selection.astimezone(_IST).date(),
+            )
+            if unresolved is not None:
+                return _terminal(
+                    symbol,
+                    question,
+                    window,
+                    runtime,
+                    "calendar",
+                    "CALENDAR_UNRESOLVED",
+                    extra_limitations=(
+                        "calendar_unresolved:"
+                        f"{unresolved.trade_date.isoformat()}:{unresolved.reason}",
+                    ),
                 )
             mapping = legacy._prepare_mapping(  # pyright: ignore[reportPrivateUsage]
                 root, lease, symbol, window, snapshot_transport

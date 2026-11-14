@@ -47,6 +47,7 @@ from .current_evidence_acquisition import (
     CurrentCalendarEvidenceBundleV1,
     CurrentEvidenceAcquisitionError,
     acquire_current_calendar_evidence_v1,
+    first_unresolved_window_closure,
     parse_current_calendar_evidence_v1,
 )
 from .current_stock_research_runtime_identity_manifest import (
@@ -450,6 +451,25 @@ def _research_current_stock(
                     schedule_evidence_sha256=calendar.schedule_evidence_sha256,
                     calendar_source_manifest_sha256=calendar.source_manifest_sha256,
                 )
+            unresolved = first_unresolved_window_closure(
+                calendar.schedule.closures,
+                sessions,
+                (2,),
+                sessions_back=0,
+                selection_date=selection.astimezone(_IST).date(),
+            )
+            if unresolved is not None:
+                return _terminal(
+                    symbol,
+                    window,
+                    runtime,
+                    "calendar",
+                    "CALENDAR_UNRESOLVED",
+                    extra_limitations=(
+                        "calendar_unresolved:"
+                        f"{unresolved.trade_date.isoformat()}:{unresolved.reason}",
+                    ),
+                )
             mapping = _prepare_mapping(root, lease, symbol, window, snapshot_transport)
             member = _member(mapping)
             request = CaptureRequestV2(
@@ -754,7 +774,13 @@ def _project(
 
 
 def _terminal(
-    symbol: str, window: _Window, runtime: str, stage: str, code: str
+    symbol: str,
+    window: _Window,
+    runtime: str,
+    stage: str,
+    code: str,
+    *,
+    extra_limitations: tuple[str, ...] = (),
 ) -> CurrentStockResearchResultV1:
     return CurrentStockResearchResultV1(
         contract_version=CONTRACT_VERSION_V1,
@@ -785,7 +811,7 @@ def _terminal(
         price_action_status="UNAVAILABLE",
         price_action_reason=code,
         price_action=None,
-        limitations=_LIMITATIONS,
+        limitations=_LIMITATIONS + extra_limitations,
         runtime_code_identity_sha256=runtime,
         configuration_identity_sha256=_configuration_identity(),
     )

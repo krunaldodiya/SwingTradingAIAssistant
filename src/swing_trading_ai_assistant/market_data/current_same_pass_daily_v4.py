@@ -27,6 +27,7 @@ from .current_cohort import (
     CurrentSuppliedCohortAdmissionPolicyV1,
     RetainedCurrentCohortInstrumentResolverV1,
 )
+from .current_evidence_acquisition import first_unresolved_window_closure
 from .current_same_pass_daily_v4_runtime_identity_manifest import (
     CURRENT_SAME_PASS_RAW_DAILY_RUNTIME_SOURCE_SHA256_V4,
 )
@@ -2983,6 +2984,17 @@ def resolve_latest_completed_sessions_v1(
     )
     if len(completed) < _SESSION_COUNT_V1:
         raise ValueError("latest completed session unresolved")
+    unresolved = first_unresolved_window_closure(
+        schedule.closures,
+        tuple(item.trade_date for item in completed),
+        (_SESSION_COUNT_V1,),
+        sessions_back=0,
+        selection_date=request.decision_cutoff.astimezone(
+            ZoneInfo("Asia/Kolkata")
+        ).date(),
+    )
+    if unresolved is not None:
+        raise ValueError("calendar unresolved")
     selected = completed[-_SESSION_COUNT_V1:]
     return tuple(
         CurrentSamePassRawSessionV1(

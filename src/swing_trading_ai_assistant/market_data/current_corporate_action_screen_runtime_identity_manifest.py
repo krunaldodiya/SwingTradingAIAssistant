@@ -6,7 +6,7 @@ CORPORATE_ACTION_SCREEN_RUNTIME_SOURCE_SHA256_V1: Final = {
     "catalog.py": "ae17eac5475a39d5ff08173e9b2154c0cf33778f573e7d894656a2ba685294ac",
     "corporate_actions.py": "65507d4b4dc08f33a871716c77b5b04fbfdc01fbc08ef1d224a620991c4973fb",
     "current_cohort.py": "4408415c58284d10b14bfbe9e6bc4a2989209fc09ebe381c8558cab4f4457153",
-    "current_corporate_action_screen.py": "32f6d2b8b954ca64006308f6af7370fd6489614db172297d818cf2422b946724",
+    "current_corporate_action_screen.py": "0003170e207007bcc6fca6b2b2f5831d354b74344396ed98312676b41866ef69",
     "schedule_evidence.py": "2894a34356c7d12c71cf2a9cb133d0a5d7aaa83a83d7ac43549a13e7b9081801",
     "storage_root_lease.py": "f93eac4f668dbdb0e236a3a54452a8d022c5700e91452536acafb1300b22f6ff",
     "universe_snapshot.py": "d579f6dcd2a24f2e07448258d9d723b55a8cfa42e4a6d9852c1f8edea9ab9e53",

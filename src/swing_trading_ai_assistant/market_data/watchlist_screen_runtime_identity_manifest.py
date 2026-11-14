@@ -10,6 +10,6 @@ WATCHLIST_SCREEN_RUNTIME_SOURCE_SHA256_V1: Final[dict[str, str]] = {
     "src/swing_trading_ai_assistant/volume_analysis/current.py": "e55e854e4a1629be4e2bf522dc1dcaf2cd9ae763784ac557b6b201591a6c8618",
     "src/swing_trading_ai_assistant/volume_analysis/request.py": "241fa165aa3e684037499a187d18779f835997ce9c064a6a32a2c542dc6ecc97",
     "src/swing_trading_ai_assistant/volume_analysis/service.py": "3c23777c5825f2b4c46c6b5ff9de184826c25910688ef2ec432dfc86da096893",
-    "src/swing_trading_ai_assistant/market_data/setup_screen.py": "448e32684c5dc3bd82511bcee224d347aadb9b9211f0cf215493050e194b7b38",
-    "src/swing_trading_ai_assistant/market_data/setup_screen_runtime_identity_manifest.py": "934cbae424562c7aed6afa6030e9d6c130101dc338bf5d73e9a7f4c30279a104",
+    "src/swing_trading_ai_assistant/market_data/setup_screen.py": "23dad05aae687deff03e1bbd0670cef93332c1d19d5e1abd92968181df84fa60",
+    "src/swing_trading_ai_assistant/market_data/setup_screen_runtime_identity_manifest.py": "30b8d557f29ea5a8e22ed217a3d5d0a2ca89a39dea1376f7817802badd4a5da2",
 }

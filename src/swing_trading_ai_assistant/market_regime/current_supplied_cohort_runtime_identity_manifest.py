@@ -7,7 +7,7 @@ CURRENT_SUPPLIED_COHORT_MARKET_REGIME_RUNTIME_SOURCE_DIGESTS_V1: Final = {
     "src/swing_trading_ai_assistant/market_data/current_cohort.py": "4408415c58284d10b14bfbe9e6bc4a2989209fc09ebe381c8558cab4f4457153",
     "src/swing_trading_ai_assistant/market_data/schedule_evidence.py": "2894a34356c7d12c71cf2a9cb133d0a5d7aaa83a83d7ac43549a13e7b9081801",
     "src/swing_trading_ai_assistant/market_data/storage_root_lease.py": "f93eac4f668dbdb0e236a3a54452a8d022c5700e91452536acafb1300b22f6ff",
-    "src/swing_trading_ai_assistant/market_regime/current_supplied_cohort.py": "12427bef3c388607d7a6558826ee38b29eba2b4d73f5342443a3f09494adf2fe",
-    "src/swing_trading_ai_assistant/market_data/setup_screen.py": "448e32684c5dc3bd82511bcee224d347aadb9b9211f0cf215493050e194b7b38",
-    "src/swing_trading_ai_assistant/market_data/setup_screen_runtime_identity_manifest.py": "934cbae424562c7aed6afa6030e9d6c130101dc338bf5d73e9a7f4c30279a104",
+    "src/swing_trading_ai_assistant/market_regime/current_supplied_cohort.py": "ae89d9d3d6dc5921626cf5287a9f96511b7f3f0b4d4b48d2b5c10c466a3ef063",
+    "src/swing_trading_ai_assistant/market_data/setup_screen.py": "23dad05aae687deff03e1bbd0670cef93332c1d19d5e1abd92968181df84fa60",
+    "src/swing_trading_ai_assistant/market_data/setup_screen_runtime_identity_manifest.py": "30b8d557f29ea5a8e22ed217a3d5d0a2ca89a39dea1376f7817802badd4a5da2",
 }
