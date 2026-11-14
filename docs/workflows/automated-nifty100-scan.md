@@ -466,11 +466,24 @@ The same installer also enables `swing-data-capture.timer` at 20:00 IST. It
 runs `scripts/capture_provider_data.sh`, which writes the raw session cache
 research reads and the adjusted benchmark store from the retained Nifty 200
 snapshot. It reads no exchange calendar, pair state, safety policy, or research
-result; the 20:30 research runner waits for an active capture, skips a complete
-one, or resumes a timed-out checkpoint. A complete receipt lets the scan reuse
-the terminal session without re-fetching it. The head start has a 25-minute
-budget before the 20:30 preflight takes over. Existing sessions and request
-stores are reused; only missing or new data is fetched.
+result. Capture is incremental and additive: for each member it reads the newest
+retained `bharatstock-session-cache-v1` session and requests only the newer
+range, skipping a member that already reaches the requested end, and it skips
+the adjusted stage when `adjusted_daily` already retains that session. Existing
+sessions and request stores are reused; nothing is deleted or re-downloaded.
+
+The 20:30 research runner performs the same capture as its first step, before
+any scan, research, or analysis, so a later calendar or research failure cannot
+discard the day's provider data. If the 20:00 capture is still active it waits
+for it, if the receipt is complete it skips, and if the head start timed out or
+failed it resumes from the checkpoint. It never kills, discards, or duplicates
+the active capture. The head start has a 25-minute budget before the 20:30
+preflight takes over. `$SWING_LOG_DIR/capture-<date>.json` records per-symbol
+status, failed ISINs, requests used and configured maximum per stage, the latest
+session, the universe snapshot digest, runtime identity, and timestamps. Only a
+complete receipt makes the scan reuse the captured terminal session; an
+incomplete one is recorded as `CAPTURE_INCOMPLETE` in the scan error log and the
+scan fetches without that reuse flag.
 
 The same installer also enables `research-ledger-sync.timer`, an hourly one-way
 `rclone copy` for entries written outside a scheduled run (backfills, manual

@@ -7,12 +7,18 @@
 # scripts/install_research_schedule.sh.
 #
 # It guards weekends, intraday hours, NSE closures, and duplicate same-day pages.
+# It runs the provider capture preflight before any scan or research, waits for
+# an active 20:00 head start instead of duplicating it, and lets a complete
+# receipt let the scan reuse the captured terminal session.
 # Environment overrides:
 #   SWING_REPO, SWING_STORAGE_ROOT, SWING_LOG_DIR, DOPPLER_BIN
 #   SWING_DOPPLER_PROJECT, SWING_DOPPLER_CONFIG (explicit Doppler scope)
 #   SWING_DATE_OVERRIDE (YYYY-MM-DD, for tests/dry runs)
 #   SWING_DRY_RUN=1 (print the decision, do not scan)
 #   SWING_ALLOW_OVERWRITE=1 (allow a second page for the same date)
+#   SWING_CAPTURE_COMMAND, SWING_CAPTURE_SERVICE (capture preflight target)
+#   SWING_CAPTURE_SERVICE_STATUS (testable service-active command)
+#   SWING_CAPTURE_WAIT_SECONDS, SWING_CAPTURE_POLL_SECONDS, SWING_CAPTURE_TIMEOUT
 set -u
 
 REPO=${SWING_REPO:-/home/krunaldodiya/WorkSpace/Code/SwingTradingAIAssistant}
@@ -110,28 +116,104 @@ cd "$REPO" || exit 1
 # an empty page and no record. Fail fast, name the stage, and leave no artifact.
 SCAN_TIMEOUT=${SWING_SCAN_TIMEOUT:-1200}
 SCAN_ARGS=(--storage-root "$STORE" --nifty200 --refresh --retain-decision-evidence --output json)
+
+# Provider capture preflight, before any scan, research, or analysis. The capture
+# has its own failure domain, so a later calendar or research failure cannot
+# discard retained provider data. A complete receipt lets the scan reuse the
+# captured terminal session. An active 20:00 head start is waited for, never
+# killed or duplicated; a timed-out or failed one is resumed from its checkpoint.
 CAPTURE_RECEIPT="$LOG/capture-$STAMP.json"
-if [ -f "$CAPTURE_RECEIPT" ]; then
-  CAPTURE_REUSE=$(
+CAPTURE_COMMAND=${SWING_CAPTURE_COMMAND:-$REPO/scripts/capture_provider_data.sh}
+CAPTURE_SERVICE=${SWING_CAPTURE_SERVICE:-swing-data-capture.service}
+CAPTURE_WAIT_SECONDS=${SWING_CAPTURE_WAIT_SECONDS:-1800}
+CAPTURE_POLL_SECONDS=${SWING_CAPTURE_POLL_SECONDS:-10}
+CAPTURE_TIMEOUT=${SWING_CAPTURE_TIMEOUT:-1500}
+CAPTURE_LOG="$LOG/capture-preflight-$STAMP.log"
+
+capture_receipt_complete() {
+  [ -f "$CAPTURE_RECEIPT" ] || return 1
+  [ "$(
     python3 - "$CAPTURE_RECEIPT" <<'PY'
 import json
 import sys
 
 try:
-    value = json.load(open(sys.argv[1]))
+    with open(sys.argv[1], encoding="utf-8") as handle:
+        value = json.load(handle)
 except (OSError, ValueError):
-    print("0")
-else:
-    sessions = value.get("sessions") or {}
-    complete = (
-        value.get("status") == "COMPLETE"
-        and sessions.get("status") == "COMPLETE"
-        and sessions.get("remaining_pending") == 0
-    )
-    print("1" if complete else "0")
+    value = {}
+if not isinstance(value, dict):
+    value = {}
+sessions = value.get("sessions")
+sessions = sessions if isinstance(sessions, dict) else {}
+adjusted = value.get("adjusted")
+adjusted = adjusted if isinstance(adjusted, dict) else {}
+remaining = value.get("remaining_pending")
+if not isinstance(remaining, int):
+    remaining = sessions.get("remaining_pending")
+try:
+    failed = int(value.get("failed") or 0)
+except (TypeError, ValueError):
+    failed = 1
+complete = (
+    value.get("status") == "COMPLETE"
+    and sessions.get("status") in {"COMPLETE", "SKIPPED"}
+    and adjusted.get("status") in {"COMPLETE", "SKIPPED"}
+    and failed == 0
+    and remaining == 0
+)
+print("1" if complete else "0")
 PY
-  )
-  [ "$CAPTURE_REUSE" = "1" ] && SCAN_ARGS+=(--reuse-captured-terminal)
+  )" = "1" ]
+}
+
+capture_service_active() {
+  if [ -n "${SWING_CAPTURE_SERVICE_STATUS:-}" ]; then
+    # shellcheck disable=SC2086 # the override is an explicit status command
+    $SWING_CAPTURE_SERVICE_STATUS > /dev/null 2>&1
+  else
+    systemctl is-active --quiet "$CAPTURE_SERVICE" > /dev/null 2>&1
+  fi
+}
+
+if capture_receipt_complete; then
+  CAPTURE_STATE=COMPLETE
+  echo "$(date -Is) capture preflight: receipt complete; scan reuses it" \
+    >> "$CAPTURE_LOG"
+else
+  CAPTURE_STATE=INCOMPLETE
+  if capture_service_active; then
+    echo "$(date -Is) capture preflight: waiting for $CAPTURE_SERVICE" \
+      >> "$CAPTURE_LOG"
+    capture_deadline=$(( $(date +%s) + CAPTURE_WAIT_SECONDS ))
+    while capture_service_active; do
+      if [ "$(date +%s)" -ge "$capture_deadline" ]; then
+        break
+      fi
+      sleep "$CAPTURE_POLL_SECONDS"
+    done
+  fi
+  if capture_service_active; then
+    echo "$(date -Is) capture preflight: $CAPTURE_SERVICE still active after ${CAPTURE_WAIT_SECONDS}s; not starting a duplicate" \
+      >> "$CAPTURE_LOG"
+  elif capture_receipt_complete; then
+    CAPTURE_STATE=COMPLETE
+    echo "$(date -Is) capture preflight: $CAPTURE_SERVICE completed the capture" \
+      >> "$CAPTURE_LOG"
+  else
+    echo "$(date -Is) capture preflight: running $CAPTURE_COMMAND" >> "$CAPTURE_LOG"
+    timeout "$CAPTURE_TIMEOUT" "$CAPTURE_COMMAND" >> "$CAPTURE_LOG" 2>&1
+    preflight_code=$?
+    echo "$(date -Is) capture preflight: exit_code=$preflight_code" \
+      >> "$CAPTURE_LOG"
+    if capture_receipt_complete; then
+      CAPTURE_STATE=COMPLETE
+    fi
+  fi
+fi
+
+if [ "$CAPTURE_STATE" = "COMPLETE" ]; then
+  SCAN_ARGS+=(--reuse-captured-terminal)
 fi
 timeout "$SCAN_TIMEOUT" "$DOPPLER" run \
   --project "$DOPPLER_PROJECT_NAME" --config "$DOPPLER_CONFIG_NAME" -- \
@@ -139,6 +221,10 @@ timeout "$SCAN_TIMEOUT" "$DOPPLER" run \
   "${SCAN_ARGS[@]}" \
   > "$PAGE" 2> "$LOG/scan-$STAMP.err"
 code=$?
+if [ "$CAPTURE_STATE" != "COMPLETE" ]; then
+  echo "$(date -Is) CAPTURE_INCOMPLETE receipt=$CAPTURE_RECEIPT" \
+    >> "$LOG/scan-$STAMP.err"
+fi
 echo "$(date -Is) exit_code=$code scan_timeout_s=$SCAN_TIMEOUT" >> "$LOG/scan-$STAMP.err"
 if [ "$code" -ne 0 ]; then
   # A partial or empty page is not evidence; leaving it invites a later reader to

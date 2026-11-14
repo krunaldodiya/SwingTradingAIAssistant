@@ -1225,6 +1225,7 @@ def scan_signal_decisions_v3(  # noqa: C901 - lifecycle orchestration
                     question="CURRENT_STRUCTURE",
                     refresh=True,
                     sessions_back=candidate_back,
+                    reuse_captured_terminal=reuse_captured_terminal,
                 )
             except Exception:  # noqa: BLE001 - the per-symbol boundary reports this
                 break

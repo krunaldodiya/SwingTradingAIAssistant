@@ -61,6 +61,7 @@ def _run(
     env = os.environ | {
         "SWING_STORAGE_ROOT": str(root),
         "SWING_LOG_DIR": str(log),
+        **_capture_env(root, log),
         "SWING_DATE_OVERRIDE": date,
         "SWING_DRY_RUN": "1",
     }
@@ -118,6 +119,58 @@ def _stub_doppler(path: Path, log: Path, page: Path) -> None:
     log.write_text("")
 
 
+def _capture_receipt(**overrides: object) -> dict[str, object]:
+    receipt: dict[str, object] = {
+        "schema": "provider-capture@v2",
+        "status": "COMPLETE",
+        "failed": 0,
+        "remaining_pending": 0,
+        "sessions": {"status": "COMPLETE", "remaining_pending": 0},
+        "adjusted": {"status": "COMPLETE"},
+    }
+    receipt.update(overrides)
+    return receipt
+
+
+def _capture_env(
+    tmp_path: Path,
+    log: Path,
+    *,
+    receipt: dict[str, object] | None = None,
+    capture_exit: int = 0,
+) -> dict[str, str]:
+    """Stub the capture preflight: log the call, write a receipt, exit typed."""
+    source = tmp_path / "capture-source.json"
+    source.write_text(json.dumps(_capture_receipt() if receipt is None else receipt))
+    calls = tmp_path / "capture-calls.log"
+    stub = tmp_path / "capture-stub"
+    stub.write_text(
+        "#!/usr/bin/env bash\n"
+        'printf "%s\\n" "$*" >> "$CAPTURE_STUB_LOG"\n'
+        'cp "$CAPTURE_STUB_SOURCE" "$CAPTURE_STUB_RECEIPT" 2>/dev/null || true\n'
+        f"exit {capture_exit}\n"
+    )
+    stub.chmod(0o755)
+    inactive = tmp_path / "capture-inactive"
+    inactive.write_text("#!/usr/bin/env bash\nexit 3\n")
+    inactive.chmod(0o755)
+    return {
+        "SWING_CAPTURE_COMMAND": str(stub),
+        "SWING_CAPTURE_SERVICE": "swing-data-capture-test.service",
+        "SWING_CAPTURE_SERVICE_STATUS": str(inactive),
+        "SWING_CAPTURE_WAIT_SECONDS": "0",
+        "SWING_CAPTURE_POLL_SECONDS": "0",
+        "CAPTURE_STUB_LOG": str(calls),
+        "CAPTURE_STUB_SOURCE": str(source),
+        "CAPTURE_STUB_RECEIPT": str(log / "capture-2026-10-23.json"),
+    }
+
+
+def _capture_calls(tmp_path: Path) -> list[str]:
+    path = tmp_path / "capture-calls.log"
+    return path.read_text().splitlines() if path.exists() else []
+
+
 def _run_full(
     script: Path, root: Path, log: Path, doppler: Path, stub_log: Path, source: Path
 ) -> subprocess.CompletedProcess[str]:
@@ -126,6 +179,7 @@ def _run_full(
     env = os.environ | {
         "SWING_STORAGE_ROOT": str(root),
         "SWING_LOG_DIR": str(log),
+        **_capture_env(root, log),
         "SWING_DATE_OVERRIDE": "2026-10-23",
         "SWING_ALLOW_OVERWRITE": "1",
         "SWING_REPO": str(script.parents[1]),
@@ -200,6 +254,7 @@ def test_runner_scopes_doppler_explicitly(tmp_path: Path) -> None:
     env = os.environ | {
         "SWING_STORAGE_ROOT": str(tmp_path),
         "SWING_LOG_DIR": str(log),
+        **_capture_env(tmp_path, log),
         "SWING_DATE_OVERRIDE": "2026-10-23",
         "SWING_REPO": str(script.parents[1]),
         "DOPPLER_BIN": str(doppler),
@@ -238,6 +293,7 @@ def test_runner_writes_diary_pages_under_storage_root(tmp_path: Path) -> None:
         "STUB_SOURCE": str(source),
         "SWING_LEDGER_ROOT": str(tmp_path / "ledger"),
         "SWING_RCLONE_BIN": "/bin/true",
+        **_capture_env(tmp_path, tmp_path / "daily-scan"),
     }
     (tmp_path / "ledger" / "entries" / "2026").mkdir(parents=True)
     env.pop("SWING_LOG_DIR", None)
@@ -290,6 +346,7 @@ def test_runner_writes_ledger_entry_for_real_pass(tmp_path: Path) -> None:
     env = os.environ | {
         "SWING_STORAGE_ROOT": str(tmp_path),
         "SWING_LOG_DIR": str(log),
+        **_capture_env(tmp_path, log),
         "SWING_DATE_OVERRIDE": "2026-10-23",
         "SWING_ALLOW_OVERWRITE": "1",
         "SWING_REPO": str(repo),
@@ -327,6 +384,7 @@ def test_runner_fails_without_configured_ledger_root(tmp_path: Path) -> None:
     env = os.environ | {
         "SWING_STORAGE_ROOT": str(tmp_path),
         "SWING_LOG_DIR": str(log),
+        **_capture_env(tmp_path, log),
         "SWING_DATE_OVERRIDE": "2026-10-23",
         "SWING_ALLOW_OVERWRITE": "1",
         "SWING_REPO": str(Path(__file__).parents[1]),
@@ -364,6 +422,7 @@ def test_runner_syncs_ledger_off_device_after_write(tmp_path: Path) -> None:
     env = os.environ | {
         "SWING_STORAGE_ROOT": str(tmp_path),
         "SWING_LOG_DIR": str(log),
+        **_capture_env(tmp_path, log),
         "SWING_DATE_OVERRIDE": "2026-10-23",
         "SWING_ALLOW_OVERWRITE": "1",
         "SWING_REPO": str(repo),
@@ -408,6 +467,7 @@ def test_runner_fails_when_ledger_write_fails(tmp_path: Path) -> None:
     env = os.environ | {
         "SWING_STORAGE_ROOT": str(tmp_path),
         "SWING_LOG_DIR": str(log),
+        **_capture_env(tmp_path, log),
         "SWING_DATE_OVERRIDE": "2026-10-23",
         "SWING_ALLOW_OVERWRITE": "1",
         "SWING_REPO": str(repo),
@@ -445,6 +505,7 @@ def test_runner_fails_when_off_device_sync_fails(tmp_path: Path) -> None:
     env = os.environ | {
         "SWING_STORAGE_ROOT": str(tmp_path),
         "SWING_LOG_DIR": str(log),
+        **_capture_env(tmp_path, log),
         "SWING_DATE_OVERRIDE": "2026-10-23",
         "SWING_ALLOW_OVERWRITE": "1",
         "SWING_REPO": str(repo),
@@ -478,6 +539,7 @@ def test_runner_writes_breadth_trend_artifact(tmp_path: Path) -> None:
     env = os.environ | {
         "SWING_STORAGE_ROOT": str(tmp_path),
         "SWING_LOG_DIR": str(log),
+        **_capture_env(tmp_path, log),
         "SWING_DATE_OVERRIDE": "2026-10-23",
         "SWING_ALLOW_OVERWRITE": "1",
         "SWING_REPO": str(script.parents[1]),
@@ -514,6 +576,7 @@ def test_scan_failure_discards_the_page(tmp_path: Path) -> None:
     env = os.environ | {
         "SWING_STORAGE_ROOT": str(tmp_path),
         "SWING_LOG_DIR": str(log),
+        **_capture_env(tmp_path, log),
         "SWING_DATE_OVERRIDE": "2026-10-23",
         "SWING_REPO": str(script.parents[1]),
         "DOPPLER_BIN": str(doppler),
@@ -551,6 +614,7 @@ def test_coverage_gap_fails_the_pass(tmp_path: Path) -> None:
     env = os.environ | {
         "SWING_STORAGE_ROOT": str(tmp_path),
         "SWING_LOG_DIR": str(log),
+        **_capture_env(tmp_path, log),
         "SWING_DATE_OVERRIDE": "2026-10-23",
         "SWING_ALLOW_OVERWRITE": "1",
         "SWING_REPO": str(repo),
@@ -596,6 +660,7 @@ def test_coverage_check_targets_the_current_page_handle(tmp_path: Path) -> None:
     env = os.environ | {
         "SWING_STORAGE_ROOT": str(tmp_path),
         "SWING_LOG_DIR": str(log),
+        **_capture_env(tmp_path, log),
         "SWING_DATE_OVERRIDE": "2026-10-23",
         "SWING_ALLOW_OVERWRITE": "1",
         "SWING_REPO": str(repo),
@@ -630,6 +695,7 @@ def test_scan_timeout_discards_the_page_and_reports_124(tmp_path: Path) -> None:
     env = os.environ | {
         "SWING_STORAGE_ROOT": str(tmp_path),
         "SWING_LOG_DIR": str(log),
+        **_capture_env(tmp_path, log),
         "SWING_DATE_OVERRIDE": "2026-10-23",
         "SWING_REPO": str(script.parents[1]),
         "DOPPLER_BIN": str(doppler),
@@ -660,22 +726,183 @@ def test_runner_reuses_complete_capture_receipt(tmp_path: Path) -> None:
     doppler = tmp_path / "doppler"
     stub_log = tmp_path / "calls.log"
     _stub_doppler(doppler, stub_log, log / "scan-2026-10-23.json")
-    (log / "capture-2026-10-23.json").write_text(
-        json.dumps(
-            {
-                "status": "COMPLETE",
-                "sessions": {
-                    "status": "COMPLETE",
-                    "remaining_pending": 0,
-                },
-            }
-        )
-    )
+    (log / "capture-2026-10-23.json").write_text(json.dumps(_capture_receipt()))
 
     result = _run_full(script, tmp_path, log, doppler, stub_log, source)
 
     assert result.returncode == 0
+    # A complete receipt skips the preflight capture entirely.
+    assert _capture_calls(tmp_path) == []
     scan_call = next(
         call for call in stub_log.read_text().splitlines() if " scan " in call
     )
     assert "--reuse-captured-terminal" in scan_call
+
+
+def _preflight_fixture(
+    tmp_path: Path, *, candidates: list[str] | None = None
+) -> tuple[Path, Path, Path, Path, Path, Path]:
+    script = Path(__file__).parents[1] / "scripts" / "daily_after_close_scan.sh"
+    _schedule(tmp_path, closed=None)
+    log = tmp_path / "log"
+    log.mkdir(exist_ok=True)
+    source = tmp_path / "scan-source.json"
+    _page(source, [] if candidates is None else candidates)
+    doppler = tmp_path / "doppler"
+    stub_log = tmp_path / "calls.log"
+    _stub_doppler(doppler, stub_log, source)
+    return script, log, source, doppler, stub_log, tmp_path
+
+
+def test_runner_runs_capture_before_scan_when_receipt_missing(
+    tmp_path: Path,
+) -> None:
+    script, log, source, doppler, stub_log, root = _preflight_fixture(tmp_path)
+
+    result = _run_full(script, root, log, doppler, stub_log, source)
+
+    assert result.returncode == 0
+    assert len(_capture_calls(root)) == 1
+    scan_call = next(
+        call for call in stub_log.read_text().splitlines() if " scan " in call
+    )
+    assert "--reuse-captured-terminal" in scan_call
+    assert "CAPTURE_INCOMPLETE" not in (log / "scan-2026-10-23.err").read_text()
+
+
+def test_runner_records_capture_incomplete_and_does_not_reuse(tmp_path: Path) -> None:
+    script, log, source, doppler, stub_log, root = _preflight_fixture(tmp_path)
+    env = os.environ | {
+        "SWING_STORAGE_ROOT": str(root),
+        "SWING_LOG_DIR": str(log),
+        "SWING_DATE_OVERRIDE": "2026-10-23",
+        "SWING_ALLOW_OVERWRITE": "1",
+        "SWING_REPO": str(script.parents[1]),
+        "DOPPLER_BIN": str(doppler),
+        "STUB_LOG": str(stub_log),
+        "STUB_SOURCE": str(source),
+        "SWING_LEDGER_ROOT": str(root / "ledger"),
+        "SWING_RCLONE_BIN": "/bin/true",
+        **_capture_env(
+            root,
+            log,
+            receipt=_capture_receipt(
+                status="INCOMPLETE",
+                failed=1,
+                remaining_pending=1,
+                sessions={"status": "INCOMPLETE", "remaining_pending": 1},
+            ),
+            capture_exit=1,
+        ),
+    }
+    (root / "ledger" / "entries" / "2026").mkdir(parents=True, exist_ok=True)
+
+    result = subprocess.run(  # noqa: S603 - trusted repository test script
+        [str(script)], env=env, capture_output=True, text=True, check=False
+    )
+
+    assert result.returncode == 0
+    assert len(_capture_calls(root)) == 1
+    scan_call = next(
+        call for call in stub_log.read_text().splitlines() if " scan " in call
+    )
+    assert "--reuse-captured-terminal" not in scan_call
+    assert "CAPTURE_INCOMPLETE" in (log / "scan-2026-10-23.err").read_text()
+
+
+def test_runner_waits_for_an_active_head_start_without_duplicating_it(
+    tmp_path: Path,
+) -> None:
+    script, log, source, doppler, stub_log, root = _preflight_fixture(tmp_path)
+    status = root / "capture-status"
+    status.write_text(
+        "#!/usr/bin/env bash\n"
+        'count=0; [ -f "$STATUS_COUNT" ] && count=$(cat "$STATUS_COUNT")\n'
+        'count=$((count + 1)); echo "$count" > "$STATUS_COUNT"\n'
+        'if [ "$count" -lt 3 ]; then exit 0; fi\n'
+        'cp "$CAPTURE_STUB_SOURCE" "$CAPTURE_STUB_RECEIPT"\n'
+        "exit 3\n"
+    )
+    status.chmod(0o755)
+    env = os.environ | {
+        "SWING_STORAGE_ROOT": str(root),
+        "SWING_LOG_DIR": str(log),
+        "SWING_DATE_OVERRIDE": "2026-10-23",
+        "SWING_ALLOW_OVERWRITE": "1",
+        "SWING_REPO": str(script.parents[1]),
+        "DOPPLER_BIN": str(doppler),
+        "STUB_LOG": str(stub_log),
+        "STUB_SOURCE": str(source),
+        "SWING_LEDGER_ROOT": str(root / "ledger"),
+        "SWING_RCLONE_BIN": "/bin/true",
+        **(
+            _capture_env(root, log)
+            | {
+                "SWING_CAPTURE_SERVICE_STATUS": str(status),
+                "SWING_CAPTURE_WAIT_SECONDS": "30",
+                "SWING_CAPTURE_POLL_SECONDS": "0",
+                "STATUS_COUNT": str(root / "status.count"),
+            }
+        ),
+    }
+    (root / "ledger" / "entries" / "2026").mkdir(parents=True, exist_ok=True)
+
+    result = subprocess.run(  # noqa: S603 - trusted repository test script
+        [str(script)], env=env, capture_output=True, text=True, check=False
+    )
+
+    assert result.returncode == 0
+    # The runner waited instead of launching a duplicate capture.
+    assert _capture_calls(root) == []
+    assert int((root / "status.count").read_text().strip()) >= 3
+    preflight = (log / "capture-preflight-2026-10-23.log").read_text()
+    assert "waiting for swing-data-capture-test.service" in preflight
+    assert "completed the capture" in preflight
+    scan_call = next(
+        call for call in stub_log.read_text().splitlines() if " scan " in call
+    )
+    assert "--reuse-captured-terminal" in scan_call
+
+
+def test_runner_never_duplicates_a_head_start_that_outlasts_the_wait(
+    tmp_path: Path,
+) -> None:
+    script, log, source, doppler, stub_log, root = _preflight_fixture(tmp_path)
+    active = root / "capture-active"
+    active.write_text("#!/usr/bin/env bash\nexit 0\n")
+    active.chmod(0o755)
+    env = os.environ | {
+        "SWING_STORAGE_ROOT": str(root),
+        "SWING_LOG_DIR": str(log),
+        "SWING_DATE_OVERRIDE": "2026-10-23",
+        "SWING_ALLOW_OVERWRITE": "1",
+        "SWING_REPO": str(script.parents[1]),
+        "DOPPLER_BIN": str(doppler),
+        "STUB_LOG": str(stub_log),
+        "STUB_SOURCE": str(source),
+        "SWING_LEDGER_ROOT": str(root / "ledger"),
+        "SWING_RCLONE_BIN": "/bin/true",
+        **(
+            _capture_env(root, log)
+            | {
+                "SWING_CAPTURE_SERVICE_STATUS": str(active),
+                "SWING_CAPTURE_WAIT_SECONDS": "0",
+                "SWING_CAPTURE_POLL_SECONDS": "0",
+            }
+        ),
+    }
+    (root / "ledger" / "entries" / "2026").mkdir(parents=True, exist_ok=True)
+
+    result = subprocess.run(  # noqa: S603 - trusted repository test script
+        [str(script)], env=env, capture_output=True, text=True, check=False
+    )
+
+    assert result.returncode == 0
+    assert _capture_calls(root) == []
+    preflight = (log / "capture-preflight-2026-10-23.log").read_text()
+    assert "not starting a duplicate" in preflight
+    scan_call = next(
+        call for call in stub_log.read_text().splitlines() if " scan " in call
+    )
+    assert "--reuse-captured-terminal" not in scan_call
+    assert "CAPTURE_INCOMPLETE" in (log / "scan-2026-10-23.err").read_text()
