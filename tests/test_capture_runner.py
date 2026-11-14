@@ -288,11 +288,14 @@ def _fixture(
     return raw, downloader, doppler
 
 
-def test_one_current_cohort_and_one_stale_cohort(
+def test_one_current_cohort_and_one_partially_stale_cohort(
     tmp_path: Path,
 ) -> None:
     raw, downloader, doppler = _fixture(tmp_path)
     _adjusted(tmp_path / "store", _cohort_keys(0), STAMP)
+    # The second cohort is mixed: ten instruments are current, ninety are not.
+    _adjusted(tmp_path / "store", _cohort_keys(1)[:10], STAMP)
+    _adjusted(tmp_path / "store", _cohort_keys(1)[10:], "2026-11-10")
 
     result = _run(tmp_path, raw, downloader, doppler)
 
@@ -300,17 +303,21 @@ def test_one_current_cohort_and_one_stale_cohort(
     calls = _calls(tmp_path)
     assert len(calls) == 1
     call = calls[0]
-    # Only the stale cohort is requested, from its oldest missing instrument.
-    assert all(key in call for key in _cohort_keys(1)[:3])
+    # Only the stale cohort's missing members are requested, from the range
+    # after its oldest missing instrument's retained session.
+    assert call.count("--instrument") == 90
     assert all(key not in call for key in _cohort_keys(0))
-    assert f"--start {STAGE_START}" in call
+    assert all(key not in call for key in _cohort_keys(1)[:10])
+    assert all(key in call for key in _cohort_keys(1)[10:])
+    assert "--start 2026-11-11" in call
     receipt = _receipt(tmp_path)
     adjusted = cast(dict[str, object], receipt["adjusted"])
     cohorts = cast(list[dict[str, object]], adjusted["cohorts"])
     assert cohorts[0]["status"] == "SKIPPED"
     assert cohorts[0]["start"] is None
     assert cohorts[1]["status"] == "COMPLETE"
-    assert cohorts[1]["oldest_missing"] == _cohort_keys(1)[0]
+    assert cohorts[1]["missing"] == 90
+    assert cohorts[1]["oldest_missing"] == _cohort_keys(1)[10]
     assert cohorts[1]["missing_after_batch"] == 0
     assert receipt["status"] == "COMPLETE"
     # A second run has both cohorts current and makes no downloader call.
