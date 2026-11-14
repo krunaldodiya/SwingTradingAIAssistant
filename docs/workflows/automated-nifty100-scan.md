@@ -498,11 +498,13 @@ member whose own gap begins later re-fetches that bounded overlap (at most the
 stage window, never a fully current member, and never a whole cohort that is
 current). After each batch it re-reads the store and requires the whole cohort
 to be current; a partial or member-local failure leaves that cohort `INCOMPLETE`.
-When the only requested session is the stamp itself, every missing member
-already has a retained prior session, and the downloader reports no valid
-requested member history, the cohort is `NO_NEWER_SESSION`: the same typed
-no-op the raw stage uses for a weekend, holiday, or unpublished close, not a
-data failure. A stamp with an older multi-day gap is still a failure. The
+When the only requested session is the stamp itself, the raw stage's completed
+capture observed no member session at the stamp, every missing member already
+has a retained prior session, and the downloader reports no valid requested
+member history, the cohort is `NO_NEWER_SESSION`: the same typed no-op the raw
+stage uses for a weekend, holiday, or unpublished close, not a data failure. A
+stamp with an older multi-day gap, or a raw stage that failed and cannot
+corroborate the stamp, is still a failure. The
 adjusted stage is `COMPLETE` only when every cohort is `COMPLETE`, `SKIPPED`, or
 `NO_NEWER_SESSION`. Existing sessions and request stores are reused; no retained data is
 deleted, and a fully current cohort makes no provider request.

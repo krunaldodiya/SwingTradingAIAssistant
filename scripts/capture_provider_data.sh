@@ -96,6 +96,25 @@ run_child "$DOPPLER" run --project "$PROJECT" --config "$CONFIG" -- \
   > "$RAW_OUT" 2> "$RAW_ERR"
 raw_code=$?
 
+# Corroborate "the stamp has no new sessions" from the raw stage: a completed
+# raw stage whose latest session is older than the stamp saw no member publish
+# at the stamp. A provider outage that failed the raw stage stays UNKNOWN.
+RAW_STAMP_STATE=$("$PYTHON" - "$RAW_OUT" "$STAMP" <<'PY'
+import json
+import sys
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as handle:
+        value = json.load(handle)
+except (OSError, ValueError):
+    value = {}
+latest = value.get("latest_session") if isinstance(value, dict) else None
+status = value.get("status") if isinstance(value, dict) else None
+no_stamp = type(latest) is str and latest < sys.argv[2]
+print("NO_STAMP" if status == "COMPLETE" and no_stamp else "UNKNOWN")
+PY
+)
+
 # --- Sub-step 2: adjusted daily store, per 100-member cohort ----------------
 ADJ_PLAN_JSON="$LOG/capture-adjusted-plan-$STAMP.json"
 ADJ_PLAN_TSV="$LOG/capture-adjusted-plan-$STAMP.tsv"
@@ -169,6 +188,7 @@ PY
     cohort_error=""
     if [ "$code" -ne 0 ]; then
       if [ "$c_start" = "$STAMP" ] && [ "$c_unretained" = "0" ] \
+          && [ "$RAW_STAMP_STATE" = "NO_STAMP" ] \
           && grep -q "no valid requested member history" "$batch_err"; then
         # Every missing member already has a retained prior session and the
         # only requested session is the stamp itself. No session was published

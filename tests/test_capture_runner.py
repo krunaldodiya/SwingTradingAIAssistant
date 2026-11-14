@@ -138,6 +138,7 @@ def _raw_script(
     remaining_pending: int = 0,
     requests_used: int = 101,
     configured_max: int = 2400,
+    latest_session: str = "2026-11-13",
 ) -> None:
     complete = status == "COMPLETE"
     payload = {
@@ -156,7 +157,7 @@ def _raw_script(
         ),
         "max_requests_per_member": 8,
         "sessions_written": 101,
-        "latest_session": "2026-11-13",
+        "latest_session": latest_session,
         "remaining_pending": remaining_pending,
         "start": STAGE_START,
         "end": STAMP,
@@ -641,3 +642,32 @@ def test_adjusted_failure_with_an_older_gap_is_not_a_noop(tmp_path: Path) -> Non
     # Cohort 0 starts at 2026-11-13 (older gap), not the stamp: a real failure.
     assert cohorts[0]["status"] == "INCOMPLETE"
     assert cohorts[0]["batch_exit_code"] == 1
+
+
+def test_no_newer_noop_requires_the_raw_stage_to_see_no_stamp_session(
+    tmp_path: Path,
+) -> None:
+    """A failed raw stage must not let a provider outage look like a no-op."""
+    raw, downloader, doppler = _fixture(tmp_path)
+    _raw_script(raw, latest_session=STAMP)
+    _adjusted(tmp_path / "store", _cohort_keys(0), "2026-11-13")
+    _adjusted(tmp_path / "store", _cohort_keys(1), "2026-11-13")
+
+    result = _run(
+        tmp_path,
+        raw,
+        downloader,
+        doppler,
+        extra_env={
+            "STUB_WRITE": "0",
+            "STUB_EXIT": "1",
+            "STUB_FAIL_MESSAGE": (
+                "provider returned no valid requested member history"
+            ),
+        },
+    )
+
+    assert result.returncode == 1
+    adjusted = cast(dict[str, object], _receipt(tmp_path)["adjusted"])
+    assert adjusted["status"] == "INCOMPLETE"
+    assert adjusted["cohorts_no_newer_session"] == 0
