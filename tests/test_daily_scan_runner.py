@@ -864,7 +864,7 @@ def test_runner_waits_for_an_active_head_start_without_duplicating_it(
     assert int((root / "status.count").read_text().strip()) >= 3
     preflight = (log / "capture-preflight-2026-10-23.log").read_text()
     assert "waiting for swing-data-capture-test.service" in preflight
-    assert "completed the capture" in preflight
+    assert "receipt complete; scan reuses it" in preflight
     scan_call = next(
         call for call in stub_log.read_text().splitlines() if " scan " in call
     )
@@ -930,14 +930,15 @@ def test_preflight_budget_fits_the_scan_service_timeout() -> None:
     preflight = default("SWING_CAPTURE_PREFLIGHT_BUDGET")
     capture = default("SWING_CAPTURE_TIMEOUT")
     scan = default("SWING_SCAN_TIMEOUT")
+    kill_after = default("SWING_CAPTURE_KILL_AFTER")
     service = re.search(r"^TimeoutStartSec=([0-9]+)$", unit, re.M)
     assert service is not None
-    assert (preflight, capture, scan) == (1800, 1200, 1200)
+    assert (preflight, capture, scan, kill_after) == (1740, 1200, 1200, 30)
     assert capture <= preflight
-    # The deadline covers the preflight (unit/lease wait + capture resume),
+    # Worst case: the full preflight deadline, the timeout kill-after grace,
     # the scan, and the post-scan analysis/research/ledger stages.
     post_scan_reserve = 600
-    assert preflight + scan + post_scan_reserve <= int(service.group(1))
+    assert preflight + kill_after + scan + post_scan_reserve <= int(service.group(1))
 
 
 def test_timed_out_preflight_does_not_leave_a_child_process(
@@ -1043,3 +1044,136 @@ def test_preflight_waits_for_a_manual_storage_lease(tmp_path: Path) -> None:
         call for call in stub_log.read_text().splitlines() if " scan " in call
     )
     assert "--reuse-captured-terminal" in scan_call
+
+
+def test_complete_receipt_still_waits_for_a_manual_lease(tmp_path: Path) -> None:
+    """An older complete receipt must not let the scan run beside a capture."""
+    script, log, source, doppler, stub_log, root = _preflight_fixture(tmp_path)
+    (log / "capture-2026-10-23.json").write_text(json.dumps(_capture_receipt()))
+    env = os.environ | {
+        "SWING_STORAGE_ROOT": str(root),
+        "SWING_LOG_DIR": str(log),
+        "SWING_DATE_OVERRIDE": "2026-10-23",
+        "SWING_ALLOW_OVERWRITE": "1",
+        "SWING_REPO": str(script.parents[1]),
+        "DOPPLER_BIN": str(doppler),
+        "STUB_LOG": str(stub_log),
+        "STUB_SOURCE": str(source),
+        "SWING_LEDGER_ROOT": str(root / "ledger"),
+        "SWING_RCLONE_BIN": "/bin/true",
+        **_capture_env(root, log),
+    }
+    env.pop("SWING_CAPTURE_LEASE_STATE_COMMAND")
+    (root / "ledger" / "entries" / "2026").mkdir(parents=True, exist_ok=True)
+
+    held = StorageRootLease.try_acquire(root)
+    assert held.outcome is LeaseOutcome.ACQUIRED and held.lease is not None
+    try:
+        blocked = subprocess.run(  # noqa: S603 - trusted repository test script
+            [str(script)], env=env, capture_output=True, text=True, check=False
+        )
+    finally:
+        held.lease.close()
+
+    assert blocked.returncode == 75
+    assert "scan " not in stub_log.read_text()
+    assert _capture_calls(root) == []
+    err = (log / "scan-2026-10-23.err").read_text()
+    assert "CAPTURE_INCOMPLETE" in err
+    assert "scan_not_started=lease" in err
+
+    released = subprocess.run(  # noqa: S603 - trusted repository test script
+        [str(script)], env=env, capture_output=True, text=True, check=False
+    )
+
+    assert released.returncode == 0
+    assert _capture_calls(root) == []
+    scan_call = next(
+        call for call in stub_log.read_text().splitlines() if " scan " in call
+    )
+    assert "--reuse-captured-terminal" in scan_call
+
+
+def test_unknown_lease_state_fails_closed_without_starting_the_scan(
+    tmp_path: Path,
+) -> None:
+    script, log, source, doppler, stub_log, root = _preflight_fixture(tmp_path)
+    env = (
+        os.environ
+        | {
+            "SWING_STORAGE_ROOT": str(root),
+            "SWING_LOG_DIR": str(log),
+            "SWING_DATE_OVERRIDE": "2026-10-23",
+            "SWING_ALLOW_OVERWRITE": "1",
+            "SWING_REPO": str(script.parents[1]),
+            "DOPPLER_BIN": str(doppler),
+            "STUB_LOG": str(stub_log),
+            "STUB_SOURCE": str(source),
+            "SWING_LEDGER_ROOT": str(root / "ledger"),
+            "SWING_RCLONE_BIN": "/bin/true",
+            **_capture_env(root, log),
+        }
+        | {
+            "SWING_CAPTURE_LEASE_STATE_COMMAND": "printf 'UNKNOWN\\n'",
+            "SWING_CAPTURE_PREFLIGHT_BUDGET": "0",
+        }
+    )
+    (root / "ledger" / "entries" / "2026").mkdir(parents=True, exist_ok=True)
+
+    result = subprocess.run(  # noqa: S603 - trusted repository test script
+        [str(script)], env=env, capture_output=True, text=True, check=False
+    )
+
+    assert result.returncode == 75
+    assert _capture_calls(root) == []
+    assert "scan " not in stub_log.read_text()
+    err = (log / "scan-2026-10-23.err").read_text()
+    assert "CAPTURE_INCOMPLETE" in err
+    assert "scan_not_started=lease" in err
+
+
+def test_unknown_lease_state_retries_until_it_clears(tmp_path: Path) -> None:
+    script, log, source, doppler, stub_log, root = _preflight_fixture(tmp_path)
+    probe = root / "lease-probe"
+    probe.write_text(
+        "#!/usr/bin/env bash\n"
+        'count=0; [ -f "$LEASE_COUNT" ] && count=$(cat "$LEASE_COUNT")\n'
+        'count=$((count + 1)); echo "$count" > "$LEASE_COUNT"\n'
+        'if [ "$count" -lt 2 ]; then echo UNKNOWN; else echo FREE; fi\n'
+    )
+    probe.chmod(0o755)
+    env = (
+        os.environ
+        | {
+            "SWING_STORAGE_ROOT": str(root),
+            "SWING_LOG_DIR": str(log),
+            "SWING_DATE_OVERRIDE": "2026-10-23",
+            "SWING_ALLOW_OVERWRITE": "1",
+            "SWING_REPO": str(script.parents[1]),
+            "DOPPLER_BIN": str(doppler),
+            "STUB_LOG": str(stub_log),
+            "STUB_SOURCE": str(source),
+            "SWING_LEDGER_ROOT": str(root / "ledger"),
+            "SWING_RCLONE_BIN": "/bin/true",
+            **_capture_env(root, log),
+        }
+        | {
+            "SWING_CAPTURE_LEASE_STATE_COMMAND": str(probe),
+            "SWING_CAPTURE_PREFLIGHT_BUDGET": "30",
+            "SWING_CAPTURE_POLL_SECONDS": "0",
+            "LEASE_COUNT": str(root / "lease.count"),
+        }
+    )
+    (root / "ledger" / "entries" / "2026").mkdir(parents=True, exist_ok=True)
+
+    result = subprocess.run(  # noqa: S603 - trusted repository test script
+        [str(script)], env=env, capture_output=True, text=True, check=False
+    )
+
+    assert result.returncode == 0
+    assert int((root / "lease.count").read_text().strip()) >= 2
+    assert (
+        "storage-root lease busy; waiting"
+        in (log / "capture-preflight-2026-10-23.log").read_text()
+    )
+    assert len(_capture_calls(root)) == 1

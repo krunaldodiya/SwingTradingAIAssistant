@@ -55,7 +55,8 @@ verify() {
   else
     echo "optional: $CAPTURE_TIMER (installed, not enabled)"
   fi
-  for unit in "$CAPTURE_SERVICE" "$SCAN_SERVICE" "$SYNC_SERVICE"; do
+  for unit in "$CAPTURE_SERVICE" "$CAPTURE_TIMER" "$SCAN_SERVICE" \
+      "$SCAN_TIMER" "$SYNC_SERVICE" "$SYNC_TIMER"; do
     if [ -f "$UNIT_DST/$unit" ]; then
       echo "installed: $unit"
     else

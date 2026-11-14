@@ -62,6 +62,8 @@ def _csv(symbols: tuple[str, ...], *, isin_base: int) -> bytes:
 
 
 def _governed_snapshot(store: Path) -> None:
+    store.mkdir(mode=0o700, parents=True, exist_ok=True)
+    store.chmod(0o700)
     universe = build_historic_nifty_universe(
         _csv(_NIFTY50, isin_base=0),
         _csv(_NIFTYNEXT50, isin_base=50),
@@ -241,7 +243,10 @@ if {exit_code} == 0 and os.environ.get("STUB_EMPTY", "0") != "1":
             }}
         )
     )
-raise SystemExit({exit_code})
+message = os.environ.get("STUB_FAIL_MESSAGE", "")
+if message:
+    sys.stderr.write("download failed: " + message + "\\n")
+raise SystemExit(int(os.environ.get("STUB_EXIT", "{exit_code}")))
 """
 
 
@@ -574,3 +579,65 @@ def test_mixed_age_cohort_uses_the_oldest_missing_start(tmp_path: Path) -> None:
     cohorts = cast(list[dict[str, object]], adjusted["cohorts"])
     assert cohorts[1]["start"] == "2026-11-11"
     assert cast(dict[str, object], adjusted["range"])["start"] == "2026-11-11"
+
+
+def test_adjusted_no_newer_session_is_a_typed_noop(tmp_path: Path) -> None:
+    """A stamp with no published session is a no-op, not a data failure."""
+    raw, downloader, doppler = _fixture(tmp_path)
+    # Every member already has the previous session; the stamp is a non-trading
+    # day, so the only requested session (the stamp itself) returns no rows.
+    _adjusted(tmp_path / "store", _cohort_keys(0), "2026-11-13")
+    _adjusted(tmp_path / "store", _cohort_keys(1), "2026-11-13")
+
+    result = _run(
+        tmp_path,
+        raw,
+        downloader,
+        doppler,
+        extra_env={
+            "STUB_WRITE": "0",
+            "STUB_EXIT": "1",
+            "STUB_FAIL_MESSAGE": (
+                "provider returned no valid requested member history"
+            ),
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    receipt = _receipt(tmp_path)
+    assert receipt["status"] == "COMPLETE"
+    adjusted = cast(dict[str, object], receipt["adjusted"])
+    assert adjusted["status"] == "COMPLETE"
+    assert adjusted["cohorts_no_newer_session"] == 2
+    assert adjusted["cohorts_incomplete"] == 0
+    cohorts = cast(list[dict[str, object]], adjusted["cohorts"])
+    assert all(cohort["status"] == "NO_NEWER_SESSION" for cohort in cohorts)
+    assert all(cohort["error"] is None for cohort in cohorts)
+    assert all(cohort["missing_after_batch"] == 100 for cohort in cohorts)
+
+
+def test_adjusted_failure_with_an_older_gap_is_not_a_noop(tmp_path: Path) -> None:
+    raw, downloader, doppler = _fixture(tmp_path)
+    _adjusted(tmp_path / "store", _cohort_keys(0), "2026-11-12")
+
+    result = _run(
+        tmp_path,
+        raw,
+        downloader,
+        doppler,
+        extra_env={
+            "STUB_WRITE": "0",
+            "STUB_EXIT": "1",
+            "STUB_FAIL_MESSAGE": (
+                "provider returned no valid requested member history"
+            ),
+        },
+    )
+
+    assert result.returncode == 1
+    adjusted = cast(dict[str, object], _receipt(tmp_path)["adjusted"])
+    assert adjusted["status"] == "INCOMPLETE"
+    cohorts = cast(list[dict[str, object]], adjusted["cohorts"])
+    # Cohort 0 starts at 2026-11-13 (older gap), not the stamp: a real failure.
+    assert cohorts[0]["status"] == "INCOMPLETE"
+    assert cohorts[0]["batch_exit_code"] == 1

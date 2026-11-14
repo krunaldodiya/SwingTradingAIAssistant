@@ -25,6 +25,10 @@ from swing_trading_ai_assistant.market_data.historical_nifty_universe import (
     build_historic_nifty_universe,
     retain_historic_nifty_universe,
 )
+from swing_trading_ai_assistant.market_data.storage_root_lease import (
+    LeaseOutcome,
+    StorageRootLease,
+)
 
 _SPEC = importlib.util.spec_from_file_location(
     "capture_bharatstock_current",
@@ -68,6 +72,9 @@ def _csv(symbols: tuple[str, ...], *, isin_base: int) -> bytes:
 
 
 def _universe(root: Path) -> None:
+    # The capture holds the storage-root lease, which requires a private root.
+    root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    root.chmod(0o700)
     universe = build_historic_nifty_universe(
         _csv(_NIFTY50, isin_base=0),
         _csv(_NIFTYNEXT50, isin_base=50),
@@ -508,3 +515,24 @@ def test_empty_history_without_a_retained_session_is_a_failure(
     assert record["error"] == "EMPTY_HISTORY"
     assert summary["no_newer_session"] == 0
     assert summary["failed"] == 1
+
+
+def test_a_second_capture_is_typed_busy_when_the_lease_is_held(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A manual raw capture holds the storage lease so the preflight sees it."""
+    _universe(tmp_path / "store")
+    _reset()
+    monkeypatch.setattr(capture, "BharatStockClient", _FakeClient)
+    held = StorageRootLease.try_acquire(tmp_path / "store")
+    assert held.outcome is LeaseOutcome.ACQUIRED and held.lease is not None
+    try:
+        code, summary = _run(tmp_path, "--limit", "1")
+    finally:
+        held.lease.close()
+
+    assert code == 4
+    assert summary["status"] == "STORAGE_ROOT_BUSY"
+    assert summary["error"] == "STORAGE_ROOT_BUSY"
+    assert _FakeClient.constructions == []
+    assert _FakeClient.calls == []

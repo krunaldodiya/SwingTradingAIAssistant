@@ -122,7 +122,7 @@ fi
 
 if [ -z "$ADJ_ERROR" ]; then
   while IFS='|' read -r c_index c_status c_members c_start c_missing_count \
-      c_missing c_oldest; do
+      c_unretained c_missing c_oldest; do
     [ -n "$c_index" ] || continue
     if [ "$c_status" = "SKIPPED" ]; then
       printf '%s|SKIPPED|%s|%s|0||||0|0|0|\n' \
@@ -135,12 +135,15 @@ if [ -z "$ADJ_ERROR" ]; then
       args+=(--instrument "$key")
     done
     batch_out="$LOG/capture-adjusted-$STAMP-cohort-$c_index.json"
+    batch_err="$LOG/capture-adjusted-$STAMP-cohort-$c_index.err"
     : > "$batch_out"
+    : > "$batch_err"
     run_child "$DOPPLER" run --project "$PROJECT" --config "$CONFIG" -- \
       "$DOWNLOADER" "${args[@]}" --start "$c_start" --end "$STAMP" \
       --storage-root "$STORE" \
-      > "$batch_out" 2>> "$ADJ_ERR"
+      > "$batch_out" 2> "$batch_err"
     code=$?
+    cat "$batch_err" >> "$ADJ_ERR"
     requests=$("$PYTHON" - "$batch_out" <<'PY'
 import json
 import sys
@@ -165,8 +168,17 @@ PY
     cohort_status=COMPLETE
     cohort_error=""
     if [ "$code" -ne 0 ]; then
-      cohort_status=INCOMPLETE
-      cohort_error="COHORT_BATCH_FAILED"
+      if [ "$c_start" = "$STAMP" ] && [ "$c_unretained" = "0" ] \
+          && grep -q "no valid requested member history" "$batch_err"; then
+        # Every missing member already has a retained prior session and the
+        # only requested session is the stamp itself. No session was published
+        # there (weekend, holiday, or unpublished close): a typed no-op, not a
+        # data failure.
+        cohort_status=NO_NEWER_SESSION
+      else
+        cohort_status=INCOMPLETE
+        cohort_error="COHORT_BATCH_FAILED"
+      fi
     elif [ "$v_status" != "COMPLETE" ]; then
       cohort_status=INCOMPLETE
       cohort_error="COHORT_INCOMPLETE_AFTER_BATCH"
@@ -262,7 +274,7 @@ if plan_error or not cohorts:
     status = "INCOMPLETE"
 elif statuses == {"SKIPPED"}:
     status = "SKIPPED"
-elif statuses <= {"COMPLETE", "SKIPPED"}:
+elif statuses <= {"COMPLETE", "SKIPPED", "NO_NEWER_SESSION"}:
     status = "COMPLETE"
 else:
     status = "INCOMPLETE"
@@ -291,6 +303,9 @@ payload = {
     ),
     "cohorts_incomplete": sum(
         1 for cohort in cohorts if cohort["status"] == "INCOMPLETE"
+    ),
+    "cohorts_no_newer_session": sum(
+        1 for cohort in cohorts if cohort["status"] == "NO_NEWER_SESSION"
     ),
     "provider_requests_used": (
         sum(known) if known else (0 if not invoked else None)
@@ -450,6 +465,9 @@ receipt = {
             "cohorts_complete": adjusted.get("cohorts_complete"),
             "cohorts_skipped": adjusted.get("cohorts_skipped"),
             "cohorts_incomplete": adjusted.get("cohorts_incomplete"),
+            "cohorts_no_newer_session": adjusted.get(
+                "cohorts_no_newer_session"
+            ),
             "range": adjusted.get("range"),
             "error": adjusted.get("error"),
         },

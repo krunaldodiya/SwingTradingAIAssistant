@@ -463,10 +463,11 @@ off-device copy part of the pass rather than a later hope. Set
 defaults.
 
 The same installer also installs and enables `swing-data-capture.timer` at
-20:00 IST. The PRD treats this head start as optional; `--check` requires the
-service and timer files to be installed and the scan/sync timers to be enabled,
-but a disabled capture timer is reported as optional rather than a failure. It
-runs `scripts/capture_provider_data.sh`, which writes the raw session cache
+20:00 IST. The PRD treats this head start as optional. `--check` requires all
+six unit files (including both capture units) to be installed and the scan/sync
+timers to be enabled; a capture timer that is installed but disabled is reported
+as `optional:` rather than a failure, and a missing capture unit file is still a
+failure. It runs `scripts/capture_provider_data.sh`, which writes the raw session cache
 research reads and updates the adjusted benchmark store, using only the governed
 retained Nifty 200 snapshot and the date. It reads no exchange calendar, pair
 state, safety policy, or research result. The snapshot is admitted by
@@ -497,8 +498,13 @@ member whose own gap begins later re-fetches that bounded overlap (at most the
 stage window, never a fully current member, and never a whole cohort that is
 current). After each batch it re-reads the store and requires the whole cohort
 to be current; a partial or member-local failure leaves that cohort `INCOMPLETE`.
-The adjusted stage is `COMPLETE` only when every cohort is `COMPLETE` or
-`SKIPPED`. Existing sessions and request stores are reused; no retained data is
+When the only requested session is the stamp itself, every missing member
+already has a retained prior session, and the downloader reports no valid
+requested member history, the cohort is `NO_NEWER_SESSION`: the same typed
+no-op the raw stage uses for a weekend, holiday, or unpublished close, not a
+data failure. A stamp with an older multi-day gap is still a failure. The
+adjusted stage is `COMPLETE` only when every cohort is `COMPLETE`, `SKIPPED`, or
+`NO_NEWER_SESSION`. Existing sessions and request stores are reused; no retained data is
 deleted, and a fully current cohort makes no provider request.
 
 The 20:30 research runner performs the same capture as its first step, before
@@ -508,18 +514,25 @@ discard the day's provider data. It reads the capture unit state with
 `deactivating`, and `reloading` as busy, so a starting or stopping head start is
 never duplicated. It also probes the storage-root `.ingestion.lock` without
 waiting or creating state, so a manually started capture is detected even when
-no unit is involved. If the unit or the lease is busy it waits; if the receipt is
-complete it skips; if the head start timed out or failed it resumes from the
-checkpoint. It never kills, discards, or duplicates the active capture.
+no unit is involved. An unknown or failed probe is treated as busy rather than
+free. Busy is checked before a complete receipt is accepted, so an older receipt
+cannot let the scan start beside a capture still writing the root. If the unit
+or the lease is busy it waits; if free and the receipt is complete it skips; if
+the head start timed out or failed it resumes from the checkpoint. It never
+kills, discards, or duplicates the active capture. The raw capture script holds
+the same lease for its run, so a raw-only manual capture is visible to the
+probe; the separate `scripts/backfill_bharatstock_gap.py` operator tool does not
+participate in that lease.
 
-One 1800 s preflight deadline covers the unit wait, the lease wait, and the
+One 1740 s preflight deadline covers the unit wait, the lease wait, and the
 capture resume. If the holder is still busy at the deadline, the pass fails
 closed (exit 75) and does not start the scan, because capture and research must
 not run concurrently. When the preflight instead finishes capture, the scan runs
 and reuses the receipt. The preflight capture is bounded with `timeout
 --kill-after` so a terminated capture leaves no provider child behind. The full
-pass fits `swing-daily-scan.service` (`TimeoutStartSec=3600`): preflight 1800 s
-+ scan 1200 s + post-scan analysis/research/ledger reserve 600 s.
+pass fits `swing-daily-scan.service` (`TimeoutStartSec=3600`): preflight 1740 s
++ capture kill-after grace 30 s + scan 1200 s + post-scan
+analysis/research/ledger reserve 600 s = 3570 s.
 
 `$SWING_LOG_DIR/capture-<date>.json` (`provider-capture@v3`) records per-symbol
 status, failed ISINs, per-cohort adjusted status, quota per stage, the latest

@@ -173,6 +173,7 @@ def plan(storage_root: Path, stamp: date, stage_start: date) -> dict[str, object
     cohorts: list[dict[str, object]] = []
     for index, cohort in enumerate(_cohorts(members)):
         missing = _missing(cohort, retained, stamp)
+        unretained = sum(1 for key in missing if key not in retained)
         if not missing:
             cohorts.append(
                 {
@@ -181,6 +182,7 @@ def plan(storage_root: Path, stamp: date, stage_start: date) -> dict[str, object
                     "members": len(cohort),
                     "current": len(cohort),
                     "missing": [],
+                    "unretained_missing": 0,
                     "start": None,
                     "oldest_missing": None,
                 }
@@ -208,6 +210,7 @@ def plan(storage_root: Path, stamp: date, stage_start: date) -> dict[str, object
                 "members": len(cohort),
                 "current": len(cohort) - len(missing),
                 "missing": missing,
+                "unretained_missing": unretained,
                 "start": start.isoformat(),
                 "oldest_missing": oldest_missing,
             }
@@ -255,6 +258,7 @@ def _tsv(value: dict[str, object]) -> str:
                 str(cohort["members"]),
                 str(cohort.get("start") or ""),
                 str(len(cast(list[str], cohort["missing"]))),
+                str(cohort["unretained_missing"]),
                 ",".join(cast(list[str], cohort["missing"])),
                 str(cohort["oldest_missing"] or ""),
             )

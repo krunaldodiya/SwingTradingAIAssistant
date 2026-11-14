@@ -38,6 +38,10 @@ from swing_trading_ai_assistant.market_data.bharatstock import (
 from swing_trading_ai_assistant.market_data.historical_nifty_universe import (
     read_historic_nifty_universe,
 )
+from swing_trading_ai_assistant.market_data.storage_root_lease import (
+    LeaseOutcome,
+    StorageRootLease,
+)
 
 RETRY_DELAYS = (5.0, 15.0)
 MAX_REQUESTS_PER_MEMBER = 8
@@ -113,6 +117,17 @@ def _save_checkpoint(path: Path, value: dict[str, object]) -> None:
     temp = path.with_suffix(path.suffix + ".tmp")
     temp.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
     os.replace(temp, path)
+
+
+def _acquire_lease(storage_root: Path) -> StorageRootLease | None:
+    """Hold the storage-root lease so a manual capture is visible to the preflight."""
+    try:
+        result = StorageRootLease.try_acquire(storage_root)
+    except Exception:  # noqa: BLE001 - a root we cannot lease is not writable
+        return None
+    if result.outcome is not LeaseOutcome.ACQUIRED or result.lease is None:
+        return None
+    return result.lease
 
 
 def _script_identity() -> dict[str, object]:
@@ -465,6 +480,24 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901 - stage boundaries
         print(json.dumps(summary, sort_keys=True))
         return 0
 
+    lease = _acquire_lease(args.storage_root)
+    if lease is None:
+        summary.update(
+            {
+                "status": "STORAGE_ROOT_BUSY",
+                "error": "STORAGE_ROOT_BUSY",
+                "completed": 0,
+                "skipped": 0,
+                "requests_used": 0,
+                "sessions_written": 0,
+                "symbols": {},
+                "remaining_pending": len(members),
+                "completed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            }
+        )
+        print(json.dumps(summary, sort_keys=True))
+        return 4
+
     requests_used = 0
     sessions_written = 0
     latest_session: date | None = None
@@ -530,6 +563,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901 - stage boundaries
                     "completed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                 }
             )
+            lease.close()
             print(json.dumps(summary, sort_keys=True))
             return 3
         time.sleep(args.delay * 1.1)
@@ -554,6 +588,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901 - stage boundaries
             "completed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         }
     )
+    lease.close()
     print(json.dumps(summary, sort_keys=True))
     return 0 if complete else 1
 

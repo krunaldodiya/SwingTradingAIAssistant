@@ -23,13 +23,15 @@ def _env(
     capture_enabled: bool,
     scan_enabled: bool = True,
     sync_enabled: bool = True,
+    missing: str | None = None,
 ) -> dict[str, str]:
     units = tmp_path / "config" / "systemd" / "user"
-    units.mkdir(parents=True)
+    units.mkdir(parents=True, exist_ok=True)
     for name in _UNITS:
-        (units / name).write_text("[Unit]\n")
+        if name != missing:
+            (units / name).write_text("[Unit]\n")
     bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
+    bin_dir.mkdir(exist_ok=True)
     systemctl = bin_dir / "systemctl"
     systemctl.write_text(
         "#!/usr/bin/env bash\n"
@@ -73,3 +75,22 @@ def test_check_still_fails_without_the_required_scan_timer(tmp_path: Path) -> No
 
     assert result.returncode == 1
     assert "MISSING: swing-daily-scan.timer" in result.stderr
+
+
+def test_check_requires_the_capture_timer_file_but_not_its_enablement(
+    tmp_path: Path,
+) -> None:
+    missing = _run(
+        _env(
+            tmp_path,
+            capture_enabled=False,
+            missing="swing-data-capture.timer",
+        )
+    )
+
+    assert missing.returncode == 1
+    assert "MISSING: swing-data-capture.timer" in missing.stderr
+
+    disabled = _run(_env(tmp_path, capture_enabled=False))
+
+    assert disabled.returncode == 0

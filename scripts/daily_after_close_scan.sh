@@ -130,12 +130,14 @@ CAPTURE_RECEIPT="$LOG/capture-$STAMP.json"
 CAPTURE_COMMAND=${SWING_CAPTURE_COMMAND:-$REPO/scripts/capture_provider_data.sh}
 CAPTURE_SERVICE=${SWING_CAPTURE_SERVICE:-swing-data-capture.service}
 # The whole pass must fit swing-daily-scan.service TimeoutStartSec=3600:
-#   preflight (unit/lease wait + capture resume) 1800
+#   preflight (unit/lease wait + capture resume) 1740
+#   + capture kill-after grace 30
 #   + scan 1200
-#   + post-scan analysis/research/ledger reserve 600.
+#   + post-scan analysis/research/ledger reserve 600
+#   = 3570, leaving 30 seconds of margin.
 # The preflight budget is one deadline shared by the unit wait, the storage
 # lease wait, and the capture resume, so no path can exceed it.
-CAPTURE_PREFLIGHT_BUDGET=${SWING_CAPTURE_PREFLIGHT_BUDGET:-1800}
+CAPTURE_PREFLIGHT_BUDGET=${SWING_CAPTURE_PREFLIGHT_BUDGET:-1740}
 CAPTURE_POLL_SECONDS=${SWING_CAPTURE_POLL_SECONDS:-10}
 CAPTURE_TIMEOUT=${SWING_CAPTURE_TIMEOUT:-1200}
 CAPTURE_KILL_AFTER=${SWING_CAPTURE_KILL_AFTER:-30}
@@ -244,36 +246,38 @@ PY
 }
 
 capture_lease_busy() {
-  [ "$(capture_lease_state)" = "BUSY" ]
+  # Only an explicit FREE is proof that no manual capture holds the root. An
+  # unknown probe result is treated as busy and must clear within the budget.
+  case "$(capture_lease_state)" in
+    FREE) return 1 ;;
+    *) return 0 ;;
+  esac
 }
 
 CAPTURE_STATE=INCOMPLETE
 CAPTURE_BUSY=""
-if capture_receipt_complete; then
-  CAPTURE_STATE=COMPLETE
-  echo "$(date -Is) capture preflight: receipt complete; scan reuses it" \
+preflight_deadline=$(( $(date +%s) + CAPTURE_PREFLIGHT_BUDGET ))
+
+# Busy checks come first, even for a complete receipt: an older receipt must
+# not let the scan start beside a capture that is still writing the root.
+if capture_service_active; then
+  echo "$(date -Is) capture preflight: waiting for $CAPTURE_SERVICE" \
     >> "$CAPTURE_LOG"
-else
-  preflight_deadline=$(( $(date +%s) + CAPTURE_PREFLIGHT_BUDGET ))
-  if capture_service_active; then
-    echo "$(date -Is) capture preflight: waiting for $CAPTURE_SERVICE" \
-      >> "$CAPTURE_LOG"
-    while capture_service_active; do
-      if [ "$(date +%s)" -ge "$preflight_deadline" ]; then
-        break
-      fi
-      sleep "$CAPTURE_POLL_SECONDS"
-    done
-  fi
-  if capture_service_active; then
-    CAPTURE_BUSY="unit"
-    echo "$(date -Is) capture preflight: $CAPTURE_SERVICE still busy after the ${CAPTURE_PREFLIGHT_BUDGET}s preflight budget" \
-      >> "$CAPTURE_LOG"
-  elif capture_receipt_complete; then
-    CAPTURE_STATE=COMPLETE
-    echo "$(date -Is) capture preflight: $CAPTURE_SERVICE completed the capture" \
-      >> "$CAPTURE_LOG"
-  elif capture_lease_busy; then
+  while capture_service_active; do
+    if [ "$(date +%s)" -ge "$preflight_deadline" ]; then
+      break
+    fi
+    sleep "$CAPTURE_POLL_SECONDS"
+  done
+fi
+if capture_service_active; then
+  CAPTURE_BUSY="unit"
+  echo "$(date -Is) capture preflight: $CAPTURE_SERVICE still busy after the ${CAPTURE_PREFLIGHT_BUDGET}s preflight budget" \
+    >> "$CAPTURE_LOG"
+fi
+
+if [ -z "$CAPTURE_BUSY" ]; then
+  if capture_lease_busy; then
     echo "$(date -Is) capture preflight: storage-root lease busy; waiting" \
       >> "$CAPTURE_LOG"
     while capture_lease_busy; do
@@ -282,13 +286,20 @@ else
       fi
       sleep "$CAPTURE_POLL_SECONDS"
     done
-    if capture_lease_busy; then
-      CAPTURE_BUSY="lease"
-      echo "$(date -Is) capture preflight: storage-root lease still busy after the ${CAPTURE_PREFLIGHT_BUDGET}s preflight budget" \
-        >> "$CAPTURE_LOG"
-    fi
   fi
-  if [ -z "$CAPTURE_BUSY" ] && [ "$CAPTURE_STATE" != "COMPLETE" ]; then
+  if capture_lease_busy; then
+    CAPTURE_BUSY="lease"
+    echo "$(date -Is) capture preflight: storage-root lease still busy after the ${CAPTURE_PREFLIGHT_BUDGET}s preflight budget" \
+      >> "$CAPTURE_LOG"
+  fi
+fi
+
+if [ -z "$CAPTURE_BUSY" ]; then
+  if capture_receipt_complete; then
+    CAPTURE_STATE=COMPLETE
+    echo "$(date -Is) capture preflight: receipt complete; scan reuses it" \
+      >> "$CAPTURE_LOG"
+  else
     remaining=$(( preflight_deadline - $(date +%s) ))
     [ "$remaining" -gt 0 ] || remaining=1
     [ "$remaining" -le "$CAPTURE_TIMEOUT" ] || remaining=$CAPTURE_TIMEOUT
