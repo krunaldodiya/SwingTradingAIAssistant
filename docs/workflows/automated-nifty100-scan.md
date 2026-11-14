@@ -462,13 +462,15 @@ off-device copy part of the pass rather than a later hope. Set
 `SWING_RCLONE_BIN`, `SWING_LEDGER_REMOTE` or `SWING_SYNC_LOG_DIR` to override the
 defaults.
 
-The same installer also enables `swing-data-capture.timer` at 20:15 IST. It
+The same installer also enables `swing-data-capture.timer` at 20:00 IST. It
 runs `scripts/capture_provider_data.sh`, which writes the raw session cache
 research reads and the adjusted benchmark store from the retained Nifty 200
 snapshot. It reads no exchange calendar, pair state, safety policy, or research
-result; the 20:30 scan starts after it and reuses a complete capture receipt
-without re-fetching the terminal session. Existing sessions and request stores
-are reused; only missing or new data is fetched.
+result; the 20:30 research runner waits for an active capture, skips a complete
+one, or resumes a timed-out checkpoint. A complete receipt lets the scan reuse
+the terminal session without re-fetching it. The head start has a 25-minute
+budget before the 20:30 preflight takes over. Existing sessions and request
+stores are reused; only missing or new data is fetched.
 
 The same installer also enables `research-ledger-sync.timer`, an hourly one-way
 `rclone copy` for entries written outside a scheduled run (backfills, manual
