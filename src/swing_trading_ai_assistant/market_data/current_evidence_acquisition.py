@@ -71,7 +71,9 @@ NSE_ANNOUNCEMENTS_API_URL: Final = (
 )
 UPSTOX_HOLIDAYS_URL: Final = "https://api.upstox.com/v2/market/holidays"
 UPSTOX_TIMINGS_URL: Final = "https://api.upstox.com/v2/market/timings"
-NSE_HOLIDAY_MASTER_URL: Final = "https://www.nseindia.com/api/holiday-master"
+# NSE issues a 301 from www.nseindia.com to this canonical calendar host; the
+# zero-redirect rule still applies, so the admitted URL names the final host.
+NSE_HOLIDAY_MASTER_URL: Final = "https://www.nseindia.in/api/holiday-master"
 SCHEDULE_SOURCE: Final = "nse-upstox-composed-calendar"
 SCHEDULE_COMPOSITION_VERSION: Final = "nse-equity-composed-calendar@v2"
 UNRESOLVED_PREFIX: Final = "UNRESOLVED_"
