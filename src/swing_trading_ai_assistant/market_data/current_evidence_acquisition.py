@@ -2465,7 +2465,8 @@ def parse_current_calendar_evidence_v1(
         )
         if (
             len(years) not in (1, 2)
-            or tuple(item.request_url for item in observations_raw) not in expected_url_sets
+            or tuple(item.request_url for item in observations_raw)
+            not in expected_url_sets
         ):
             raise ValueError
         observations = _mint_calendar_observation_set(
