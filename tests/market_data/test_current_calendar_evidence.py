@@ -218,6 +218,31 @@ def test_calendar_only_cross_year_replays_exact_timing_observations() -> None:
     assert replay.source_manifest_bytes == result.source_manifest_bytes
 
 
+def test_calendar_replays_released_legacy_holiday_host_bundle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    coverage_from = date(2026, 8, 1)
+    legacy_host = api.NSE_HOLIDAY_MASTER_LEGACY_URL
+    monkeypatch.setattr(
+        api,
+        "nse_holiday_master_url_v1",
+        lambda year: f"{legacy_host}?type=trading&year={year}",
+    )
+    transport = _CalendarTransport(_bodies(coverage_from, _NOW))
+
+    released = _acquire(transport, coverage_from=coverage_from)
+    monkeypatch.undo()
+
+    assert any(
+        url.startswith(f"{legacy_host}?type=trading&year=")
+        for url in transport.requests
+    )
+    replay = api.parse_current_calendar_evidence_v1(released.canonical_json_bytes())
+
+    assert replay.schedule == released.schedule
+    assert replay.source_manifest_bytes == released.source_manifest_bytes
+
+
 def test_calendar_only_rejects_cutoff_and_ist_rollover_before_replay() -> None:
     coverage_from = date(2026, 8, 1)
     bodies = _bodies(coverage_from, _NOW)

@@ -10,6 +10,6 @@ AGENT_SETUP_RESEARCH_RUNTIME_SOURCE_SHA256_V1: Final[dict[str, str]] = {
     "src/swing_trading_ai_assistant/market_data/setup_screen_runtime_identity_manifest.py": "264690eb8e985ef3306a0a2da5f82ec375aef1697c050513dacc397d928b2527",
     "src/swing_trading_ai_assistant/market_data/cli.py": "4bd73e7a5ee79a61ac48d69664a5f19ac1421853c460a00d2b75735f291ffff6",
     "src/swing_trading_ai_assistant/market_data/current_stock_research_v2.py": "aae8a5928ef3d0a74d69a544bc04833a278d386787d09b98de34e56774270f5c",
-    "src/swing_trading_ai_assistant/market_data/current_stock_research_v2_runtime_identity_manifest.py": "6222592c08139ddb459c16a192a2d0e7f373795a3bee92d1f7be400dc13c1f7f",
+    "src/swing_trading_ai_assistant/market_data/current_stock_research_v2_runtime_identity_manifest.py": "6b2ed6314006866b12b116c1fe6d51babe79e43f31264798a1f9a532179a75c5",
     "src/swing_trading_ai_assistant/market_data/runtime_source_verifier.py": "834fb3261a269b35e582d91b7c497be276bd102078bb9d71816fe2f77a4c721a",
 }

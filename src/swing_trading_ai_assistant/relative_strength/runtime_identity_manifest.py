@@ -20,7 +20,7 @@ RELATIVE_STRENGTH_RUNTIME_SOURCE_SHA256_V1: Final[dict[str, str]] = {
     "src/swing_trading_ai_assistant/market_data/current_corporate_action_screen.py": "0003170e207007bcc6fca6b2b2f5831d354b74344396ed98312676b41866ef69",
     "src/swing_trading_ai_assistant/market_data/current_event_notice.py": "0bf3a93e1b777a5d0062b99814681f02b0d9e206448e46f7edcb8fbebff12fef",
     "src/swing_trading_ai_assistant/market_data/current_event_notice_v2.py": "a2f630eb522f8a071464ffee73a1ec2785c1a7c6adc8f827aa0a4e3faf939a1c",
-    "src/swing_trading_ai_assistant/market_data/current_evidence_acquisition.py": "dcd84d15c78549dcc1a88cb279e65eeb7f0943c657522dd0436689cc389b92d0",
+    "src/swing_trading_ai_assistant/market_data/current_evidence_acquisition.py": "a643c1cf097b6f5a30e3edd1d877bc4798c238b85fdd93dca02667b7941942a7",
     "src/swing_trading_ai_assistant/market_data/current_industry_archive_reader.py": "257d0dc354bec0548490f52a5bdc25121ee56aba278418b5a75758baa0fe83e1",
     "src/swing_trading_ai_assistant/market_data/current_industry_classification.py": "04df27c6fe19c43dd448c42e6e7ea9a38a0ccda67c6a7ad2fd6e8209de02381c",
     "src/swing_trading_ai_assistant/market_data/current_raw_acquisition.py": "f1a277c0ea35bc57c3eb41c62763c9f5df33de0062dfa758697b301cb2ff980c",
