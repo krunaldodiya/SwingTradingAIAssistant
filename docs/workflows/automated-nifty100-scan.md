@@ -64,6 +64,20 @@ job only and do not restrict on-demand scans or `market-data` research commands.
 Interpretation and prior-candidate tracking remain manual; the ledger entry and
 its off-device copy are written by the runner.
 
+**Moving or cloning the checkout.** A virtual environment is not relocatable:
+console-script shebangs, the editable-install `.pth`, and `activate` embed
+absolute paths. The runner derives its repository root from the script location
+and reuses `SWING_REPO` only as an override; it resolves Doppler from
+`DOPPLER_BIN`, then `PATH`. Before scanning it runs
+`scripts/ensure_local_environment.sh`, which verifies that `.venv` belongs to
+this exact directory and rebuilds it from `uv.lock` with `uv sync --frozen
+--extra dev --python 3.11` when it does not. Run the same script manually after
+a move or fresh clone, and re-run `scripts/install_research_schedule.sh`; its
+`--check` now reports `STALE: <unit>` when an installed unit still names another
+checkout.
+The OCI image is unaffected by host paths: it installs into `/opt/app` and
+receives private storage through a bind mount.
+
 ```bash
 doppler run -- signal-decisions scan \
   --storage-root /absolute/path/to/SwingTradingAIAssistantData \

@@ -190,6 +190,7 @@ def _run_full(
         "SWING_DATE_OVERRIDE": "2026-10-23",
         "SWING_ALLOW_OVERWRITE": "1",
         "SWING_REPO": str(script.parents[1]),
+        "SWING_ENSURE_ENVIRONMENT": "0",
         "DOPPLER_BIN": str(doppler),
         "STUB_LOG": str(stub_log),
         "STUB_SOURCE": str(source),
@@ -264,6 +265,7 @@ def test_runner_scopes_doppler_explicitly(tmp_path: Path) -> None:
         **_capture_env(tmp_path, log),
         "SWING_DATE_OVERRIDE": "2026-10-23",
         "SWING_REPO": str(script.parents[1]),
+        "SWING_ENSURE_ENVIRONMENT": "0",
         "DOPPLER_BIN": str(doppler),
         "STUB_LOG": str(stub_log),
         "STUB_SOURCE": str(source),
@@ -282,6 +284,27 @@ def test_runner_scopes_doppler_explicitly(tmp_path: Path) -> None:
     assert "--project test-project --config test-config" in scan_call
 
 
+def test_runner_fails_before_capture_when_doppler_is_unavailable(tmp_path: Path) -> None:
+    """A missing credential helper is named, not reported as a market result."""
+    script = Path(__file__).parents[1] / "scripts" / "daily_after_close_scan.sh"
+    _schedule(tmp_path, closed=None)
+    log = tmp_path / "log"
+    log.mkdir()
+    env = os.environ | {
+        "SWING_STORAGE_ROOT": str(tmp_path),
+        "SWING_LOG_DIR": str(log),
+        "SWING_DATE_OVERRIDE": "2026-10-23",
+        "SWING_REPO": str(script.parents[1]),
+        "SWING_ENSURE_ENVIRONMENT": "0",
+        "DOPPLER_BIN": str(tmp_path / "absent-doppler"),
+    }
+    result = subprocess.run(  # noqa: S603 - trusted repository test script
+        [str(script)], env=env, capture_output=True, text=True, check=False
+    )
+    assert result.returncode == 2
+    assert "doppler_unavailable" in (log / "scan-2026-10-23.err").read_text()
+
+
 def test_runner_writes_diary_pages_under_storage_root(tmp_path: Path) -> None:
     """The default diary directory must live inside the private evidence store."""
     script = Path(__file__).parents[1] / "scripts" / "daily_after_close_scan.sh"
@@ -295,6 +318,7 @@ def test_runner_writes_diary_pages_under_storage_root(tmp_path: Path) -> None:
         "SWING_STORAGE_ROOT": str(tmp_path),
         "SWING_DATE_OVERRIDE": "2026-10-23",
         "SWING_REPO": str(script.parents[1]),
+        "SWING_ENSURE_ENVIRONMENT": "0",
         "DOPPLER_BIN": str(doppler),
         "STUB_LOG": str(stub_log),
         "STUB_SOURCE": str(source),
@@ -357,6 +381,7 @@ def test_runner_writes_ledger_entry_for_real_pass(tmp_path: Path) -> None:
         "SWING_DATE_OVERRIDE": "2026-10-23",
         "SWING_ALLOW_OVERWRITE": "1",
         "SWING_REPO": str(repo),
+        "SWING_ENSURE_ENVIRONMENT": "0",
         "DOPPLER_BIN": str(doppler),
         "STUB_LOG": str(stub_log),
         "STUB_SOURCE": str(source),
@@ -395,6 +420,7 @@ def test_runner_fails_without_configured_ledger_root(tmp_path: Path) -> None:
         "SWING_DATE_OVERRIDE": "2026-10-23",
         "SWING_ALLOW_OVERWRITE": "1",
         "SWING_REPO": str(Path(__file__).parents[1]),
+        "SWING_ENSURE_ENVIRONMENT": "0",
         "DOPPLER_BIN": str(doppler),
         "STUB_LOG": str(stub_log),
         "STUB_SOURCE": str(source),
@@ -433,6 +459,7 @@ def test_runner_syncs_ledger_off_device_after_write(tmp_path: Path) -> None:
         "SWING_DATE_OVERRIDE": "2026-10-23",
         "SWING_ALLOW_OVERWRITE": "1",
         "SWING_REPO": str(repo),
+        "SWING_ENSURE_ENVIRONMENT": "0",
         "DOPPLER_BIN": str(doppler),
         "STUB_LOG": str(stub_log),
         "STUB_SOURCE": str(source),
@@ -478,6 +505,7 @@ def test_runner_fails_when_ledger_write_fails(tmp_path: Path) -> None:
         "SWING_DATE_OVERRIDE": "2026-10-23",
         "SWING_ALLOW_OVERWRITE": "1",
         "SWING_REPO": str(repo),
+        "SWING_ENSURE_ENVIRONMENT": "0",
         "DOPPLER_BIN": str(doppler),
         "STUB_LOG": str(stub_log),
         "STUB_SOURCE": str(source),
@@ -516,6 +544,7 @@ def test_runner_fails_when_off_device_sync_fails(tmp_path: Path) -> None:
         "SWING_DATE_OVERRIDE": "2026-10-23",
         "SWING_ALLOW_OVERWRITE": "1",
         "SWING_REPO": str(repo),
+        "SWING_ENSURE_ENVIRONMENT": "0",
         "DOPPLER_BIN": str(doppler),
         "STUB_LOG": str(stub_log),
         "STUB_SOURCE": str(source),
@@ -550,6 +579,7 @@ def test_runner_writes_breadth_trend_artifact(tmp_path: Path) -> None:
         "SWING_DATE_OVERRIDE": "2026-10-23",
         "SWING_ALLOW_OVERWRITE": "1",
         "SWING_REPO": str(script.parents[1]),
+        "SWING_ENSURE_ENVIRONMENT": "0",
         "DOPPLER_BIN": str(doppler),
         "STUB_LOG": str(stub_log),
         "STUB_SOURCE": str(source),
@@ -586,6 +616,7 @@ def test_scan_failure_discards_the_page(tmp_path: Path) -> None:
         **_capture_env(tmp_path, log),
         "SWING_DATE_OVERRIDE": "2026-10-23",
         "SWING_REPO": str(script.parents[1]),
+        "SWING_ENSURE_ENVIRONMENT": "0",
         "DOPPLER_BIN": str(doppler),
         "SWING_LEDGER_ROOT": str(tmp_path / "ledger"),
         "SWING_RCLONE_BIN": "/bin/true",
@@ -625,6 +656,7 @@ def test_coverage_gap_fails_the_pass(tmp_path: Path) -> None:
         "SWING_DATE_OVERRIDE": "2026-10-23",
         "SWING_ALLOW_OVERWRITE": "1",
         "SWING_REPO": str(repo),
+        "SWING_ENSURE_ENVIRONMENT": "0",
         "DOPPLER_BIN": str(doppler),
         "STUB_LOG": str(stub_log),
         "STUB_SOURCE": str(source),
@@ -671,6 +703,7 @@ def test_coverage_check_targets_the_current_page_handle(tmp_path: Path) -> None:
         "SWING_DATE_OVERRIDE": "2026-10-23",
         "SWING_ALLOW_OVERWRITE": "1",
         "SWING_REPO": str(repo),
+        "SWING_ENSURE_ENVIRONMENT": "0",
         "DOPPLER_BIN": str(doppler),
         "STUB_LOG": str(stub_log),
         "STUB_SOURCE": str(source),
@@ -705,6 +738,7 @@ def test_scan_timeout_discards_the_page_and_reports_124(tmp_path: Path) -> None:
         **_capture_env(tmp_path, log),
         "SWING_DATE_OVERRIDE": "2026-10-23",
         "SWING_REPO": str(script.parents[1]),
+        "SWING_ENSURE_ENVIRONMENT": "0",
         "DOPPLER_BIN": str(doppler),
         "SWING_LEDGER_ROOT": str(tmp_path / "ledger"),
         "SWING_RCLONE_BIN": "/bin/true",
@@ -785,6 +819,7 @@ def test_runner_records_capture_incomplete_and_does_not_reuse(tmp_path: Path) ->
         "SWING_DATE_OVERRIDE": "2026-10-23",
         "SWING_ALLOW_OVERWRITE": "1",
         "SWING_REPO": str(script.parents[1]),
+        "SWING_ENSURE_ENVIRONMENT": "0",
         "DOPPLER_BIN": str(doppler),
         "STUB_LOG": str(stub_log),
         "STUB_SOURCE": str(source),
@@ -837,6 +872,7 @@ def test_runner_waits_for_an_active_head_start_without_duplicating_it(
         "SWING_DATE_OVERRIDE": "2026-10-23",
         "SWING_ALLOW_OVERWRITE": "1",
         "SWING_REPO": str(script.parents[1]),
+        "SWING_ENSURE_ENVIRONMENT": "0",
         "DOPPLER_BIN": str(doppler),
         "STUB_LOG": str(stub_log),
         "STUB_SOURCE": str(source),
@@ -884,6 +920,7 @@ def test_runner_never_duplicates_a_head_start_that_outlasts_the_wait(
         "SWING_DATE_OVERRIDE": "2026-10-23",
         "SWING_ALLOW_OVERWRITE": "1",
         "SWING_REPO": str(script.parents[1]),
+        "SWING_ENSURE_ENVIRONMENT": "0",
         "DOPPLER_BIN": str(doppler),
         "STUB_LOG": str(stub_log),
         "STUB_SOURCE": str(source),
@@ -957,6 +994,7 @@ def test_timed_out_preflight_does_not_leave_a_child_process(
         "SWING_DATE_OVERRIDE": "2026-10-23",
         "SWING_ALLOW_OVERWRITE": "1",
         "SWING_REPO": str(script.parents[1]),
+        "SWING_ENSURE_ENVIRONMENT": "0",
         "DOPPLER_BIN": str(doppler),
         "STUB_LOG": str(stub_log),
         "STUB_SOURCE": str(source),
@@ -1002,6 +1040,7 @@ def test_preflight_waits_for_a_manual_storage_lease(tmp_path: Path) -> None:
         "SWING_DATE_OVERRIDE": "2026-10-23",
         "SWING_ALLOW_OVERWRITE": "1",
         "SWING_REPO": str(script.parents[1]),
+        "SWING_ENSURE_ENVIRONMENT": "0",
         "DOPPLER_BIN": str(doppler),
         "STUB_LOG": str(stub_log),
         "STUB_SOURCE": str(source),
@@ -1056,6 +1095,7 @@ def test_complete_receipt_still_waits_for_a_manual_lease(tmp_path: Path) -> None
         "SWING_DATE_OVERRIDE": "2026-10-23",
         "SWING_ALLOW_OVERWRITE": "1",
         "SWING_REPO": str(script.parents[1]),
+        "SWING_ENSURE_ENVIRONMENT": "0",
         "DOPPLER_BIN": str(doppler),
         "STUB_LOG": str(stub_log),
         "STUB_SOURCE": str(source),
@@ -1106,6 +1146,7 @@ def test_unknown_lease_state_fails_closed_without_starting_the_scan(
             "SWING_DATE_OVERRIDE": "2026-10-23",
             "SWING_ALLOW_OVERWRITE": "1",
             "SWING_REPO": str(script.parents[1]),
+            "SWING_ENSURE_ENVIRONMENT": "0",
             "DOPPLER_BIN": str(doppler),
             "STUB_LOG": str(stub_log),
             "STUB_SOURCE": str(source),
@@ -1150,6 +1191,7 @@ def test_unknown_lease_state_retries_until_it_clears(tmp_path: Path) -> None:
             "SWING_DATE_OVERRIDE": "2026-10-23",
             "SWING_ALLOW_OVERWRITE": "1",
             "SWING_REPO": str(script.parents[1]),
+            "SWING_ENSURE_ENVIRONMENT": "0",
             "DOPPLER_BIN": str(doppler),
             "STUB_LOG": str(stub_log),
             "STUB_SOURCE": str(source),

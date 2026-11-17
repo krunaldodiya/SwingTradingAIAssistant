@@ -176,6 +176,12 @@ no provider credentials or real data are needed by this workflow.
   containers and enable Ubuntu integration; verify `docker version` in WSL.
 - Missing Python/uv: prepare the pinned Linux tools above. Do not substitute
   native Windows Python for POSIX storage checks.
+- Moved checkout or `no such file or directory` from an installed command: a
+  `.venv` copied or moved from another path keeps the old absolute shebangs and
+  editable-install path. Run `scripts/ensure_local_environment.sh` to verify and
+  rebuild it from `uv.lock`; run `scripts/install_research_schedule.sh` again and
+  check that `--check` prints no `STALE:` units. Containers are unaffected by
+  host paths because the image installs under `/opt/app`.
 - Runtime identity failure: use a clean LF checkout and copy-installed wheel.
   Do not edit installed source, refresh manifests to conceal drift, or use
   hard-linked runtime files.
