@@ -29,11 +29,13 @@ def _fake_repo(tmp_path: Path, *, healthy: bool) -> Path:
     (venv / "bin").mkdir(parents=True)
     _write(
         venv / "bin" / "python",
-        "#!/usr/bin/env bash\n"
-        'if [ "${1:-}" = "-c" ]; then exit 0; fi\n'
-        "exit 0\n",
+        '#!/usr/bin/env bash\nif [ "${1:-}" = "-c" ]; then exit 0; fi\nexit 0\n',
     )
-    shebang = f"#!{venv / 'bin' / 'python'}" if healthy else "#!/old/moved/checkout/.venv/bin/python"
+    shebang = (
+        f"#!{venv / 'bin' / 'python'}"
+        if healthy
+        else "#!/old/moved/checkout/.venv/bin/python"
+    )
     for name in _ENTRYPOINTS:
         _write(venv / "bin" / name, f"{shebang}\nexit 0\n")
     venv_path = venv if healthy else Path("/old/moved/checkout/.venv")
@@ -48,15 +50,15 @@ def _fake_uv(tmp_path: Path, repo: Path) -> Path:
     venv = repo / ".venv"
     repairs = "\n".join(
         f'printf "#!{venv}/bin/python\\nexit 0\\n" > "{venv}/bin/{name}"'
-        f" && chmod +x \"{venv}/bin/{name}\""
+        f' && chmod +x "{venv}/bin/{name}"'
         for name in _ENTRYPOINTS
     )
     _write(
         uv,
         "#!/usr/bin/env bash\n"
         f'[ "$1" = "sync" ] || exit 9\n'
-        f"cd \"$PWD\" || exit 9\n"
-        f"mkdir -p \"{venv}/bin\"\n"
+        f'cd "$PWD" || exit 9\n'
+        f'mkdir -p "{venv}/bin"\n'
         f'printf "#!/usr/bin/env bash\\nexit 0\\n" > "{venv}/bin/python"\n'
         f'chmod +x "{venv}/bin/python"\n'
         f"{repairs}\n"

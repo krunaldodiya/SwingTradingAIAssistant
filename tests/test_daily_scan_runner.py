@@ -284,7 +284,9 @@ def test_runner_scopes_doppler_explicitly(tmp_path: Path) -> None:
     assert "--project test-project --config test-config" in scan_call
 
 
-def test_runner_fails_before_capture_when_doppler_is_unavailable(tmp_path: Path) -> None:
+def test_runner_fails_before_capture_when_doppler_is_unavailable(
+    tmp_path: Path,
+) -> None:
     """A missing credential helper is named, not reported as a market result."""
     script = Path(__file__).parents[1] / "scripts" / "daily_after_close_scan.sh"
     _schedule(tmp_path, closed=None)
