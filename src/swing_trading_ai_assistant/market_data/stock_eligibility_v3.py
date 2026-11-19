@@ -56,6 +56,9 @@ SAFETY_POLICY_IDENTIFIER: Final = "supported-signal-safety-policy@v1"
 _DIGEST: Final = re.compile(r"[0-9a-f]{64}\Z")
 _IST: Final = ZoneInfo("Asia/Kolkata")
 _QUOTE_MAX_AGE: Final = timedelta(minutes=15)
+# A provider timestamp a fraction of a second ahead of the local retrieval clock
+# is ordinary skew, not staleness; only a materially future stamp is rejected.
+_QUOTE_MAX_FUTURE_SKEW: Final = timedelta(minutes=2)
 _HISTORY_CALENDAR_DAYS: Final = 420
 _MIN_HISTORY_SESSIONS: Final = 252
 _TURNOVER_WINDOW: Final = 20
@@ -95,6 +98,7 @@ _POLICY: Final = {
     "maximum_relative_spread": "0.02",
     "corporate_action_blackout_days": _ACTION_BLACKOUT_DAYS,
     "quote_maximum_age_seconds": int(_QUOTE_MAX_AGE.total_seconds()),
+    "quote_maximum_future_skew_seconds": int(_QUOTE_MAX_FUTURE_SKEW.total_seconds()),
 }
 
 
@@ -574,7 +578,7 @@ def _quote_integrity(
         "quote_age_seconds": int(age.total_seconds()),
         "market_state": "OPEN" if is_open else "CLOSED",
     }
-    if age < timedelta() or age > _QUOTE_MAX_AGE:
+    if age < -_QUOTE_MAX_FUTURE_SKEW or age > _QUOTE_MAX_AGE:
         return False, "QUOTE_TIMESTAMP_OUTSIDE_FRESHNESS_WINDOW", details
     retained_session = _scheduled_session(schedule, latest_session)
     if retained_session is None:

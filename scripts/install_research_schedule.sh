@@ -37,6 +37,16 @@ status() {
   systemctl --user list-timers "$CAPTURE_TIMER" "$SCAN_TIMER" "$SYNC_TIMER" --no-pager 2>/dev/null || true
 }
 
+render() {
+  sed -e "s|@REPO@|$REPO|g" \
+      -e "s|@STORE@|$STORE|g" \
+      -e "s|@PROJECT@|$PROJECT|g" \
+      -e "s|@CONFIG@|$CONFIG|g" \
+      -e "s|@LEDGER@|$LEDGER|g" \
+      -e "s|@LOGDIR@|$LOGDIR|g" \
+      "$1"
+}
+
 verify() {
   local failed=0
   for unit in "$SCAN_TIMER" "$SYNC_TIMER"; do
@@ -57,10 +67,16 @@ verify() {
   fi
   for unit in "$CAPTURE_SERVICE" "$CAPTURE_TIMER" "$SCAN_SERVICE" \
       "$SCAN_TIMER" "$SYNC_SERVICE" "$SYNC_TIMER"; do
-    if [ -f "$UNIT_DST/$unit" ]; then
-      echo "installed: $unit"
-    else
+    if [ ! -f "$UNIT_DST/$unit" ]; then
       echo "MISSING: $unit" >&2
+      failed=1
+      continue
+    fi
+    echo "installed: $unit"
+    # A moved checkout or changed storage root leaves the installed unit
+    # pointing at an old absolute path. Report it instead of claiming success.
+    if ! cmp -s <(render "$UNIT_SRC/$unit") "$UNIT_DST/$unit"; then
+      echo "STALE: $unit (installed unit differs from this checkout; re-run scripts/install_research_schedule.sh)" >&2
       failed=1
     fi
   done
@@ -95,17 +111,11 @@ case "${1:-}" in
     ;;
 esac
 
-render() {
-  sed -e "s|@REPO@|$REPO|g" \
-      -e "s|@STORE@|$STORE|g" \
-      -e "s|@PROJECT@|$PROJECT|g" \
-      -e "s|@CONFIG@|$CONFIG|g" \
-      -e "s|@LEDGER@|$LEDGER|g" \
-      -e "s|@LOGDIR@|$LOGDIR|g" \
-      "$1"
-}
-
 mkdir -p "$UNIT_DST" "$LOGDIR"
+"$REPO/scripts/ensure_local_environment.sh" --quiet || {
+  echo "install_failed: the checkout-local Python environment could not be prepared" >&2
+  exit 3
+}
 render "$UNIT_SRC/$CAPTURE_SERVICE" > "$UNIT_DST/$CAPTURE_SERVICE"
 render "$UNIT_SRC/$CAPTURE_TIMER" > "$UNIT_DST/$CAPTURE_TIMER"
 render "$UNIT_SRC/$SCAN_SERVICE" > "$UNIT_DST/$SCAN_SERVICE"

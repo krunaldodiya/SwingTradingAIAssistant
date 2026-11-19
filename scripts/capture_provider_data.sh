@@ -14,7 +14,8 @@ set -u
 SCRIPT_PATH=${BASH_SOURCE[0]}
 REPO=${SWING_REPO:-$(cd "$(dirname "$SCRIPT_PATH")/.." && pwd)}
 STORE=${SWING_STORAGE_ROOT:-$HOME/SwingTradingAIAssistantData}
-DOPPLER=${DOPPLER_BIN:-$HOME/.local/bin/doppler}
+DOPPLER=${DOPPLER_BIN:-$(command -v doppler || true)}
+[ -n "$DOPPLER" ] || DOPPLER=$HOME/.local/bin/doppler
 PROJECT=${SWING_DOPPLER_PROJECT:-swing-trading}
 CONFIG=${SWING_DOPPLER_CONFIG:-dev}
 PYTHON=${SWING_CAPTURE_PYTHON:-$REPO/.venv/bin/python}

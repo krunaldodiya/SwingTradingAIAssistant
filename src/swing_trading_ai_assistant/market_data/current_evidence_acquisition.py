@@ -71,7 +71,17 @@ NSE_ANNOUNCEMENTS_API_URL: Final = (
 )
 UPSTOX_HOLIDAYS_URL: Final = "https://api.upstox.com/v2/market/holidays"
 UPSTOX_TIMINGS_URL: Final = "https://api.upstox.com/v2/market/timings"
-NSE_HOLIDAY_MASTER_URL: Final = "https://www.nseindia.com/api/holiday-master"
+# NSE issues a 301 from www.nseindia.com to this canonical calendar host; the
+# zero-redirect rule still applies, so the admitted URL names the final host.
+NSE_HOLIDAY_MASTER_URL: Final = "https://www.nseindia.in/api/holiday-master"
+# Calendar evidence minted before NSE moved the API host carries the .com URLs.
+# Those exact URLs stay admissible only for re-reading released evidence; new
+# acquisitions use NSE_HOLIDAY_MASTER_URL and follow no redirect.
+NSE_HOLIDAY_MASTER_LEGACY_URL: Final = "https://www.nseindia.com/api/holiday-master"
+_RETAINED_NSE_HOLIDAY_MASTER_URLS_V1: Final = (
+    NSE_HOLIDAY_MASTER_URL,
+    NSE_HOLIDAY_MASTER_LEGACY_URL,
+)
 SCHEDULE_SOURCE: Final = "nse-upstox-composed-calendar"
 SCHEDULE_COMPOSITION_VERSION: Final = "nse-equity-composed-calendar@v2"
 UNRESOLVED_PREFIX: Final = "UNRESOLVED_"
@@ -691,13 +701,15 @@ def _observation_required_spec_v1(  # noqa: C901
         if exact == url:
             return _MAX_EVENT_BYTES, "text/csv", True
         return None
-    holiday = re.fullmatch(
-        re.escape(NSE_HOLIDAY_MASTER_URL) + r"\?type=trading&year=(\d{4})",
-        url,
-    )
-    if holiday is not None:
+    for host in _RETAINED_NSE_HOLIDAY_MASTER_URLS_V1:
+        holiday = re.fullmatch(
+            re.escape(host) + r"\?type=trading&year=(\d{4})",
+            url,
+        )
+        if holiday is None:
+            continue
         year = int(holiday.group(1))
-        if 2000 <= year <= 2100 and nse_holiday_master_url_v1(year) == url:
+        if 2000 <= year <= 2100 and url == f"{host}?type=trading&year={year}":
             return _MAX_SCHEDULE_BYTES, "application/json", False
         return None
     timing = re.fullmatch(
@@ -1447,7 +1459,10 @@ def _compose_calendar_schedule_v1(  # noqa: C901
         len(years) not in (1, 2)
         or observations.upstox_current_year_holidays.request_url != UPSTOX_HOLIDAYS_URL
         or tuple(item.request_url for item in observations.nse_holiday_masters)
-        != tuple(nse_holiday_master_url_v1(year) for year in years)
+        not in {
+            tuple(f"{host}?type=trading&year={year}" for year in years)
+            for host in _RETAINED_NSE_HOLIDAY_MASTER_URLS_V1
+        }
         or tuple(item.request_url for item in observations.upstox_prior_year_timings)
         != tuple(upstox_market_timings_url_v1(day) for day in prior_year_dates)
     ):
@@ -2440,14 +2455,18 @@ def parse_current_calendar_evidence_v1(
             if (schedule.covered_from + timedelta(days=offset)).year
             != schedule.covered_to.year
         )
-        expected_urls = (
-            UPSTOX_HOLIDAYS_URL,
-            *(nse_holiday_master_url_v1(year) for year in years),
-            *(upstox_market_timings_url_v1(day) for day in prior_year_dates),
+        expected_url_sets = tuple(
+            (
+                UPSTOX_HOLIDAYS_URL,
+                *(f"{host}?type=trading&year={year}" for year in years),
+                *(upstox_market_timings_url_v1(day) for day in prior_year_dates),
+            )
+            for host in _RETAINED_NSE_HOLIDAY_MASTER_URLS_V1
         )
         if (
             len(years) not in (1, 2)
-            or tuple(item.request_url for item in observations_raw) != expected_urls
+            or tuple(item.request_url for item in observations_raw)
+            not in expected_url_sets
         ):
             raise ValueError
         observations = _mint_calendar_observation_set(

@@ -25,14 +25,20 @@
 #   SWING_CAPTURE_TIMEOUT, SWING_CAPTURE_KILL_AFTER
 set -u
 
-REPO=${SWING_REPO:-/home/krunaldodiya/WorkSpace/Code/SwingTradingAIAssistant}
-STORE=${SWING_STORAGE_ROOT:-/home/krunaldodiya/SwingTradingAIAssistantData}
+REPO=${SWING_REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}
+STORE=${SWING_STORAGE_ROOT:-$HOME/SwingTradingAIAssistantData}
 LOG=${SWING_LOG_DIR:-$STORE/daily-scan}
-DOPPLER=${DOPPLER_BIN:-/home/krunaldodiya/.local/bin/doppler}
+# Resolve Doppler without assuming a user-local install path. DOPPLER_BIN still
+# wins for an explicit override or a test stub.
+DOPPLER=${DOPPLER_BIN:-$(command -v doppler || true)}
+[ -n "$DOPPLER" ] || DOPPLER=$HOME/.local/bin/doppler
 DOPPLER_PROJECT_NAME=${SWING_DOPPLER_PROJECT:-swing-trading}
 DOPPLER_CONFIG_NAME=${SWING_DOPPLER_CONFIG:-dev}
 STAMP=${SWING_DATE_OVERRIDE:-$(date +%F)}
 DRY_RUN=${SWING_DRY_RUN:-0}
+# Repair a checkout-local environment that was copied or moved. Set to 0 only
+# for tests that must not touch the invoking environment.
+ENSURE_ENVIRONMENT=${SWING_ENSURE_ENVIRONMENT:-1}
 mkdir -p "$LOG"
 
 # Provider credentials come from Doppler under an explicit project/config scope,
@@ -115,6 +121,24 @@ if [ "$DRY_RUN" = "1" ]; then
 fi
 
 cd "$REPO" || exit 1
+
+# A copied or moved .venv keeps absolute shebangs and an editable-install path.
+# Verify (and, by default, rebuild) it before any provider work so a relocation
+# fails here with a precise record instead of midway through the scan.
+if [ "$ENSURE_ENVIRONMENT" != "0" ] &&
+    [ -x "$REPO/scripts/ensure_local_environment.sh" ]; then
+  if ! "$REPO/scripts/ensure_local_environment.sh" --quiet \
+      > "$LOG/environment-$STAMP.log" 2>&1; then
+    echo "$(date -Is) environment_unavailable: see $LOG/environment-$STAMP.log" \
+      >> "$LOG/scan-$STAMP.err"
+    exit 3
+  fi
+fi
+if [ ! -x "$DOPPLER" ]; then
+  echo "$(date -Is) doppler_unavailable: $DOPPLER" >> "$LOG/scan-$STAMP.err"
+  exit 2
+fi
+
 # Suppose the provider stops answering mid-scan. Without a deadline one stalled
 # request consumes the whole pass and systemd eventually kills the unit, leaving
 # an empty page and no record. Fail fast, name the stage, and leave no artifact.

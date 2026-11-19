@@ -1103,6 +1103,9 @@ def test_v3_eligibility_enforces_exact_relative_spread(
     (
         (timedelta(minutes=15), "ELIGIBLE", "PASS"),
         (timedelta(minutes=15, seconds=1), "UNKNOWN", "UNKNOWN"),
+        (timedelta(seconds=-0.349), "ELIGIBLE", "PASS"),
+        (timedelta(minutes=-2), "ELIGIBLE", "PASS"),
+        (timedelta(minutes=-2, seconds=-1), "UNKNOWN", "UNKNOWN"),
     ),
 )
 def test_v3_eligibility_enforces_exact_quote_freshness_boundary(
