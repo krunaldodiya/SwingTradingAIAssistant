@@ -296,6 +296,20 @@ explicitly says skip. The delivered answer MUST name the ledger entry path.
 Persisting the pass is part of the pass, not optional post-processing. The claim
 boundaries in "Product mission and scope" and "Research integrity" apply unchanged.
 
+**Missed completed session (gap fill).** A completed NSE session with no diary
+page or ledger entry is a recoverable gap, not an impossible request. Never tell
+the owner the day cannot be researched. The scanner supports
+`--sessions-back N --refresh` for exactly this (`N` completed sessions before the
+newest official close). Download the missing provider bars first, then fill
+sessions oldest → newest **before** running the newest session: pair state
+advances per scan, and a later backfill for an older session replays the newer
+pair instead of binding the target session. Record the exact `sessions-back`
+command in the ledger entry, keep the target session on the page and entry, and
+state the limitation: structure and candidate facts bind the target session,
+while safety quotes/circuit evidence are live at run time (`SESSIONS_BACK`), so
+the result is a reconstructed pass, never an as-published record. Follow
+[the gap-fill procedure](workflows/automated-nifty100-scan.md#filling-a-missed-completed-session).
+
 ### Tracker and lifecycle
 
 - GitHub is the sole active tracker. Create work through repository Issue forms and manage it in the private SwingTradingAIAssistant Delivery Project.

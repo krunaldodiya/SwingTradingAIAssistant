@@ -55,6 +55,8 @@ doppler run -- signal-decisions scan \
 
 Choose exactly one universe per run: `--nifty50` (50), `--niftynext50` (50), `--nifty100` (100), or `--nifty200` (200). `--nifty100` scans exactly the current official Nifty 100. An explicit 1–100 symbol list uses repeated `--symbol`. Nifty 500 is no longer a runtime scan universe.
 
+If a scheduled session was missed, do not skip it: download its bars first, then reconstruct it with `--sessions-back N` oldest → newest **before** running the newest session. See [Filling a missed completed session](docs/workflows/automated-nifty100-scan.md#filling-a-missed-completed-session).
+
 ```text
 ================================================================================
 SWING TRADING CANDIDATE SCAN — EXPLICIT
