@@ -235,6 +235,54 @@ Malformed, foreign, race-conflicted, or runtime-mismatched state fails closed as
 `OBSERVATION_PAIR_STATE_UNAVAILABLE` with an `UNKNOWN`/`UNKNOWN` row, and every
 requested symbol still appears exactly once in `candidates` or `other_stocks`.
 
+### F. Filling a missed completed session
+
+A missed scheduled run is recoverable. Never say a completed session cannot be
+researched, and never present the reconstruction as an as-published record.
+
+1. **Download first.** Run `scripts/capture_provider_data.sh` for tail gaps, or
+   `scripts/backfill_bharatstock_gap.py --start/--end` for an older range. Verify
+   the target session exists for every member under
+   `bharatstock-session-cache-v1/isin=<ISIN>/exchange=NSE/session=<date>.json`.
+2. **Fill oldest → newest.** Compute `N` as the number of completed official
+   sessions between the target and the newest official close at run time, then:
+
+   ```bash
+   doppler run -- signal-decisions scan \
+     --storage-root /absolute/path/to/SwingTradingAIAssistantData \
+     --nifty200 --refresh --sessions-back "$N" \
+     --retain-decision-evidence --output json \
+     > daily-scan/scan-<target-session>.json \
+     2> daily-scan/scan-<target-session>.err
+   ```
+
+   Require the `SESSIONS_BACK: 200 symbol(s) bound …` warning. Do **not** run the
+   newest session first: pair state advances per scan, and a later backfill for
+   an older session hits `current_session <= stored_session`, replays the stored
+   pair, and labels newer facts with the old session.
+3. **Run the deterministic post-scan stages** with the target date: breadth,
+   benchmark freshness, paper tracking, `swing-analysis … --output json`,
+   `swing-analysis --lifecycle … --output json`, and `scripts/pass_report.py`.
+4. **Skip per-stock dossiers.** `market-data research-run-current` is a
+   current-session command; running it now would attach later facts. State
+   "dossiers not run: reconstructed session" in the report and answer. The filled
+   2026-11-09, 11-11 and 11-12 passes follow this rule.
+5. **Write the ledger entry** with
+   `scripts/write_scan_ledger_entry.py --status recorded` (owner-requested) and
+   include the exact `--sessions-back N` command. Do not use `--backfill`: that
+   flag reconstructs an entry from an already-retained page, not a new
+   retrospective scan.
+6. **Sync and verify**: `rclone copy "$SWING_LEDGER_ROOT"
+   gdrive:SwingResearchLedger --update`, then
+   `scripts/check_ledger_coverage.py --handle <handle> --output table`.
+7. **State the limitation** in the delivered answer: candidate structure and age
+   bind the target session; safety quotes, circuit distance and turnover were
+   fetched live at run time (`SESSIONS_BACK`). The pass is reconstructed after
+   the fact and must not be described as the missed day's as-published decision.
+
+Precedent: on 2026-11-13 the 2026-11-09, 2026-11-11 and 2026-11-12 sessions were
+filled with `--sessions-back 3`, `2` and `1` respectively.
+
 ---
 
 ## 3. Terminal Table Output Example
