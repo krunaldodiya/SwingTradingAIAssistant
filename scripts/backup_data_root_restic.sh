@@ -113,7 +113,7 @@ fi
 PASSWORD_READY=0
 if [ -n "${SWING_RESTIC_PASSWORD:-}" ]; then
   export RESTIC_PASSWORD="$SWING_RESTIC_PASSWORD"
-  unset RESTIC_PASSWORD_FILE 2>/dev/null || true
+  unset RESTIC_PASSWORD_FILE RESTIC_PASSWORD_COMMAND 2>/dev/null || true
   PASSWORD_READY=1
 fi
 
@@ -138,6 +138,11 @@ count_source() {
   SIZE=$(du -sh "$STORAGE_ROOT" 2>/dev/null | cut -f1)
 }
 
+[ -n "$REPOSITORY" ] || invalid "repository is required"
+case "$REPOSITORY" in
+  *://*@*) invalid "repository must not embed credentials: $REPOSITORY" ;;
+esac
+
 if [ "$DRY_RUN" -eq 1 ]; then
   info "dry run, nothing will be written"
   if [ "$COMMAND" = "backup" ]; then
@@ -159,10 +164,6 @@ if [ "$DRY_RUN" -eq 1 ]; then
 fi
 
 [ "$PASSWORD_READY" -eq 1 ] || invalid "SWING_RESTIC_PASSWORD is required"
-[ -n "$REPOSITORY" ] || invalid "repository is required"
-case "$REPOSITORY" in
-  *@*) invalid "repository must not embed credentials: $REPOSITORY" ;;
-esac
 
 RESTIC_OPTS=()
 case "$REPOSITORY" in
@@ -196,12 +197,19 @@ ensure_repository() {
 
 case "$COMMAND" in
   init)
-    if restic_run cat config >/dev/null 2>&1; then
-      fail "repository is already initialized: $REPOSITORY"
-    fi
-    restic_run init || fail "restic init failed"
-    info "initialized $REPOSITORY"
-    exit 0
+    restic_run cat config >/dev/null 2>&1
+    code=$?
+    case "$code" in
+      0) fail "repository is already initialized: $REPOSITORY" ;;
+      10)
+        restic_run init || fail "restic init failed"
+        info "initialized $REPOSITORY"
+        exit 0
+        ;;
+      *)
+        fail "repository is unreadable (restic exit $code); refusing to initialize: $REPOSITORY"
+        ;;
+    esac
     ;;
   snapshots)
     restic_run snapshots || fail "cannot list snapshots"
@@ -220,21 +228,14 @@ case "$COMMAND" in
       /*) ;;
       *) invalid "--target must be absolute" ;;
     esac
+    STORAGE_ROOT_GUARD=${STORAGE_ROOT%/}
+    [ -n "$STORAGE_ROOT_GUARD" ] || STORAGE_ROOT_GUARD=/
     case "$TARGET" in
-      "$STORAGE_ROOT"|"$STORAGE_ROOT"/*)
+      "$STORAGE_ROOT_GUARD"|"$STORAGE_ROOT_GUARD"/*)
         invalid "restore target must not be inside the data root"
         ;;
     esac
     [ -L "$TARGET" ] && invalid "restore target must not be a symlink"
-    if [ -e "$TARGET" ]; then
-      [ -d "$TARGET" ] || invalid "restore target is not a directory"
-      [ "$(stat -c %u "$TARGET")" = "$(id -u)" ] \
-        || invalid "restore target must be owned by the invoking user"
-      chmod 700 "$TARGET" || fail "cannot secure restore target"
-      [ -z "$(ls -A "$TARGET")" ] || invalid "restore target must be empty"
-    else
-      mkdir -m 700 "$TARGET" || fail "cannot create restore target"
-    fi
     SNAPSHOT_PATH=$(
       restic_run snapshots --json | python3 -c '
 import json
@@ -260,6 +261,15 @@ if not paths:
 print(paths[0])
 ' "$SNAPSHOT"
     ) || fail "cannot resolve snapshot path"
+    if [ -e "$TARGET" ]; then
+      [ -d "$TARGET" ] || invalid "restore target is not a directory"
+      [ "$(stat -c %u "$TARGET")" = "$(id -u)" ] \
+        || invalid "restore target must be owned by the invoking user"
+      [ -z "$(ls -A "$TARGET")" ] || invalid "restore target must be empty"
+      chmod 700 "$TARGET" || fail "cannot secure restore target"
+    else
+      mkdir -m 700 "$TARGET" || fail "cannot create restore target"
+    fi
     info "restoring snapshot $SNAPSHOT from $REPOSITORY"
     restic_run restore "$SNAPSHOT" --target "$TARGET" --verify \
       || fail "restore failed"

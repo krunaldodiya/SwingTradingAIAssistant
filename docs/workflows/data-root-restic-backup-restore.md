@@ -108,6 +108,10 @@ find <target>/home/<user>/SwingTradingAIAssistantData -type d | wc -l
 The restore drill required by Plan 82 compares those counts and sample file
 hashes with the source. A backup is not accepted until that drill passes.
 
+The wrapper’s `latest` selection uses the newest snapshot in this dedicated
+repository. This repository is not multi-host; pass an explicit snapshot ID if
+that assumption changes.
+
 ## Retention
 
 Default retention is 7 daily, 4 weekly and 6 monthly snapshots. At least one

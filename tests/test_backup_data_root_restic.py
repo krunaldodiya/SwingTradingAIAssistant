@@ -58,6 +58,10 @@ def _env(
         env["SWING_RESTIC_PASSWORD"] = (
             password if password is not None else _TEST_PASSWORD
         )
+    rclone_stub = tmp_path / "rclone-stub-default"
+    rclone_stub.write_text("#!/usr/bin/env bash\nexit 1\n", encoding="utf-8")
+    rclone_stub.chmod(0o755)
+    env["SWING_RCLONE_BIN"] = str(rclone_stub)
     return env
 
 
@@ -384,3 +388,90 @@ def test_init_is_idempotent(tmp_path: Path) -> None:
     assert first.returncode == 0, first.stderr
     assert second.returncode == 1
     assert "already initialized" in second.stderr
+
+
+def test_ambient_password_command_does_not_override_project_secret(
+    tmp_path: Path,
+) -> None:
+    root = _data_root(tmp_path)
+    env = _env(tmp_path, root)
+    env["RESTIC_PASSWORD_COMMAND"] = "echo ambient-pass"  # noqa: S105 - test fixture
+
+    result = _run(env, "backup")
+
+    assert result.returncode == 0, result.stderr
+    assert _snapshot_count(tmp_path) == 1
+    restic = shutil.which("restic")
+    assert restic is not None
+    ambient = {
+        key: value
+        for key, value in os.environ.items()
+        if key
+        not in {"RESTIC_PASSWORD", "RESTIC_PASSWORD_FILE", "RESTIC_PASSWORD_COMMAND"}
+    }
+    ambient["RESTIC_PASSWORD"] = "ambient-pass"  # noqa: S105 - test fixture
+    opened = subprocess.run(  # noqa: S603 - trusted restic binary
+        [restic, "-r", str(tmp_path / "repo"), "snapshots"],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=ambient,
+    )
+    assert opened.returncode != 0
+
+
+def test_ambient_password_command_alone_fails_closed(tmp_path: Path) -> None:
+    root = _data_root(tmp_path)
+    env = _env(tmp_path, root, missing_password=True)
+    env["RESTIC_PASSWORD_COMMAND"] = "echo ambient-pass"  # noqa: S105 - test fixture
+
+    result = _run(env, "backup")
+
+    assert result.returncode == 2
+    assert "SWING_RESTIC_PASSWORD is required" in result.stderr
+    assert not (tmp_path / "repo").exists()
+
+
+def test_restore_target_with_trailing_slash_root_is_rejected(
+    tmp_path: Path,
+) -> None:
+    root = _data_root(tmp_path)
+    env = _env(tmp_path, root)
+    assert _run(env, "backup").returncode == 0
+    env["SWING_STORAGE_ROOT"] = f"{root}/"
+
+    result = _run(
+        env,
+        "restore",
+        "--snapshot",
+        "latest",
+        "--target",
+        f"{root}/restore",
+    )
+
+    assert result.returncode == 2
+    assert "must not be inside the data root" in result.stderr
+
+
+def test_init_unreadable_repository_is_not_initialized(tmp_path: Path) -> None:
+    root = _data_root(tmp_path)
+    env = _env(tmp_path, root)
+    marker = tmp_path / "init-called"
+    stub = tmp_path / "restic-stub"
+    stub.write_text(
+        "#!/usr/bin/env bash\n"
+        'case "$*" in\n'
+        '  *" cat config"*) exit 1 ;;\n'
+        f"  *\" init\"*) touch '{marker}'; exit 0 ;;\n"
+        "  *) exit 0 ;;\n"
+        "esac\n",
+        encoding="utf-8",
+    )
+    stub.chmod(0o755)
+    env["SWING_RESTIC_BIN"] = str(stub)
+
+    result = _run(env, "init")
+
+    assert result.returncode == 1
+    assert "refusing to initialize" in result.stderr
+    assert not marker.exists()
