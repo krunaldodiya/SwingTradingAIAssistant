@@ -68,10 +68,11 @@ snapshot; the next run retries it.
 
 `restore --snapshot latest --target DIR` restores the exact restic snapshot into
 an empty private directory. Restic preserves absolute paths under the target, so
-the restored data root is
-`DIR/home/<user>/SwingTradingAIAssistantData`. The script prints that path and the
-manifest counts. `check` runs `restic check`; `snapshots` lists repository
-snapshots.
+the restored data root is resolved from the snapshot itself, not from the current
+host's `STORAGE_ROOT`. The script prints that path and freshly counted files and
+directories. `check` runs `restic check`; `snapshots` lists repository snapshots.
+Only `backup` requires the live data root; restore, check, snapshots and init do
+not.
 
 ### Schedule
 

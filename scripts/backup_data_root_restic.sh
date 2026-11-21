@@ -12,7 +12,7 @@ REPOSITORY=${SWING_RESTIC_REPOSITORY:-rclone:gdrive:Backups/SwingTradingAIAssist
 RESTIC_BIN=${SWING_RESTIC_BIN:-restic}
 RCLONE_BIN=${SWING_RCLONE_BIN:-$(command -v rclone || true)}
 STATE_DIR=${SWING_BACKUP_STATE_DIR:-$HOME/.local/state/swing-trading-ai-assistant/backup}
-MANIFEST_REMOTE=${SWING_BACKUP_MANIFEST_REMOTE:-gdrive:Backups/SwingTradingAIAssistantData-restic-manifests}
+MANIFEST_REMOTE=${SWING_BACKUP_MANIFEST_REMOTE-gdrive:Backups/SwingTradingAIAssistantData-restic-manifests}
 TAG=${SWING_BACKUP_TAG:-swing-trading-ai-assistant}
 KEEP_DAILY=${SWING_BACKUP_KEEP_DAILY:-7}
 KEEP_WEEKLY=${SWING_BACKUP_KEEP_WEEKLY:-4}
@@ -78,17 +78,21 @@ if [ "$#" -gt 0 ]; then
   esac
 fi
 
+need_value() {
+  [ "$#" -ge 2 ] || invalid "missing value for $1"
+}
+
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --storage-root) STORAGE_ROOT=${2:?missing value}; shift 2 ;;
-    --repository) REPOSITORY=${2:?missing value}; shift 2 ;;
-    --state-dir) STATE_DIR=${2:?missing value}; shift 2 ;;
-    --manifest-remote) MANIFEST_REMOTE=${2:-}; shift 2 ;;
-    --keep-daily) KEEP_DAILY=${2:?missing value}; shift 2 ;;
-    --keep-weekly) KEEP_WEEKLY=${2:?missing value}; shift 2 ;;
-    --keep-monthly) KEEP_MONTHLY=${2:?missing value}; shift 2 ;;
-    --snapshot) SNAPSHOT=${2:?missing value}; shift 2 ;;
-    --target) TARGET=${2:?missing value}; shift 2 ;;
+    --storage-root) need_value "$@"; STORAGE_ROOT=$2; shift 2 ;;
+    --repository) need_value "$@"; REPOSITORY=$2; shift 2 ;;
+    --state-dir) need_value "$@"; STATE_DIR=$2; shift 2 ;;
+    --manifest-remote) need_value "$@"; MANIFEST_REMOTE=$2; shift 2 ;;
+    --keep-daily) need_value "$@"; KEEP_DAILY=$2; shift 2 ;;
+    --keep-weekly) need_value "$@"; KEEP_WEEKLY=$2; shift 2 ;;
+    --keep-monthly) need_value "$@"; KEEP_MONTHLY=$2; shift 2 ;;
+    --snapshot) need_value "$@"; SNAPSHOT=$2; shift 2 ;;
+    --target) need_value "$@"; TARGET=$2; shift 2 ;;
     --prune) PRUNE=1; shift ;;
     --full-check) FULL_CHECK=1; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
@@ -106,28 +110,41 @@ if [ "$KEEP_DAILY" -eq 0 ] && [ "$KEEP_WEEKLY" -eq 0 ] && [ "$KEEP_MONTHLY" -eq 
   invalid "at least one retention window must be non-zero"
 fi
 
-[ -d "$STORAGE_ROOT" ] || invalid "storage root unavailable: $STORAGE_ROOT"
-MODE=$(stat -c %a "$STORAGE_ROOT" 2>/dev/null || true)
-[ "$MODE" = "700" ] || invalid "storage root must be mode 0700 (found ${MODE:-unknown}): $STORAGE_ROOT"
-
-if [ -z "${RESTIC_PASSWORD:-}" ] && [ -z "${RESTIC_PASSWORD_FILE:-}" ] \
-  && [ -n "${SWING_RESTIC_PASSWORD:-}" ]; then
-  export RESTIC_PASSWORD="$SWING_RESTIC_PASSWORD"
-fi
-
 PASSWORD_READY=0
-if [ -n "${RESTIC_PASSWORD:-}" ] || [ -n "${RESTIC_PASSWORD_FILE:-}" ]; then
+if [ -n "${SWING_RESTIC_PASSWORD:-}" ]; then
+  export RESTIC_PASSWORD="$SWING_RESTIC_PASSWORD"
+  unset RESTIC_PASSWORD_FILE 2>/dev/null || true
   PASSWORD_READY=1
 fi
 
-FILES=$(find "$STORAGE_ROOT" -type f 2>/dev/null | wc -l)
-DIRS=$(find "$STORAGE_ROOT" -type d 2>/dev/null | wc -l)
-LINKS=$(find "$STORAGE_ROOT" -type l 2>/dev/null | wc -l)
-SIZE=$(du -sh "$STORAGE_ROOT" 2>/dev/null | cut -f1)
+validate_storage_root() {
+  [ -d "$STORAGE_ROOT" ] || invalid "storage root unavailable: $STORAGE_ROOT"
+  case "$STORAGE_ROOT" in
+    /*) ;;
+    *) invalid "storage root must be absolute: $STORAGE_ROOT" ;;
+  esac
+  [ -L "$STORAGE_ROOT" ] && invalid "storage root must not be a symlink: $STORAGE_ROOT"
+  [ "$(stat -c %u "$STORAGE_ROOT" 2>/dev/null || true)" = "$(id -u)" ] \
+    || invalid "storage root must be owned by the invoking user: $STORAGE_ROOT"
+  MODE=$(stat -c %a "$STORAGE_ROOT" 2>/dev/null || true)
+  [ "$MODE" = "700" ] \
+    || invalid "storage root must be mode 0700 (found ${MODE:-unknown}): $STORAGE_ROOT"
+}
+
+count_source() {
+  FILES=$(find "$STORAGE_ROOT" -type f 2>/dev/null | wc -l)
+  DIRS=$(find "$STORAGE_ROOT" -type d 2>/dev/null | wc -l)
+  LINKS=$(find "$STORAGE_ROOT" -type l 2>/dev/null | wc -l)
+  SIZE=$(du -sh "$STORAGE_ROOT" 2>/dev/null | cut -f1)
+}
 
 if [ "$DRY_RUN" -eq 1 ]; then
   info "dry run, nothing will be written"
-  info "source $STORAGE_ROOT ($SIZE, $FILES files, $DIRS dirs, $LINKS symlinks)"
+  if [ "$COMMAND" = "backup" ]; then
+    validate_storage_root
+    count_source
+    info "source $STORAGE_ROOT ($SIZE, $FILES files, $DIRS dirs, $LINKS symlinks)"
+  fi
   info "repository $REPOSITORY"
   info "retention daily=$KEEP_DAILY weekly=$KEEP_WEEKLY monthly=$KEEP_MONTHLY prune=$PRUNE"
   if [ "$PASSWORD_READY" -eq 1 ]; then
@@ -143,6 +160,9 @@ fi
 
 [ "$PASSWORD_READY" -eq 1 ] || invalid "SWING_RESTIC_PASSWORD is required"
 [ -n "$REPOSITORY" ] || invalid "repository is required"
+case "$REPOSITORY" in
+  *@*) invalid "repository must not embed credentials: $REPOSITORY" ;;
+esac
 
 RESTIC_OPTS=()
 case "$REPOSITORY" in
@@ -159,13 +179,19 @@ restic_run() {
 }
 
 ensure_repository() {
-  if restic_run cat config >/dev/null 2>&1; then
-    return 0
-  fi
-  info "initializing repository $REPOSITORY"
-  if ! restic_run init >/dev/null 2>&1; then
-    fail "repository is unreadable and could not be initialized: $REPOSITORY"
-  fi
+  restic_run cat config >/dev/null 2>&1
+  local code=$?
+  case "$code" in
+    0) return 0 ;;
+    10)
+      info "initializing repository $REPOSITORY"
+      restic_run init >/dev/null 2>&1 \
+        || fail "repository could not be initialized: $REPOSITORY"
+      ;;
+    *)
+      fail "repository is unreadable (restic exit $code); refusing to initialize: $REPOSITORY"
+      ;;
+  esac
 }
 
 case "$COMMAND" in
@@ -194,16 +220,50 @@ case "$COMMAND" in
       /*) ;;
       *) invalid "--target must be absolute" ;;
     esac
+    case "$TARGET" in
+      "$STORAGE_ROOT"|"$STORAGE_ROOT"/*)
+        invalid "restore target must not be inside the data root"
+        ;;
+    esac
+    [ -L "$TARGET" ] && invalid "restore target must not be a symlink"
     if [ -e "$TARGET" ]; then
       [ -d "$TARGET" ] || invalid "restore target is not a directory"
+      [ "$(stat -c %u "$TARGET")" = "$(id -u)" ] \
+        || invalid "restore target must be owned by the invoking user"
+      chmod 700 "$TARGET" || fail "cannot secure restore target"
       [ -z "$(ls -A "$TARGET")" ] || invalid "restore target must be empty"
     else
       mkdir -m 700 "$TARGET" || fail "cannot create restore target"
     fi
+    SNAPSHOT_PATH=$(
+      restic_run snapshots --json | python3 -c '
+import json
+import sys
+
+wanted = sys.argv[1]
+items = json.load(sys.stdin)
+if not isinstance(items, list) or not items:
+    raise SystemExit(1)
+selected = None
+if wanted == "latest":
+    selected = max(items, key=lambda item: item.get("time", ""))
+else:
+    for item in items:
+        if item.get("id") == wanted or item.get("short_id") == wanted:
+            selected = item
+            break
+if selected is None:
+    raise SystemExit(1)
+paths = selected.get("paths") or []
+if not paths:
+    raise SystemExit(1)
+print(paths[0])
+' "$SNAPSHOT"
+    ) || fail "cannot resolve snapshot path"
     info "restoring snapshot $SNAPSHOT from $REPOSITORY"
     restic_run restore "$SNAPSHOT" --target "$TARGET" --verify \
       || fail "restore failed"
-    RESTORED="$TARGET$STORAGE_ROOT"
+    RESTORED="$TARGET$SNAPSHOT_PATH"
     info "restored to $RESTORED"
     if [ -d "$RESTORED" ]; then
       info "restored files $(find "$RESTORED" -type f | wc -l), directories $(find "$RESTORED" -type d | wc -l)"
@@ -213,6 +273,8 @@ case "$COMMAND" in
     exit 0
     ;;
   backup)
+    validate_storage_root
+    count_source
     ;;
   *)
     invalid "unknown command: $COMMAND"
@@ -226,7 +288,6 @@ ERR="$STATE_DIR/restic-backup.err"
 ensure_repository
 
 HOST=$(hostname 2>/dev/null || echo unknown)
-SNAPSHOT_STARTED=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 info "backup source $STORAGE_ROOT ($SIZE, $FILES files, $DIRS dirs, $LINKS symlinks)"
 info "repository $REPOSITORY"
 
@@ -308,7 +369,7 @@ CREATED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 RESTIC_VERSION=$("$RESTIC_BIN" version 2>/dev/null | head -n 1)
 [ -n "$RESTIC_VERSION" ] || RESTIC_VERSION=unknown
 
-REPOSITORY="$REPOSITORY" SNAPSHOT_ID="$SNAPSHOT_ID" SNAPSHOT_TIME="$SNAPSHOT_TIME" \
+if ! REPOSITORY="$REPOSITORY" SNAPSHOT_ID="$SNAPSHOT_ID" SNAPSHOT_TIME="$SNAPSHOT_TIME" \
 HOST="$HOST" STORAGE_ROOT="$STORAGE_ROOT" FILES="$FILES" DIRS="$DIRS" LINKS="$LINKS" \
 FILES_NEW="$FILES_NEW" FILES_CHANGED="$FILES_CHANGED" DATA_ADDED="$DATA_ADDED" \
 TOTAL_FILES="$TOTAL_FILES" TOTAL_BYTES="$TOTAL_BYTES" RESTIC_VERSION="$RESTIC_VERSION" \
@@ -386,6 +447,9 @@ find restored-data -type d | wc -l
 )
 
 PY
+then
+  fail "manifest write failed"
+fi
 
 if [ -n "$MANIFEST_REMOTE" ]; then
   if ! "$RCLONE_BIN" copy "$STATE_DIR" "$MANIFEST_REMOTE" \
@@ -396,7 +460,8 @@ if [ -n "$MANIFEST_REMOTE" ]; then
   fi
 fi
 
-rm -f "$JSON" "$ERR" "$STATE_DIR/forget.log" "$STATE_DIR/check.log"
+rm -f "$JSON" "$ERR" "$STATE_DIR/forget.log" "$STATE_DIR/check.log" \
+  "$STATE_DIR/manifest-upload.log"
 
 info "done: snapshot $SNAPSHOT_ID"
 info "files_new $FILES_NEW, files_changed $FILES_CHANGED, data_added $DATA_ADDED bytes"

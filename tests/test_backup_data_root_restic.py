@@ -227,3 +227,160 @@ def test_all_zero_retention_is_rejected(tmp_path: Path) -> None:
 
     assert result.returncode == 2
     assert "at least one retention window" in result.stderr
+
+
+def test_empty_manifest_remote_skips_upload(tmp_path: Path) -> None:
+    root = _data_root(tmp_path)
+    env = _env(tmp_path, root)
+    marker = tmp_path / "rclone-called"
+    stub = tmp_path / "rclone-stub"
+    stub.write_text(
+        f"#!/usr/bin/env bash\ntouch '{marker}'\nexit 0\n",
+        encoding="utf-8",
+    )
+    stub.chmod(0o755)
+    env["SWING_RCLONE_BIN"] = str(stub)
+
+    result = _run(env, "backup")
+
+    assert result.returncode == 0, result.stderr
+    assert not marker.exists()
+
+
+def test_check_and_snapshots_work_without_source_root(tmp_path: Path) -> None:
+    root = _data_root(tmp_path)
+    env = _env(tmp_path, root)
+    assert _run(env, "backup").returncode == 0
+    root.rename(tmp_path / "moved")
+    env["SWING_STORAGE_ROOT"] = str(tmp_path / "missing")
+
+    check = _run(env, "check")
+    snapshots = _run(env, "snapshots")
+
+    assert check.returncode == 0, check.stderr
+    assert snapshots.returncode == 0, snapshots.stderr
+
+
+def test_restore_works_without_source_root(tmp_path: Path) -> None:
+    root = _data_root(tmp_path)
+    env = _env(tmp_path, root)
+    assert _run(env, "backup").returncode == 0
+    original = root
+    root.rename(tmp_path / "moved")
+    env["SWING_STORAGE_ROOT"] = str(tmp_path / "missing")
+    target = tmp_path / "restore"
+
+    result = _run(env, "restore", "--snapshot", "latest", "--target", str(target))
+
+    assert result.returncode == 0, result.stderr
+    restored = target / original.relative_to("/")
+    assert (restored / "file-a.json").read_text() == '{"a": 1}'
+    assert (restored / "nested" / "file-b.txt").read_text() == "b"
+
+
+def test_manifest_write_failure_fails(tmp_path: Path) -> None:
+    root = _data_root(tmp_path)
+    env = _env(tmp_path, root)
+    state = tmp_path / "state"
+    state.mkdir(mode=0o700)
+    (state / "VERIFICATION.json").mkdir()
+
+    result = _run(env, "backup")
+
+    assert result.returncode == 1
+    assert "manifest write failed" in result.stderr
+
+
+def test_ambient_restic_password_is_rejected(tmp_path: Path) -> None:
+    root = _data_root(tmp_path)
+    env = _env(tmp_path, root, missing_password=True)
+    env["RESTIC_PASSWORD"] = "workstation-pass"  # noqa: S105 - test fixture
+
+    result = _run(env, "backup")
+
+    assert result.returncode == 2
+    assert "SWING_RESTIC_PASSWORD is required" in result.stderr
+    assert not (tmp_path / "repo").exists()
+
+
+def test_unreadable_repository_is_not_initialized(tmp_path: Path) -> None:
+    root = _data_root(tmp_path)
+    env = _env(tmp_path, root)
+    marker = tmp_path / "init-called"
+    stub = tmp_path / "restic-stub"
+    stub.write_text(
+        "#!/usr/bin/env bash\n"
+        'case "$*" in\n'
+        '  *" cat config"*) exit 1 ;;\n'
+        f"  *\" init\"*) touch '{marker}'; exit 0 ;;\n"
+        "  *) exit 0 ;;\n"
+        "esac\n",
+        encoding="utf-8",
+    )
+    stub.chmod(0o755)
+    env["SWING_RESTIC_BIN"] = str(stub)
+
+    result = _run(env, "backup")
+
+    assert result.returncode == 1
+    assert "refusing to initialize" in result.stderr
+    assert not marker.exists()
+
+
+def test_missing_manifest_remote_value_is_rejected(tmp_path: Path) -> None:
+    root = _data_root(tmp_path)
+    env = _env(tmp_path, root)
+
+    result = _run(env, "backup", "--manifest-remote")
+
+    assert result.returncode == 2
+    assert "missing value for --manifest-remote" in result.stderr
+
+
+def test_restore_target_inside_data_root_is_rejected(tmp_path: Path) -> None:
+    root = _data_root(tmp_path)
+    env = _env(tmp_path, root)
+    assert _run(env, "backup").returncode == 0
+
+    result = _run(
+        env,
+        "restore",
+        "--snapshot",
+        "latest",
+        "--target",
+        str(root / "restore"),
+    )
+
+    assert result.returncode == 2
+    assert "must not be inside the data root" in result.stderr
+
+
+def test_restore_unknown_snapshot_fails(tmp_path: Path) -> None:
+    root = _data_root(tmp_path)
+    env = _env(tmp_path, root)
+    assert _run(env, "backup").returncode == 0
+    target = tmp_path / "restore"
+
+    result = _run(
+        env,
+        "restore",
+        "--snapshot",
+        "0" * 64,
+        "--target",
+        str(target),
+    )
+
+    assert result.returncode == 1
+    assert "cannot resolve snapshot path" in result.stderr
+
+
+def test_init_is_idempotent(tmp_path: Path) -> None:
+    root = _data_root(tmp_path)
+    env = _env(tmp_path, root)
+
+    first = _run(env, "init")
+    second = _run(env, "init")
+
+    assert first.returncode == 0, first.stderr
+    assert second.returncode == 1
+    assert "already initialized" in second.stderr

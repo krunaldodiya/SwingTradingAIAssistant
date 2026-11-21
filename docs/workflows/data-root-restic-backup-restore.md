@@ -32,18 +32,23 @@ Other modes:
 
 ```bash
 # Plan only; no repository or manifest writes.
-scripts/backup_data_root_restic.sh backup --dry-run
+doppler run --project swing-trading --config dev_backup -- \
+  scripts/backup_data_root_restic.sh backup --dry-run
 
 # Verify the repository.
-scripts/backup_data_root_restic.sh check
-scripts/backup_data_root_restic.sh check --full-check
+doppler run --project swing-trading --config dev_backup -- \
+  scripts/backup_data_root_restic.sh check
+doppler run --project swing-trading --config dev_backup -- \
+  scripts/backup_data_root_restic.sh check --full-check
 
 # List snapshots.
-scripts/backup_data_root_restic.sh snapshots
+doppler run --project swing-trading --config dev_backup -- \
+  scripts/backup_data_root_restic.sh snapshots
 
 # Restore one snapshot into a new empty directory.
 mkdir -m 700 /absolute/restore-target
-scripts/backup_data_root_restic.sh restore --snapshot latest \
+doppler run --project swing-trading --config dev_backup -- \
+  scripts/backup_data_root_restic.sh restore --snapshot latest \
   --target /absolute/restore-target
 ```
 
@@ -80,7 +85,9 @@ Every successful backup writes:
 
 The manifest is uploaded with `rclone copy --update`. A manifest upload failure
 does not invalidate the snapshot; the local manifest remains and the next run
-retries.
+retries. The manifest is **not encrypted by restic**; it contains the source
+path, hostname, repository path and counts, but no file contents or password.
+Keep the manifest Drive folder owner-private and unshared.
 
 ## Restore and verification
 
@@ -104,8 +111,9 @@ hashes with the source. A backup is not accepted until that drill passes.
 ## Retention
 
 Default retention is 7 daily, 4 weekly and 6 monthly snapshots. At least one
-window must be non-zero. `--prune` is explicit and removes unreferenced pack
-data; it never runs unless requested.
+window must be non-zero. `restic forget` applies these windows on every backup
+and can remove snapshot references; `--prune` only reclaims pack data that no
+retained snapshot uses. `--prune` is explicit and never runs unless requested.
 
 ## Failure rules
 

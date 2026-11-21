@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Install (or reinstall) the repository-owned research scheduling units.
 #
-# Three independent schedules live here, all owned by this repository:
+# Four independent schedules live here, all owned by this repository:
 #   swing-data-capture.timer   optional 20:00 head start (PRD: not required)
 #   swing-daily-scan.timer     runs the after-close Nifty 200 research pass
 #   research-ledger-sync.timer mirrors the private ledger to Google Drive hourly
