@@ -15,6 +15,8 @@ _UNITS = (
     "swing-daily-scan.timer",
     "research-ledger-sync.service",
     "research-ledger-sync.timer",
+    "swing-data-backup.service",
+    "swing-data-backup.timer",
 )
 
 
@@ -28,6 +30,7 @@ def _render(template: Path, tmp_path: Path) -> str:
         "@LOGDIR@": str(tmp_path / "rclone"),
         "@PROJECT@": "swing-trading",
         "@CONFIG@": "dev",
+        "@BACKUP_CONFIG@": "dev_backup",
     }
     for placeholder, value in replacements.items():
         text = text.replace(placeholder, value)
@@ -40,6 +43,7 @@ def _env(
     capture_enabled: bool,
     scan_enabled: bool = True,
     sync_enabled: bool = True,
+    backup_enabled: bool = True,
     missing: str | None = None,
     stale: str | None = None,
 ) -> dict[str, str]:
@@ -64,6 +68,8 @@ def _env(
         f"    exit {0 if scan_enabled else 1} ;;\n"
         '  *"is-enabled research-ledger-sync.timer"*)\n'
         f"    exit {0 if sync_enabled else 1} ;;\n"
+        '  *"is-enabled swing-data-backup.timer"*)\n'
+        f"    exit {0 if backup_enabled else 1} ;;\n"
         "  *) exit 0 ;;\n"
         "esac\n"
     )
@@ -75,6 +81,7 @@ def _env(
         "SWING_SYNC_LOG_DIR": str(tmp_path / "rclone"),
         "SWING_DOPPLER_PROJECT": "swing-trading",
         "SWING_DOPPLER_CONFIG": "dev",
+        "SWING_BACKUP_DOPPLER_CONFIG": "dev_backup",
         "PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
     }
 
@@ -102,6 +109,26 @@ def test_check_still_fails_without_the_required_scan_timer(tmp_path: Path) -> No
 
     assert result.returncode == 1
     assert "MISSING: swing-daily-scan.timer" in result.stderr
+
+
+def test_check_still_fails_without_the_required_backup_timer(tmp_path: Path) -> None:
+    result = _run(_env(tmp_path, capture_enabled=True, backup_enabled=False))
+
+    assert result.returncode == 1
+    assert "MISSING: swing-data-backup.timer" in result.stderr
+
+
+def test_check_requires_the_backup_unit_files(tmp_path: Path) -> None:
+    result = _run(
+        _env(
+            tmp_path,
+            capture_enabled=False,
+            missing="swing-data-backup.service",
+        )
+    )
+
+    assert result.returncode == 1
+    assert "MISSING: swing-data-backup.service" in result.stderr
 
 
 def test_check_requires_the_capture_timer_file_but_not_its_enablement(
