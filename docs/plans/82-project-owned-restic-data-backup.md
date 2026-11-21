@@ -105,6 +105,19 @@ snapshots.
 - Documentation names the exact backup, check, restore and password-scope
   commands.
 
+## Delivery evidence (2026-11-21)
+
+- First snapshot `a798d82d10786aeb64bbb4410d821c6dcde17e983d9715947dc1559a6f77fa55`:
+  90,165 files, 2,763 directories, full `restic check --read-data` passed.
+- Restore drill matched 90,165 files, 2,763 directories, identical paths and sizes,
+  and matching sample hashes; restic `--verify` passed.
+- Incremental rerun: 0 new files, 0 changed files, 0 bytes added; repository grew
+  471 bytes.
+- `swing-data-backup.service` exercised successfully with Doppler `dev_backup`;
+  `swing-data-backup.timer` enabled for 22:00 IST.
+- Full `backup_data_root.sh` feature, test and docs removed; old Drive archive and
+  recovery key removed; workstation-global restic excludes the data root.
+
 ## Non-goals
 
 - No replacement of the separate ledger mirror.

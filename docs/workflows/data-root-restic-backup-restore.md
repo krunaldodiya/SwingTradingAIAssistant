@@ -117,12 +117,12 @@ data; it never runs unless requested.
 - Manifest upload failure: the snapshot remains valid; the local manifest is
   kept and the failure is reported.
 
-## Transition
+## Transition completed
 
-The full `scripts/backup_data_root.sh` archive remains in the repository only
-until the restic backup, timer and restore drill pass. It is then removed under
-Issue #435. The old `gdrive:SwingTradingAIAssistantData` archive and recovery key
-are deleted only after that verification and explicit owner confirmation.
+The full `scripts/backup_data_root.sh` feature, its tests and its documentation
+were removed after the restic backup, timer and restore drill passed (Issue #435).
+The old `gdrive:SwingTradingAIAssistantData` archive and recovery key were deleted
+after that verification and owner confirmation.
 
-The workstation-global restic backup excludes `~/SwingTradingAIAssistantData`
-only after this project backup is verified.
+The workstation-global restic backup excludes `~/SwingTradingAIAssistantData`;
+this project-owned restic repository is the authoritative data-root backup.
