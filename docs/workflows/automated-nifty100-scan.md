@@ -814,6 +814,11 @@ Two limits are stated in the output itself:
 
 ## Backing up the data root
 
+> **Project-owned incremental backup:** use
+> [data-root restic backup and restore](data-root-restic-backup-restore.md).
+> The full archive procedure below is being retired after the restic backup and
+> restore drill pass.
+
 The private evidence store is not reproducible: a later download cannot rebuild
 what was known earlier. `scripts/backup_data_root.sh` makes the snapshot
 repeatable instead of a remembered sequence:

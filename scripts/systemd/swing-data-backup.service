@@ -1,0 +1,14 @@
+[Unit]
+Description=Project-owned restic incremental backup of the private data root
+Documentation=file://@REPO@/docs/workflows/data-root-restic-backup-restore.md
+After=network-online.target swing-daily-scan.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=@REPO@
+ExecStart=/usr/bin/doppler run --project @PROJECT@ --config @BACKUP_CONFIG@ -- @REPO@/scripts/backup_data_root_restic.sh backup --prune
+Environment=SWING_STORAGE_ROOT=@STORE@
+Environment=SWING_DOPPLER_PROJECT=@PROJECT@
+Environment=SWING_DOPPLER_CONFIG=@BACKUP_CONFIG@
+TimeoutStartSec=3600

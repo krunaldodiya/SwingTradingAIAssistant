@@ -1,0 +1,12 @@
+[Unit]
+Description=Daily project-owned restic backup at 22:00 IST
+Documentation=file://@REPO@/docs/workflows/data-root-restic-backup-restore.md
+
+[Timer]
+OnCalendar=*-*-* 22:00:00 Asia/Kolkata
+Persistent=true
+AccuracySec=1min
+Unit=swing-data-backup.service
+
+[Install]
+WantedBy=timers.target
