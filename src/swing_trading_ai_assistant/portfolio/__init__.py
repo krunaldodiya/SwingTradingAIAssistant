@@ -1,1 +1,1 @@
-"""Read-only portfolio account registry and manual holdings review."""
+"""Live, read-only broker portfolio accounts and holdings review."""
