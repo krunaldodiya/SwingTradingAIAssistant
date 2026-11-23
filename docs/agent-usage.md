@@ -169,7 +169,7 @@ the authoritative contract; §4 adds exits, boundaries and prerequisites.
 | Raw retained current-price context | `market-data price-context-current --input-file FILE --storage-root ROOT [--acquire-missing] [--contract-version v2] --output json` | [Plan 36](plans/36-bounded-current-price-context-refresh-contract.md) |
 | Retained current facts for a supplied cohort / one aggregate regime fact | `market-data cohort-current --cohort-file FILE --storage-root ROOT --cutoff UTC --output json`; `market-data regime-current --input-file FILE --storage-root ROOT --output json` | [Plan 19](plans/19-current-supplied-cohort-market-data-contract.md), [Plan 20](plans/20-current-supplied-cohort-market-regime-contract.md) |
 | Inspect fixed owner-staged NSE safety evidence | `stock-safety-evidence inspect --storage-root ROOT --observation HANDLE --output json` | [owner-staged-nse-safety-evidence.md](workflows/owner-staged-nse-safety-evidence.md) |
-| Read-only review of a manually supplied portfolio snapshot | `portfolio accounts add --storage-root ROOT --account-id ID --display-name NAME`; `portfolio import --storage-root ROOT --account ID --file FILE --as-of ISO`; `portfolio review --storage-root ROOT --account ID --output json` | [Plan 83](plans/83-read-only-portfolio-accounts.md) |
+| Read-only review of a manually supplied portfolio snapshot | `portfolio accounts add --storage-root ROOT --account-id ID --display-name NAME`; `portfolio accounts list --storage-root ROOT`; `portfolio import --storage-root ROOT --account ID --file FILE --as-of ISO`; `portfolio review --storage-root ROOT --account ID --output json` | [Plan 83](plans/83-read-only-portfolio-accounts.md) |
 
 ## 4. Capability reference
 

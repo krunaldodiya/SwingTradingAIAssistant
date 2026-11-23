@@ -91,7 +91,11 @@ def _account_payload(record: AccountRecord) -> dict[str, object]:
 
 def _emit_account(record: AccountRecord, output: str) -> int:
     if output == "json":
-        print(json.dumps(_account_payload(record), indent=2, sort_keys=True))
+        print(
+            json.dumps(
+                _account_payload(record), indent=2, sort_keys=True, allow_nan=False
+            )
+        )
         return 0
     print(
         _table(
@@ -120,6 +124,7 @@ def _emit_accounts(records: Sequence[AccountRecord], output: str) -> int:
                 },
                 indent=2,
                 sort_keys=True,
+                allow_nan=False,
             )
         )
         return 0
@@ -163,7 +168,7 @@ def _import_payload(snapshot: Snapshot) -> dict[str, object]:
 def _emit_import(snapshot: Snapshot, output: str) -> int:
     payload = _import_payload(snapshot)
     if output == "json":
-        print(json.dumps(payload, indent=2, sort_keys=True))
+        print(json.dumps(payload, indent=2, sort_keys=True, allow_nan=False))
         return 0
     print(
         f"Imported {payload['holdings']} holding(s) for {payload['account_id']} "
@@ -187,7 +192,7 @@ def _emit_import(snapshot: Snapshot, output: str) -> int:
 
 def _emit_review(payload: dict[str, object], output: str) -> int:
     if output == "json":
-        print(json.dumps(payload, indent=2, sort_keys=True))
+        print(json.dumps(payload, indent=2, sort_keys=True, allow_nan=False))
         return 0
     summary = _mapping(payload["summary"], "review summary is invalid")
     print(
@@ -303,24 +308,46 @@ def _dispatch(args: argparse.Namespace) -> int:
     raise PortfolioError("INVALID_ARGUMENT", "unknown command")
 
 
+_INVALID_CODES = frozenset(
+    {
+        "INVALID_ARGUMENT",
+        "ACCOUNT_ID_INVALID",
+        "CREDENTIAL_PREFIX_INVALID",
+        "DISPLAY_NAME_INVALID",
+        "BROKER_UNSUPPORTED",
+        "INPUT_UNREADABLE",
+        "INPUT_TOO_LARGE",
+        "INPUT_HEADER_INVALID",
+        "AS_OF_INVALID",
+        "NO_VALID_HOLDINGS",
+    }
+)
+
+
+def _error_json(code: str, message: str) -> str:
+    return json.dumps(
+        {"status": "error", "error_code": code, "message": message},
+        sort_keys=True,
+        allow_nan=False,
+    )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
     try:
         return _dispatch(args)
     except PortfolioError as exc:
+        print(_error_json(exc.code, exc.message), file=sys.stderr)
+        return 2 if exc.code in _INVALID_CODES else 1
+    except OSError:
         print(
-            json.dumps(
-                {
-                    "status": "error",
-                    "error_code": exc.code,
-                    "message": exc.message,
-                },
-                sort_keys=True,
-            ),
-            file=sys.stderr,
+            _error_json("IO_ERROR", "private storage is unavailable"), file=sys.stderr
         )
         return 1
+    except Exception:
+        print(_error_json("INTERNAL_ERROR", "internal error"), file=sys.stderr)
+        return 2
 
 
 __all__ = ["main"]

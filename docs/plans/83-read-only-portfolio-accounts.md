@@ -60,24 +60,25 @@ Path: `<storage-root>/.portfolio-accounts-v1/accounts.json`.
 - `account_id`: caller-chosen lowercase slug, unique.
 - `broker`: exactly `MANUAL` in this slice.
 - No credential field, identity fingerprint, client code, or account number exists.
-- `last_import_at` is absent until the first successful import.
+- `last_import_at` is `null` until the first successful import.
 
 ### Snapshot input
 
 `portfolio import --file <path> --as-of <ISO-8601 timestamp>`.
 
-- UTF-8 CSV, at most 1 MiB, regular file only; symlinks are rejected.
-- One header row. Blank lines are ignored.
+- UTF-8 CSV, at most 1 MiB, regular file only; symlinks are rejected. The input is opened with `O_NOFOLLOW`, and its size is bounded before and after the read.
+- One header row. A leading UTF-8 BOM and completely empty leading lines are tolerated. A row with empty cells is validated and rejected explicitly, never skipped as blank.
 - Required columns, in any order: `symbol`, `exchange`, `quantity`, `average_price`, `last_price`.
 - Optional columns: `isin`, `previous_close`.
 - Missing required columns, duplicate headers, or unknown columns fail the whole import with `INPUT_HEADER_INVALID`. Unknown columns are rejected rather than silently ignored.
 - Row rules:
   - `symbol`: trimmed, uppercased, `^[A-Z0-9][A-Z0-9&.-]{0,19}$`.
-  - `exchange`: exactly `NSE`. Any other exchange is isolated as a rejected row with `UNSUPPORTED_EXCHANGE`.
+  - `exchange`: exactly `NSE` after trimming surrounding whitespace. Any other exchange is isolated as a rejected row with `UNSUPPORTED_EXCHANGE`.
   - `quantity` and `average_price`: finite decimal `>= 0`.
   - `last_price` and optional `previous_close`: finite decimal `> 0`.
+  - Every number must be within `1e-9` to `1e12` in magnitude (zero is allowed only where the rule permits it); larger or smaller finite values are rejected with the field's closed reason. This bounds `Decimal.quantize` and JSON output.
   - `isin`, when present: 12-character Indian ISIN, `^INE[0-9A-Z]{8}[0-9]$`.
-  - A repeated symbol within one file rejects the later row with `DUPLICATE_SYMBOL`.
+  - A repeated symbol within one file rejects the later row with `DUPLICATE_SYMBOL`. The first valid symbol is marked before exchange or number validation, so a rejected first occurrence still blocks a later duplicate.
 - A rejected row never disappears silently. It is stored with its data-row number, symbol when known, and a closed reason code.
 - If no row is valid, the import fails with `NO_VALID_HOLDINGS` and stores nothing.
 - A partial import is allowed but carries `PARTIAL_SNAPSHOT`.
@@ -88,8 +89,9 @@ Path: `<storage-root>/.portfolio-accounts-v1/accounts.json`.
 
 Path: `<storage-root>/.portfolio-accounts-v1/snapshots/<account_id>/<snapshot_id>.json`.
 
-- `snapshot_id`: `YYYYMMDDTHHMMSSZ-<8 hex>`, generated at import.
-- Snapshot files are append-only and never overwritten.
+- `snapshot_id`: `YYYYMMDDTHHMMSSffffffZ-<8 hex>` (microsecond precision), generated at import.
+- A second import with the same microsecond timestamp fails with `SNAPSHOT_COLLISION` rather than relying on the random suffix for ordering.
+- Snapshot files are append-only and never overwritten. The `snapshots/` container and the account directory are both `0700`.
 - File `0600`; account snapshot directory `0700`; atomic write.
 - The snapshot is a point-in-time record. It is never presented as historical holdings at an earlier cutoff.
 
@@ -131,7 +133,7 @@ Decimal values are stored as strings to keep exact arithmetic.
   "account_id": "manual-main",
   "broker": "MANUAL",
   "source": "MANUAL_SNAPSHOT",
-  "snapshot_id": "20261123T120500Z-1a2b3c4d",
+  "snapshot_id": "20261123T120500123456Z-1a2b3c4d",
   "as_of": "2026-11-23T11:30:00+05:30",
   "imported_at": "2026-11-23T12:05:00+05:30",
   "summary": {
@@ -156,11 +158,19 @@ Decimal values are stored as strings to keep exact arithmetic.
 - Day change is present only when every accepted holding has `previous_close`; otherwise both day fields are `null` with `DAY_CHANGE_UNAVAILABLE`.
 - Every review always carries `USER_SUPPLIED_UNVERIFIED`.
 - `SECTOR_UNKNOWN` and `MEMBERSHIP_UNVERIFIED` are explicit because the manual input supplies neither sector nor index membership.
+- Loaded snapshots are revalidated, not trusted:
+  - `limitations` must have no duplicates and only the closed vocabulary `USER_SUPPLIED_UNVERIFIED`, `MEMBERSHIP_UNVERIFIED`, `SECTOR_UNKNOWN`, `PARTIAL_SNAPSHOT`, `DAY_CHANGE_UNAVAILABLE`;
+  - the three mandatory labels are required;
+  - `PARTIAL_SNAPSHOT` must match non-empty `rejected`, and `DAY_CHANGE_UNAVAILABLE` must match any missing `previous_close`;
+  - rejected-row reasons must belong to the closed row-reason set;
+  - duplicate holding symbols are rejected.
 - No advice, target, ranking, or return claim is emitted.
 
 ### Failure codes
 
-`ACCOUNT_NOT_FOUND`, `ACCOUNT_ID_INVALID`, `BROKER_UNSUPPORTED`, `DISPLAY_NAME_INVALID`, `INVALID_ARGUMENT`, `DUPLICATE_ACCOUNT_ID`, `REGISTRY_PERMISSIONS`, `REGISTRY_CORRUPT`, `UNSUPPORTED_SCHEMA`, `IO_ERROR`, `INPUT_UNREADABLE`, `INPUT_TOO_LARGE`, `INPUT_HEADER_INVALID`, `AS_OF_INVALID`, `NO_VALID_HOLDINGS`, `NO_SNAPSHOT`, `SNAPSHOT_CORRUPT`, `SNAPSHOT_PERMISSIONS`.
+`ACCOUNT_NOT_FOUND`, `ACCOUNT_ID_INVALID`, `BROKER_UNSUPPORTED`, `DISPLAY_NAME_INVALID`, `INVALID_ARGUMENT`, `DUPLICATE_ACCOUNT_ID`, `REGISTRY_PERMISSIONS`, `REGISTRY_CORRUPT`, `UNSUPPORTED_SCHEMA`, `IO_ERROR`, `INPUT_UNREADABLE`, `INPUT_TOO_LARGE`, `INPUT_HEADER_INVALID`, `AS_OF_INVALID`, `NO_VALID_HOLDINGS`, `NO_SNAPSHOT`, `SNAPSHOT_CORRUPT`, `SNAPSHOT_PERMISSIONS`, `SNAPSHOT_COLLISION`, `INTERNAL_ERROR`.
+
+Exit codes: `0` success; `1` domain or stored-state failure; `2` invalid request or internal error. Every failure prints a JSON error envelope to `stderr` containing only a closed code and a redacted message — never a traceback, private path, or holdings value.
 
 ## Acceptance
 
@@ -170,7 +180,11 @@ Decimal values are stored as strings to keep exact arithmetic.
 - A CSV with no valid rows stores nothing.
 - Unsupported exchanges, invalid symbols, duplicate symbols, invalid ISINs, malformed numbers, and malformed headers fail closed or are isolated.
 - `as_of` must be timezone-aware; `imported_at` is system time.
-- Registry and snapshot files are `0600`, atomic, append-only, and rejected when permissions are loosened.
+- Registry and snapshot files are `0600`, atomic, append-only, and rejected when permissions are loosened. The registry, `snapshots/` container, and account directories are `0700`; the lock file is `0600`, opened with `O_NOFOLLOW`, and never follows a symlink.
+- A non-directory or symlinked registry/snapshot path and a read-only storage root produce a closed `REGISTRY_PERMISSIONS`, `SNAPSHOT_PERMISSIONS`, or `IO_ERROR`, never a traceback.
+- Same-microsecond imports are rejected as `SNAPSHOT_COLLISION`; microsecond ordering selects the true latest snapshot.
+- Out-of-range finite decimals and stored values that would overflow formatting are rejected at import or load.
+- Loaded snapshots cannot drop or forge the mandatory unverified labels, invent rejection reasons, or contain duplicate holdings.
 - One account's import or review never reads another account's snapshots.
 - No credential, broker call, order, position, or network request exists in the slice.
 - `docs/agent-usage.md` no longer states that the tool never assesses a portfolio; it states the exact read-only, user-supplied limits.

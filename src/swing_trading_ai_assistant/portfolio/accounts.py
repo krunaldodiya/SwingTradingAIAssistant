@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
@@ -24,6 +25,7 @@ from .storage import (
 SCHEMA_VERSION = 1
 REGISTRY_FILENAME = "accounts.json"
 SNAPSHOT_DIRNAME = "snapshots"
+MAX_REGISTRY_BYTES = 1_048_576
 
 _ACCOUNT_ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
 _BROKERS = frozenset({"MANUAL"})
@@ -85,6 +87,14 @@ def _text(value: object, message: str) -> str:
     return value
 
 
+def _valid_display_name(value: str) -> bool:
+    return (
+        bool(value)
+        and len(value) <= 100
+        and not any(unicodedata.category(char).startswith("C") for char in value)
+    )
+
+
 def _validate_account(raw: object) -> AccountRecord:
     value = _mapping(raw, "account record is invalid")
     if set(value) != _RECORD_KEYS:
@@ -96,6 +106,8 @@ def _validate_account(raw: object) -> AccountRecord:
     if broker not in _BROKERS:
         raise PortfolioError("REGISTRY_CORRUPT", "account broker is unsupported")
     display_name = _text(value["display_name"], "display name is invalid")
+    if not _valid_display_name(display_name):
+        raise PortfolioError("REGISTRY_CORRUPT", "display name is invalid")
     created_at = parse_aware_timestamp(
         _text(value["created_at"], "created time is invalid"),
         code="REGISTRY_CORRUPT",
@@ -148,10 +160,12 @@ def _load(storage_root: Path) -> Registry:
     require_private_directory(directory)
     file = directory / REGISTRY_FILENAME
     try:
-        file.lstat()
+        info = file.lstat()
     except FileNotFoundError:
         return Registry(accounts=[])
     require_private_file(file)
+    if info.st_size > MAX_REGISTRY_BYTES:
+        raise PortfolioError("REGISTRY_CORRUPT", "portfolio registry is too large")
     try:
         raw: object = json.loads(file.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -178,7 +192,7 @@ def _validate_account_id(account_id: str) -> str:
 
 def _validate_display_name(display_name: str) -> str:
     value = display_name.strip()
-    if not value or len(value) > 100 or any(ord(char) < 32 for char in value):
+    if not _valid_display_name(value):
         raise PortfolioError(
             "DISPLAY_NAME_INVALID", "display name must be 1-100 printable characters"
         )

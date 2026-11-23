@@ -6,6 +6,7 @@ import csv
 import hashlib
 import io
 import json
+import os
 import re
 import secrets
 import stat
@@ -34,6 +35,9 @@ from .storage import (
 SCHEMA_VERSION = 1
 SOURCE = "MANUAL_SNAPSHOT"
 MAX_INPUT_BYTES = 1_048_576
+MAX_SNAPSHOT_BYTES = 4_194_304
+MAX_ABS_DECIMAL = Decimal("1e12")
+MIN_ABS_DECIMAL = Decimal("1e-9")
 REQUIRED_COLUMNS: set[str] = {
     "symbol",
     "exchange",
@@ -42,10 +46,30 @@ REQUIRED_COLUMNS: set[str] = {
     "last_price",
 }
 OPTIONAL_COLUMNS: set[str] = {"isin", "previous_close"}
+MANDATORY_LIMITATIONS: set[str] = {
+    "USER_SUPPLIED_UNVERIFIED",
+    "MEMBERSHIP_UNVERIFIED",
+    "SECTOR_UNKNOWN",
+}
+CONDITIONAL_LIMITATIONS: set[str] = {
+    "PARTIAL_SNAPSHOT",
+    "DAY_CHANGE_UNAVAILABLE",
+}
+REJECTION_REASONS: set[str] = {
+    "COLUMN_COUNT_MISMATCH",
+    "SYMBOL_INVALID",
+    "UNSUPPORTED_EXCHANGE",
+    "DUPLICATE_SYMBOL",
+    "INVALID_QUANTITY",
+    "INVALID_AVERAGE_PRICE",
+    "INVALID_LAST_PRICE",
+    "INVALID_PREVIOUS_CLOSE",
+    "INVALID_ISIN",
+}
 
 _SYMBOL = re.compile(r"^[A-Z0-9][A-Z0-9&.-]{0,19}$")
 _ISIN = re.compile(r"^INE[0-9A-Z]{8}[0-9]$")
-_DATE = re.compile(r"^\d{8}T\d{6}Z-[0-9a-f]{8}$")
+_DATE = re.compile(r"^\d{8}T\d{12}Z-[0-9a-f]{8}$")
 _HOLDING_KEYS: set[str] = {
     "symbol",
     "exchange",
@@ -104,7 +128,12 @@ class Snapshot:
 
 
 def _q2(value: Decimal) -> Decimal:
-    return value.quantize(Decimal("0.01"))
+    try:
+        return value.quantize(Decimal("0.01"))
+    except InvalidOperation as exc:
+        raise PortfolioError(
+            "SNAPSHOT_CORRUPT", "stored number is out of range"
+        ) from exc
 
 
 def _money(value: Decimal) -> float:
@@ -124,24 +153,44 @@ def _decode(raw: bytes) -> str:
 
 def _read_input(path: Path) -> bytes:
     candidate = path.expanduser()
+    flags = os.O_RDONLY
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    flags |= getattr(os, "O_CLOEXEC", 0)
+    flags |= getattr(os, "O_NONBLOCK", 0)
     try:
-        info = candidate.lstat()
+        descriptor = os.open(candidate, flags)
     except OSError as exc:
         raise PortfolioError(
             "INPUT_UNREADABLE", "snapshot input is unavailable"
         ) from exc
-    if not stat.S_ISREG(info.st_mode):
-        raise PortfolioError(
-            "INPUT_UNREADABLE", "snapshot input must be a regular file"
-        )
-    if info.st_size > MAX_INPUT_BYTES:
-        raise PortfolioError("INPUT_TOO_LARGE", "snapshot input exceeds 1 MiB")
     try:
-        return candidate.read_bytes()
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode):
+            raise PortfolioError(
+                "INPUT_UNREADABLE", "snapshot input must be a regular file"
+            )
+        if info.st_size > MAX_INPUT_BYTES:
+            raise PortfolioError("INPUT_TOO_LARGE", "snapshot input exceeds 1 MiB")
+        chunks: list[bytes] = []
+        remaining = MAX_INPUT_BYTES + 1
+        while remaining > 0:
+            chunk = os.read(descriptor, min(remaining, 65536))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        raw = b"".join(chunks)
+    except PortfolioError:
+        raise
     except OSError as exc:
         raise PortfolioError(
             "INPUT_UNREADABLE", "snapshot input cannot be read"
         ) from exc
+    finally:
+        os.close(descriptor)
+    if len(raw) > MAX_INPUT_BYTES:
+        raise PortfolioError("INPUT_TOO_LARGE", "snapshot input exceeds 1 MiB")
+    return raw
 
 
 def _decimal(text: str, *, reason: str, allow_zero: bool, positive: bool) -> Decimal:
@@ -151,6 +200,8 @@ def _decimal(text: str, *, reason: str, allow_zero: bool, positive: bool) -> Dec
         raise PortfolioError(reason, "holding number is invalid") from exc
     if not value.is_finite():
         raise PortfolioError(reason, "holding number is invalid")
+    if value != 0 and (abs(value) > MAX_ABS_DECIMAL or abs(value) < MIN_ABS_DECIMAL):
+        raise PortfolioError(reason, "holding number is out of range")
     if allow_zero and value < 0:
         raise PortfolioError(reason, "holding number must not be negative")
     if positive and value <= 0:
@@ -178,11 +229,12 @@ def _parse_row(
     symbol = raw_symbol.upper()
     if not _SYMBOL.fullmatch(symbol):
         return reject("SYMBOL_INVALID")
-    exchange = _cell(row, columns, "exchange").upper()
-    if exchange != "NSE":
-        return reject("UNSUPPORTED_EXCHANGE", symbol)
     if symbol in seen:
         return reject("DUPLICATE_SYMBOL", symbol)
+    seen.add(symbol)
+    exchange = _cell(row, columns, "exchange")
+    if exchange != "NSE":
+        return reject("UNSUPPORTED_EXCHANGE", symbol)
     try:
         quantity = _decimal(
             _cell(row, columns, "quantity"),
@@ -220,7 +272,6 @@ def _parse_row(
     raw_isin = _cell(row, columns, "isin").upper() if "isin" in columns else ""
     if raw_isin and not _ISIN.fullmatch(raw_isin):
         return reject("INVALID_ISIN", symbol)
-    seen.add(symbol)
     return Holding(
         symbol=symbol,
         exchange=exchange,
@@ -233,16 +284,20 @@ def _parse_row(
 
 
 def _parse_csv(raw: bytes) -> tuple[tuple[Holding, ...], tuple[RejectedRow, ...]]:
-    text = _decode(raw)
+    text = _decode(raw).lstrip("\ufeff")
     try:
         rows = list(csv.reader(io.StringIO(text), strict=True))
     except csv.Error as exc:
         raise PortfolioError(
             "INPUT_HEADER_INVALID", "snapshot CSV is malformed"
         ) from exc
-    if not rows:
+    header_index = next(
+        (index for index, row in enumerate(rows) if any(cell.strip() for cell in row)),
+        None,
+    )
+    if header_index is None:
         raise PortfolioError("INPUT_HEADER_INVALID", "snapshot CSV has no header")
-    headers = [cell.strip().lower() for cell in rows[0]]
+    headers = [cell.strip().lower() for cell in rows[header_index]]
     if any(not header for header in headers):
         raise PortfolioError(
             "INPUT_HEADER_INVALID", "snapshot header has a blank column"
@@ -262,8 +317,8 @@ def _parse_csv(raw: bytes) -> tuple[tuple[Holding, ...], tuple[RejectedRow, ...]
     holdings: list[Holding] = []
     rejected: list[RejectedRow] = []
     seen: set[str] = set()
-    for offset, row in enumerate(rows[1:], start=2):
-        if not any(cell.strip() for cell in row):
+    for offset, row in enumerate(rows[header_index + 1 :], start=header_index + 2):
+        if len(row) <= 1 and (not row or not row[0].strip()):
             continue
         parsed = _parse_row(row, columns, number=offset, seen=seen)
         if isinstance(parsed, Holding):
@@ -310,7 +365,8 @@ def parse_snapshot(
 
 
 def _snapshot_id(moment: datetime) -> str:
-    return f"{moment.astimezone(UTC).strftime('%Y%m%dT%H%M%SZ')}-{secrets.token_hex(4)}"
+    stamp = moment.astimezone(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+    return f"{stamp}-{secrets.token_hex(4)}"
 
 
 def import_snapshot(
@@ -338,9 +394,27 @@ def import_snapshot(
         imported_at=imported_at,
         snapshot_id=_snapshot_id(moment),
     )
-    payload = json.dumps(snapshot.to_dict(), indent=2, sort_keys=True) + "\n"
+    directory = snapshot_directory(root, account.account_id)
+    container = directory.parent
+    try:
+        container.mkdir(mode=0o700, parents=True, exist_ok=True)
+    except OSError as exc:
+        raise PortfolioError(
+            "SNAPSHOT_PERMISSIONS", "snapshot storage is unavailable"
+        ) from exc
+    require_private_directory(container, code="SNAPSHOT_PERMISSIONS")
+    if directory.exists() and not directory.is_dir():
+        raise PortfolioError(
+            "SNAPSHOT_PERMISSIONS", "snapshot account path is not a directory"
+        )
+    stamp = snapshot.snapshot_id.split("-", 1)[0]
+    if directory.exists() and any(directory.glob(f"{stamp}-*.json")):
+        raise PortfolioError("SNAPSHOT_COLLISION", "snapshot timestamp already exists")
+    payload = (
+        json.dumps(snapshot.to_dict(), indent=2, sort_keys=True, allow_nan=False) + "\n"
+    )
     atomic_write(
-        snapshot_directory(root, account.account_id),
+        directory,
         f"{snapshot.snapshot_id}.json",
         payload,
         overwrite=False,
@@ -382,13 +456,46 @@ def _snapshot_to_dict(snapshot: Snapshot) -> dict[str, object]:
     }
 
 
-def _limitations(raw: object) -> tuple[str, ...]:
+def _validate_limitations(
+    raw: object,
+    holdings: tuple[Holding, ...],
+    rejected: tuple[RejectedRow, ...],
+) -> tuple[str, ...]:
     if not isinstance(raw, list):
         raise PortfolioError("SNAPSHOT_CORRUPT", "snapshot limitations are invalid")
     items = cast("list[object]", raw)
     if not all(isinstance(item, str) for item in items):
         raise PortfolioError("SNAPSHOT_CORRUPT", "snapshot limitations are invalid")
-    return tuple(item for item in items if isinstance(item, str))
+    values = tuple(item for item in items if isinstance(item, str))
+    if len(values) != len(set(values)):
+        raise PortfolioError("SNAPSHOT_CORRUPT", "snapshot limitations have duplicates")
+    present = set(values)
+    if not present.issuperset(MANDATORY_LIMITATIONS):
+        raise PortfolioError(
+            "SNAPSHOT_CORRUPT", "snapshot limitations lack a mandatory label"
+        )
+    if present - MANDATORY_LIMITATIONS - CONDITIONAL_LIMITATIONS:
+        raise PortfolioError("SNAPSHOT_CORRUPT", "snapshot limitations are unknown")
+    if ("PARTIAL_SNAPSHOT" in present) != bool(rejected):
+        raise PortfolioError(
+            "SNAPSHOT_CORRUPT", "snapshot partial label is inconsistent"
+        )
+    expected_day = any(holding.previous_close is None for holding in holdings)
+    if ("DAY_CHANGE_UNAVAILABLE" in present) != expected_day:
+        raise PortfolioError(
+            "SNAPSHOT_CORRUPT", "snapshot day-change label is inconsistent"
+        )
+    return values
+
+
+def _holdings_from_list(raw: object) -> tuple[Holding, ...]:
+    if not isinstance(raw, list) or not raw:
+        raise PortfolioError("SNAPSHOT_CORRUPT", "snapshot holdings are invalid")
+    holdings = tuple(_holding_from_dict(item) for item in cast("list[object]", raw))
+    symbols = [holding.symbol for holding in holdings]
+    if len(symbols) != len(set(symbols)):
+        raise PortfolioError("SNAPSHOT_CORRUPT", "snapshot has duplicate holdings")
+    return holdings
 
 
 def _snapshot_from_dict(raw: object, *, snapshot_id: str) -> Snapshot:
@@ -398,12 +505,10 @@ def _snapshot_from_dict(raw: object, *, snapshot_id: str) -> Snapshot:
     if set(value) != _SNAPSHOT_KEYS:
         raise PortfolioError("SNAPSHOT_CORRUPT", "snapshot keys are invalid")
     version = value["schema_version"]
-    if (
-        isinstance(version, bool)
-        or not isinstance(version, int)
-        or version != SCHEMA_VERSION
-    ):
+    if isinstance(version, bool) or not isinstance(version, int):
         raise PortfolioError("SNAPSHOT_CORRUPT", "snapshot schema is invalid")
+    if version != SCHEMA_VERSION:
+        raise PortfolioError("UNSUPPORTED_SCHEMA", "snapshot schema is newer")
     if value["source"] != SOURCE:
         raise PortfolioError("SNAPSHOT_CORRUPT", "snapshot source is invalid")
     account_id = value["account_id"]
@@ -420,19 +525,14 @@ def _snapshot_from_dict(raw: object, *, snapshot_id: str) -> Snapshot:
         r"[0-9a-f]{64}", input_sha256
     ):
         raise PortfolioError("SNAPSHOT_CORRUPT", "snapshot input hash is invalid")
-    holdings_raw = value["holdings"]
-    if not isinstance(holdings_raw, list) or not holdings_raw:
-        raise PortfolioError("SNAPSHOT_CORRUPT", "snapshot holdings are invalid")
-    holdings = tuple(
-        _holding_from_dict(item) for item in cast("list[object]", holdings_raw)
-    )
+    holdings = _holdings_from_list(value["holdings"])
     rejected_raw = value["rejected"]
     if not isinstance(rejected_raw, list):
         raise PortfolioError("SNAPSHOT_CORRUPT", "snapshot rejected rows are invalid")
     rejected = tuple(
         _rejected_from_dict(item) for item in cast("list[object]", rejected_raw)
     )
-    limitations = _limitations(value["limitations"])
+    limitations = _validate_limitations(value["limitations"], holdings, rejected)
     return Snapshot(
         schema_version=SCHEMA_VERSION,
         account_id=account_id,
@@ -518,7 +618,7 @@ def _rejected_from_dict(raw: object) -> RejectedRow:
         raise PortfolioError("SNAPSHOT_CORRUPT", "snapshot rejected row is invalid")
     if symbol is not None and not isinstance(symbol, str):
         raise PortfolioError("SNAPSHOT_CORRUPT", "snapshot rejected symbol is invalid")
-    if not isinstance(reason, str) or not reason:
+    if not isinstance(reason, str) or reason not in REJECTION_REASONS:
         raise PortfolioError("SNAPSHOT_CORRUPT", "snapshot rejected reason is invalid")
     return RejectedRow(row=row, symbol=symbol, reason=reason)
 
@@ -529,6 +629,9 @@ def load_latest_snapshot(storage_root: Path, account_id: str) -> Snapshot:
     root = validate_storage_root(storage_root)
     get_account(root, account_id)
     directory = snapshot_directory(root, account_id)
+    container = directory.parent
+    if container.exists():
+        require_private_directory(container, code="SNAPSHOT_PERMISSIONS")
     try:
         directory.lstat()
     except FileNotFoundError as exc:
@@ -545,6 +648,8 @@ def load_latest_snapshot(storage_root: Path, account_id: str) -> Snapshot:
     if not _DATE.fullmatch(path.stem):
         raise PortfolioError("SNAPSHOT_CORRUPT", "snapshot name is invalid")
     require_private_file(path, code="SNAPSHOT_PERMISSIONS")
+    if path.stat().st_size > MAX_SNAPSHOT_BYTES:
+        raise PortfolioError("SNAPSHOT_CORRUPT", "snapshot is too large")
     try:
         raw: object = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -558,6 +663,8 @@ def load_latest_snapshot(storage_root: Path, account_id: str) -> Snapshot:
 def review_payload(account: AccountRecord, snapshot: Snapshot) -> dict[str, object]:
     """Compute the deterministic read-only review for one snapshot."""
 
+    if snapshot.account_id != account.account_id:
+        raise PortfolioError("SNAPSHOT_CORRUPT", "snapshot account does not match")
     invested = sum(
         (holding.average_price * holding.quantity for holding in snapshot.holdings),
         Decimal("0"),

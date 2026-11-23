@@ -101,6 +101,16 @@ def _fsync_directory(directory: Path) -> None:
         os.close(descriptor)
 
 
+def _create_private_directory(directory: Path, *, code: str) -> None:
+    try:
+        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    except FileExistsError as exc:
+        raise PortfolioError(code, "private path is not a directory") from exc
+    except OSError as exc:
+        raise PortfolioError("IO_ERROR", "private storage is unavailable") from exc
+    require_private_directory(directory, code=code)
+
+
 def atomic_write(
     directory: Path,
     filename: str,
@@ -111,14 +121,16 @@ def atomic_write(
 ) -> Path:
     """Write one private file atomically; optionally refuse replacement."""
 
-    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-    require_private_directory(directory, code=permission_code)
+    _create_private_directory(directory, code=permission_code)
     target = directory / filename
     if not overwrite and target.exists():
         raise PortfolioError("IO_ERROR", "private file already exists")
-    descriptor, temporary = tempfile.mkstemp(
-        prefix=".portfolio-", suffix=".tmp", dir=directory
-    )
+    try:
+        descriptor, temporary = tempfile.mkstemp(
+            prefix=".portfolio-", suffix=".tmp", dir=directory
+        )
+    except OSError as exc:
+        raise PortfolioError("IO_ERROR", "private storage is unavailable") from exc
     temporary_path = Path(temporary)
     try:
         if hasattr(os, "fchmod"):
@@ -129,6 +141,9 @@ def atomic_write(
             os.fsync(handle.fileno())
         os.replace(temporary_path, target)
         _fsync_directory(directory)
+    except OSError as exc:
+        temporary_path.unlink(missing_ok=True)
+        raise PortfolioError("IO_ERROR", "private storage write failed") from exc
     except BaseException:
         temporary_path.unlink(missing_ok=True)
         raise
@@ -139,12 +154,31 @@ def atomic_write(
 def private_lock(directory: Path) -> Generator[None, None, None]:
     """Serialize writers with an advisory lock on a private file."""
 
-    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-    require_private_directory(directory)
-    descriptor = os.open(directory / LOCK_FILENAME, os.O_CREAT | os.O_RDWR, 0o600)
+    _create_private_directory(directory, code="REGISTRY_PERMISSIONS")
+    flags = os.O_CREAT | os.O_RDWR
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    flags |= getattr(os, "O_CLOEXEC", 0)
     try:
-        if hasattr(os, "fchmod"):
-            os.fchmod(descriptor, 0o600)
+        descriptor = os.open(directory / LOCK_FILENAME, flags, 0o600)
+    except PermissionError as exc:
+        raise PortfolioError("IO_ERROR", "private storage is unavailable") from exc
+    except OSError as exc:
+        raise PortfolioError(
+            "REGISTRY_PERMISSIONS", "private lock is unavailable"
+        ) from exc
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode):
+            raise PortfolioError("REGISTRY_PERMISSIONS", "private lock is not regular")
+        if stat.S_IMODE(info.st_mode) != 0o600:
+            raise PortfolioError(
+                "REGISTRY_PERMISSIONS", "private lock permissions must be 0600"
+            )
+        geteuid = getattr(os, "geteuid", None)
+        if geteuid is not None and info.st_uid != geteuid():
+            raise PortfolioError(
+                "REGISTRY_PERMISSIONS", "private lock has a foreign owner"
+            )
         if _fcntl is not None:
             _fcntl.flock(descriptor, _fcntl.LOCK_EX)
         yield

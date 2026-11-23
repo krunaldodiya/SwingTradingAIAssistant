@@ -56,7 +56,7 @@ _MUTATIONS: list[Callable[[dict[str, object]], None]] = [
     lambda payload: payload.__setitem__("as_of", "bad"),
     lambda payload: payload.__setitem__("imported_at", "bad"),
     lambda payload: payload.__setitem__("input_sha256", "bad"),
-    lambda payload: payload.__setitem__("schema_version", 2),
+    lambda payload: payload.__setitem__("schema_version", "2"),
     lambda payload: payload.__setitem__("schema_version", True),
     lambda payload: payload.__setitem__("holdings", []),
     lambda payload: payload.__setitem__("holdings", "bad"),

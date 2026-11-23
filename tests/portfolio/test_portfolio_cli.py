@@ -216,6 +216,6 @@ def test_cli_import_invalid_as_of(
                 "2026-11-23T11:30:00",
             ]
         )
-        == 1
+        == 2
     )
     assert json.loads(capsys.readouterr().err)["error_code"] == "AS_OF_INVALID"

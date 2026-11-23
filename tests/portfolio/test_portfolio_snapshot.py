@@ -350,7 +350,7 @@ def test_unsupported_snapshot_schema_rejected(tmp_path: Path) -> None:
     os.chmod(path, 0o600)
     with pytest.raises(PortfolioError) as error:
         load_latest_snapshot(root, "manual-main")
-    assert error.value.code == "SNAPSHOT_CORRUPT"
+    assert error.value.code == "UNSUPPORTED_SCHEMA"
 
 
 def test_zero_average_price_has_no_percentage(tmp_path: Path) -> None:
