@@ -353,7 +353,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(
             _error_json("IO_ERROR", "private storage is unavailable"), file=sys.stderr
         )
-        return 1
+        return 2
     except Exception:
         print(_error_json("INTERNAL_ERROR", "internal error"), file=sys.stderr)
         return 2

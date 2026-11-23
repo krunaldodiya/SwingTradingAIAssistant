@@ -154,6 +154,33 @@ def test_lock_symlink_is_rejected(tmp_path: Path) -> None:
     assert error.value.code == "REGISTRY_PERMISSIONS"
 
 
+def test_uncaught_oserror_exit_is_two(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = _root(tmp_path)
+    directory = root / REGISTRY_DIRNAME
+    os.chmod(directory, 0o000)  # noqa: S103 - deliberately unsafe fixture
+    try:
+        assert (
+            main(
+                [
+                    "accounts",
+                    "list",
+                    "--storage-root",
+                    str(root),
+                    "--output",
+                    "json",
+                ]
+            )
+            == 2
+        )
+    finally:
+        os.chmod(directory, 0o700)
+    captured = capsys.readouterr()
+    assert json.loads(captured.err)["error_code"] == "IO_ERROR"
+    assert "Traceback" not in captured.err
+
+
 def test_cli_internal_error_is_redacted(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
