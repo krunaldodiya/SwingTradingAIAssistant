@@ -39,6 +39,7 @@ signal-decisions = "swing_trading_ai_assistant.entrypoints.signal_decisions:main
 swing-analysis = "swing_trading_ai_assistant.market_data.swing_analysis_cli:main"
 stock-safety-evidence = "swing_trading_ai_assistant.entrypoints.stock_safety_evidence:main"
 point-in-time-snapshots = "swing_trading_ai_assistant.entrypoints.point_in_time_snapshots:main"
+portfolio = "swing_trading_ai_assistant.portfolio.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/equity_data_downloader", "src/swing_trading_ai_assistant"]
