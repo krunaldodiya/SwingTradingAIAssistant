@@ -93,6 +93,41 @@ Use `--output json` to emit prompt-ready `swing-trade-brief@v1` cards for extern
   ($< \text{INR } 25\text{ Cr / day}$ turnover), and circuit-locked stocks
   ($< 2.0\%$ distance).
 
+## Read-only portfolio review from a manual snapshot
+
+Register one or more manual accounts, import a holdings CSV, and review the
+latest snapshot. This path is **read-only**, makes **no broker call**, and
+stores **no credentials**. The snapshot is user-supplied and unverified.
+
+```bash
+portfolio accounts add --storage-root PRIVATE_ROOT \
+  --account-id manual-main --display-name "Manual main"
+
+portfolio import --storage-root PRIVATE_ROOT --account manual-main \
+  --file holdings.csv --as-of 2026-11-23T11:30:00+05:30
+
+portfolio review --storage-root PRIVATE_ROOT --account manual-main
+```
+
+The CSV needs `symbol,exchange,quantity,average_price,last_price` and may add
+`previous_close` and `isin`. Only `NSE` rows are accepted; other exchanges,
+duplicate symbols, invalid ISINs, and malformed numbers are reported as
+rejected rows instead of being dropped silently.
+
+```csv
+symbol,exchange,quantity,average_price,last_price,previous_close,isin
+HDFCBANK,NSE,100,790.58,829.85,846.00,INE040A01034
+```
+
+Snapshots are append-only under
+`PRIVATE_ROOT/.portfolio-accounts-v1/snapshots/<account-id>/` with `0600`
+permissions; the registry and snapshot directories are `0700`. Exit codes are
+`0` success, `1` domain/stored-state failure, and `2` invalid request, unsafe
+path, unsupported schema, input/size rejection, or internal error. Failures,
+including parser failures, are a redacted JSON envelope on stderr. A broker
+connector is a separate, later, gated slice; see
+[Plan 83](docs/plans/83-read-only-portfolio-accounts.md).
+
 ## Try single-stock research with a local assistant
 
 Use the [single-stock research workflow](docs/workflows/single-stock-research.md)

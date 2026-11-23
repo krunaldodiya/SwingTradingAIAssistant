@@ -50,16 +50,18 @@ structured facts the tool returns. You must never:
 - place orders, set targets, or assert recommendations, returns, win rates,
   rankings, or effectiveness.
 
-This is a research-only tool. It never trades, never sizes positions and never
-assesses a portfolio.
+This is a research-only tool. It never trades and never sizes positions.
+Portfolio review is read-only and limited to supported listed-equity holdings
+supplied through a manual snapshot. That snapshot is user-supplied and
+unverified, never broker-verified, and is not long-term portfolio advice.
 
 ## 2. Universal rules before running anything
 
 ### 2.1 Commands and credential injection
 
 Commands are console scripts installed with the project (`market-data`,
-`signal-decisions`, `stock-observations`, `stock-safety-evidence`, and the
-operator scripts in §7). In the owner's environment, commands that contact a
+`signal-decisions`, `stock-observations`, `stock-safety-evidence`, `portfolio`,
+and the operator scripts in §7). In the owner's environment, commands that contact a
 provider are wrapped for credential injection as `doppler run -- <command> ...`;
 retained-only commands read no credentials and make no provider call. Each
 capability below marks provider access where the contract documents it.
@@ -167,6 +169,7 @@ the authoritative contract; §4 adds exits, boundaries and prerequisites.
 | Raw retained current-price context | `market-data price-context-current --input-file FILE --storage-root ROOT [--acquire-missing] [--contract-version v2] --output json` | [Plan 36](plans/36-bounded-current-price-context-refresh-contract.md) |
 | Retained current facts for a supplied cohort / one aggregate regime fact | `market-data cohort-current --cohort-file FILE --storage-root ROOT --cutoff UTC --output json`; `market-data regime-current --input-file FILE --storage-root ROOT --output json` | [Plan 19](plans/19-current-supplied-cohort-market-data-contract.md), [Plan 20](plans/20-current-supplied-cohort-market-regime-contract.md) |
 | Inspect fixed owner-staged NSE safety evidence | `stock-safety-evidence inspect --storage-root ROOT --observation HANDLE --output json` | [owner-staged-nse-safety-evidence.md](workflows/owner-staged-nse-safety-evidence.md) |
+| Read-only review of a manually supplied portfolio snapshot | `portfolio accounts add --storage-root ROOT --account-id ID --display-name NAME`; `portfolio accounts list --storage-root ROOT`; `portfolio import --storage-root ROOT --account ID --file FILE --as-of ISO`; `portfolio review --storage-root ROOT --account ID --output json` | [Plan 83](plans/83-read-only-portfolio-accounts.md) |
 
 ## 4. Capability reference
 
