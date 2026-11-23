@@ -397,8 +397,8 @@ Responsibilities:
 - explainable recommendations;
 - researching the default point-in-time Nifty 100 cohort or an explicitly
   supplied supported listed equity;
-- reviewing supported listed-equity holdings through a read-only portfolio
-  snapshot;
+- reviewing supported listed-equity holdings through a read-only live broker
+  holdings review;
 - monitoring existing swing trades; and
 - reviewing completed swing trades.
 

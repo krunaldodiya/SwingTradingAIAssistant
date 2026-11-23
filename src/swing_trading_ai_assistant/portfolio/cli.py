@@ -1,4 +1,4 @@
-"""Installed read-only portfolio CLI."""
+"""Installed live broker portfolio CLI."""
 
 from __future__ import annotations
 
@@ -13,29 +13,41 @@ from .accounts import (
     AccountRecord,
     add_account,
     get_account,
+    identity_matches,
     list_accounts,
+    verify_account,
 )
+from .angel_one import AngelOneClient, load_credentials, review_payload
 from .errors import PortfolioError
-from .snapshot import (
-    Snapshot,
-    import_snapshot,
-    load_latest_snapshot,
-    review_payload,
+
+_RIGHT = frozenset({2, 3, 4, 5, 6, 7})
+_INVALID_CODES = frozenset(
+    {
+        "INVALID_ARGUMENT",
+        "ACCOUNT_ID_INVALID",
+        "DISPLAY_NAME_INVALID",
+        "BROKER_UNSUPPORTED",
+        "CREDENTIAL_PREFIX_INVALID",
+        "CREDENTIALS_MISSING",
+        "MALFORMED_CREDENTIAL",
+        "AUTH_FAILED",
+        "IP_NOT_WHITELISTED",
+        "PROVIDER_UNAVAILABLE",
+        "MALFORMED_RESPONSE",
+        "RECONCILIATION_MISMATCH",
+        "IDENTITY_MISMATCH",
+        "IO_ERROR",
+        "REGISTRY_PERMISSIONS",
+        "REGISTRY_TOO_LARGE",
+        "UNSUPPORTED_SCHEMA",
+        "MANUAL_PORTFOLIO_RETIRED",
+    }
 )
 
-_RIGHT = frozenset({2, 3, 4, 5, 6, 7, 8})
 
-
-def _mapping(value: object, message: str) -> dict[str, object]:
-    if not isinstance(value, dict):
-        raise PortfolioError("SNAPSHOT_CORRUPT", message)
-    return cast("dict[str, object]", value)
-
-
-def _objects(value: object, message: str) -> list[object]:
-    if not isinstance(value, list):
-        raise PortfolioError("SNAPSHOT_CORRUPT", message)
-    return cast("list[object]", value)
+class _Parser(argparse.ArgumentParser):
+    def error(self, message: str) -> NoReturn:
+        raise PortfolioError("INVALID_ARGUMENT", "invalid command arguments")
 
 
 def _money(value: object) -> str:
@@ -85,6 +97,26 @@ def _table(
     return "\n".join(lines)
 
 
+def _mapping(value: object, message: str) -> dict[str, object]:
+    if not isinstance(value, dict):
+        raise PortfolioError("MALFORMED_RESPONSE", message)
+    return cast("dict[str, object]", value)
+
+
+def _objects(value: object, message: str) -> list[object]:
+    if not isinstance(value, list):
+        raise PortfolioError("MALFORMED_RESPONSE", message)
+    return cast("list[object]", value)
+
+
+def _error_json(code: str, message: str) -> str:
+    return json.dumps(
+        {"status": "error", "error_code": code, "message": message},
+        sort_keys=True,
+        allow_nan=False,
+    )
+
+
 def _account_payload(record: AccountRecord) -> dict[str, object]:
     return {"schema_version": 1, "account": record.to_dict()}
 
@@ -99,14 +131,14 @@ def _emit_account(record: AccountRecord, output: str) -> int:
         return 0
     print(
         _table(
-            ("Account", "Broker", "Name", "Created", "Last import"),
+            ("Account", "Broker", "Name", "Status", "Last verified"),
             [
                 (
                     record.account_id,
                     record.broker,
                     record.display_name,
-                    record.created_at,
-                    record.last_import_at or "-",
+                    record.last_status,
+                    record.last_verified_at,
                 )
             ],
         )
@@ -129,64 +161,23 @@ def _emit_accounts(records: Sequence[AccountRecord], output: str) -> int:
         )
         return 0
     if not records:
-        print("No portfolio accounts.")
+        print("No connected broker accounts.")
         return 0
     print(
         _table(
-            ("Account", "Broker", "Name", "Created", "Last import"),
+            ("Account", "Broker", "Name", "Status", "Last verified"),
             [
                 (
                     record.account_id,
                     record.broker,
                     record.display_name,
-                    record.created_at,
-                    record.last_import_at or "-",
+                    record.last_status,
+                    record.last_verified_at,
                 )
                 for record in records
             ],
         )
     )
-    return 0
-
-
-def _import_payload(snapshot: Snapshot) -> dict[str, object]:
-    return {
-        "schema_version": 1,
-        "account_id": snapshot.account_id,
-        "snapshot_id": snapshot.snapshot_id,
-        "as_of": snapshot.as_of,
-        "imported_at": snapshot.imported_at,
-        "holdings": len(snapshot.holdings),
-        "rejected": [
-            {"row": item.row, "symbol": item.symbol, "reason": item.reason}
-            for item in snapshot.rejected
-        ],
-        "limitations": list(snapshot.limitations),
-    }
-
-
-def _emit_import(snapshot: Snapshot, output: str) -> int:
-    payload = _import_payload(snapshot)
-    if output == "json":
-        print(json.dumps(payload, indent=2, sort_keys=True, allow_nan=False))
-        return 0
-    print(
-        f"Imported {payload['holdings']} holding(s) for {payload['account_id']} "
-        f"as of {payload['as_of']} (snapshot {payload['snapshot_id']})"
-    )
-    rejected = _objects(payload["rejected"], "import rejected rows are invalid")
-    if rejected:
-        rejected_rows: list[tuple[str, str, str]] = []
-        for item in rejected:
-            if isinstance(item, dict):
-                row = cast("dict[str, object]", item)
-                rejected_rows.append(
-                    (str(row["row"]), str(row["symbol"] or "-"), str(row["reason"]))
-                )
-        print(_table(("Row", "Symbol", "Reason"), rejected_rows))
-    limitations = _objects(payload["limitations"], "import limitations are invalid")
-    if limitations:
-        print("Limitations: " + ", ".join(str(item) for item in limitations))
     return 0
 
 
@@ -197,7 +188,7 @@ def _emit_review(payload: dict[str, object], output: str) -> int:
     summary = _mapping(payload["summary"], "review summary is invalid")
     print(
         f"Account {payload['account_id']} ({payload['broker']}) "
-        f"as of {payload['as_of']} | snapshot {payload['snapshot_id']}"
+        f"at {payload['retrieved_at']} | source {payload['source']}"
     )
     print(
         "Invested {invested} | Current {current} | P&L {pnl} ({pct}) | "
@@ -225,12 +216,12 @@ def _emit_review(payload: dict[str, object], output: str) -> int:
                 _money(row["current"]),
                 _money(row["pnl"]),
                 _percent(row["pnl_pct"]),
-                _percent(row["weight_pct"]),
+                _percent(row["day_pct"]),
             )
         )
     print(
         _table(
-            ("Symbol", "Qty", "Avg", "LTP", "Value", "P&L", "P&L %", "Weight"),
+            ("Symbol", "Qty", "Avg", "LTP", "Value", "P&L", "P&L %", "Day %"),
             table_rows,
             right=_RIGHT,
         )
@@ -238,46 +229,37 @@ def _emit_review(payload: dict[str, object], output: str) -> int:
     limitations = _objects(payload["limitations"], "review limitations are invalid")
     if limitations:
         print("Limitations: " + ", ".join(str(item) for item in limitations))
-    rejected = _objects(payload["rejected"], "review rejected rows are invalid")
-    if rejected:
-        print("Rejected rows: " + str(len(rejected)))
     return 0
-
-
-class _Parser(argparse.ArgumentParser):
-    def error(self, message: str) -> NoReturn:
-        raise PortfolioError("INVALID_ARGUMENT", "invalid command arguments")
 
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = _Parser(
         prog="portfolio",
-        description="Read-only manual portfolio registry and review.",
+        description="Live, read-only broker portfolio accounts and review.",
     )
     commands = parser.add_subparsers(dest="command", required=True)
 
-    accounts = commands.add_parser("accounts", help="manage portfolio accounts")
+    accounts = commands.add_parser("accounts", help="manage broker accounts")
     account_commands = accounts.add_subparsers(dest="account_command", required=True)
 
-    add = account_commands.add_parser("add", help="register one manual account")
+    add = account_commands.add_parser("add", help="register a broker account")
     add.add_argument("--storage-root", type=Path, required=True)
     add.add_argument("--account-id", required=True)
     add.add_argument("--display-name", required=True)
-    add.add_argument("--broker", default="manual")
+    add.add_argument("--broker", default="angel-one")
+    add.add_argument("--credential-prefix", required=True)
     add.add_argument("--output", choices=("json", "table"), default="table")
 
-    listing = account_commands.add_parser("list", help="list accounts")
+    listing = account_commands.add_parser("list", help="list broker accounts")
     listing.add_argument("--storage-root", type=Path, required=True)
     listing.add_argument("--output", choices=("json", "table"), default="table")
 
-    importer = commands.add_parser("import", help="import a manual CSV snapshot")
-    importer.add_argument("--storage-root", type=Path, required=True)
-    importer.add_argument("--account", required=True)
-    importer.add_argument("--file", type=Path, required=True)
-    importer.add_argument("--as-of", required=True)
-    importer.add_argument("--output", choices=("json", "table"), default="table")
+    verify = account_commands.add_parser("verify", help="re-verify a broker account")
+    verify.add_argument("--storage-root", type=Path, required=True)
+    verify.add_argument("--account", required=True)
+    verify.add_argument("--output", choices=("json", "table"), default="table")
 
-    review = commands.add_parser("review", help="review the latest snapshot")
+    review = commands.add_parser("review", help="fetch and review live holdings")
     review.add_argument("--storage-root", type=Path, required=True)
     review.add_argument("--account", required=True)
     review.add_argument("--output", choices=("json", "table"), default="table")
@@ -291,55 +273,45 @@ def _dispatch(args: argparse.Namespace) -> int:
                 add_account(
                     args.storage_root,
                     account_id=args.account_id,
-                    display_name=args.display_name,
                     broker=args.broker,
+                    display_name=args.display_name,
+                    credential_prefix=args.credential_prefix,
                 ),
                 args.output,
             )
         if args.account_command == "list":
             return _emit_accounts(list_accounts(args.storage_root), args.output)
-    if args.command == "import":
-        snapshot = import_snapshot(
-            args.storage_root,
-            account_id=args.account,
-            file_path=args.file,
-            as_of=args.as_of,
-        )
-        return _emit_import(snapshot, args.output)
+        if args.account_command == "verify":
+            return _emit_account(
+                verify_account(args.storage_root, account_id=args.account),
+                args.output,
+            )
     if args.command == "review":
         account = get_account(args.storage_root, args.account)
-        snapshot = load_latest_snapshot(args.storage_root, args.account)
-        return _emit_review(review_payload(account, snapshot), args.output)
+        credentials = load_credentials(account.credential_prefix)
+        if not identity_matches(
+            args.storage_root,
+            account_id=account.account_id,
+            client_code=credentials.client_code,
+        ):
+            raise PortfolioError(
+                "IDENTITY_MISMATCH",
+                "credentials do not match the registered broker identity",
+            )
+        client = AngelOneClient(credentials)
+        client.login()
+        authenticated = client.authenticated_client_code
+        if authenticated is not None and authenticated != credentials.client_code:
+            raise PortfolioError(
+                "IDENTITY_MISMATCH",
+                "authenticated broker identity does not match the registered account",
+            )
+        snapshot = client.holdings()
+        return _emit_review(
+            review_payload(account.account_id, account.broker, snapshot),
+            args.output,
+        )
     raise PortfolioError("INVALID_ARGUMENT", "unknown command")
-
-
-_INVALID_CODES = frozenset(
-    {
-        "INVALID_ARGUMENT",
-        "ACCOUNT_ID_INVALID",
-        "DISPLAY_NAME_INVALID",
-        "BROKER_UNSUPPORTED",
-        "INPUT_UNREADABLE",
-        "INPUT_TOO_LARGE",
-        "INPUT_HEADER_INVALID",
-        "AS_OF_INVALID",
-        "NO_VALID_HOLDINGS",
-        "IO_ERROR",
-        "REGISTRY_PERMISSIONS",
-        "SNAPSHOT_PERMISSIONS",
-        "UNSUPPORTED_SCHEMA",
-        "REGISTRY_TOO_LARGE",
-        "SNAPSHOT_TOO_LARGE",
-    }
-)
-
-
-def _error_json(code: str, message: str) -> str:
-    return json.dumps(
-        {"status": "error", "error_code": code, "message": message},
-        sort_keys=True,
-        allow_nan=False,
-    )
 
 
 def main(argv: Sequence[str] | None = None) -> int:

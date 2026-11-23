@@ -1,6 +1,8 @@
 # Plan 83: read-only portfolio review from a manual holdings baseline
 
-Status: accepted bounded specification under [Issue #437](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/437). Owner and risk owner: Krunal Dodiya. Risk tier: R3 — private portfolio data, private local persistence, and a deliberate product-boundary change. Base: `0f5f5ea99d1504a2cca85490bbadbd7b2ecab9c0` (`main`, 2026-11-23).
+Status: **superseded for the manual CSV path** by [Plan 84](84-live-broker-portfolio-accounts.md) and [Issue #441](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/441) under the owner's 2026-11-23 direction: broker accounts only, no manual CSV, no stored portfolio snapshot, live broker fetch. This document remains historical evidence for the retired manual baseline.
+
+Original status: accepted bounded specification under [Issue #437](https://github.com/krunaldodiya/SwingTradingAIAssistant/issues/437). Owner and risk owner: Krunal Dodiya. Risk tier: R3 — private portfolio data, private local persistence, and a deliberate product-boundary change. Base: `0f5f5ea99d1504a2cca85490bbadbd7b2ecab9c0` (`main`, 2026-11-23).
 
 ## Outcome
 
@@ -107,13 +109,13 @@ Path: `<storage-root>/.portfolio-accounts-v1/snapshots/<account_id>/<snapshot_id
   "input_sha256": "<64 hex characters>",
   "holdings": [
     {
-      "symbol": "HDFCBANK",
+      "symbol": "EXAMPLE1",
       "exchange": "NSE",
-      "isin": "INE040A01034",
-      "quantity": "100",
-      "average_price": "790.58",
-      "last_price": "829.85",
-      "previous_close": "846.00"
+      "isin": "INE000000001",
+      "quantity": "10",
+      "average_price": "100.00",
+      "last_price": "105.00",
+      "previous_close": "104.00"
     }
   ],
   "rejected": [
@@ -140,13 +142,13 @@ Decimal values are stored as strings to keep exact arithmetic.
   "imported_at": "2026-11-23T12:05:00+05:30",
   "summary": {
     "holdings": 5,
-    "invested": 409652.15,
-    "current": 401447.75,
-    "overall_pnl": -8207.0,
-    "overall_pnl_pct": -2.0,
-    "day_change": -11170.75,
-    "day_change_pct": -2.71,
-    "top_holding_weight_pct": 20.68
+    "invested": 100000.0,
+    "current": 102500.0,
+    "overall_pnl": 2500.0,
+    "overall_pnl_pct": 2.5,
+    "day_change": 500.0,
+    "day_change_pct": 0.49,
+    "top_holding_weight_pct": 25.0
   },
   "holdings": [],
   "rejected": [],

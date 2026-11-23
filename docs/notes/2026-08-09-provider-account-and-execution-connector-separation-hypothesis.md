@@ -4,6 +4,8 @@ Date: 2026-08-09
 
 Status: **open — proposed architecture hypothesis**
 
+Superseded for the manual-baseline gate by [Plan 84](../plans/84-live-broker-portfolio-accounts.md) under the owner's 2026-11-23 direction: live broker accounts only, no manual CSV or stored portfolio snapshot.
+
 ## Context
 
 The product may eventually analyse a user-supplied, supported Nifty 50 equity
@@ -110,8 +112,8 @@ specification must define all of the following.
 - Per-account rate limits, bounded retries/timeouts, outage and fallback
   behavior, and explicit `NO_DATA`, unauthorized, unavailable, stale,
   unsupported-instrument, reconciliation-failed, and partial-snapshot outcomes.
-  A manual snapshot remains available when a connector is unavailable, but is
-  labelled as user supplied rather than broker verified.
+  The retired manual path is not available; a connector failure returns a
+  closed error rather than a user-supplied snapshot.
 - Reconciliation of broker positions/holdings with the supported, point-in-time
   Nifty 50 equity universe.  Unsupported instruments are isolated and reported
   without silently dropping them, treating them as cash, or importing F&O data

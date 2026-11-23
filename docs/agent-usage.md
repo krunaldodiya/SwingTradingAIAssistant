@@ -52,8 +52,9 @@ structured facts the tool returns. You must never:
 
 This is a research-only tool. It never trades and never sizes positions.
 Portfolio review is read-only and limited to supported listed-equity holdings
-supplied through a manual snapshot. That snapshot is user-supplied and
-unverified, never broker-verified, and is not long-term portfolio advice.
+fetched live from an explicitly registered broker account through a read-only
+API. It is a point-in-time broker snapshot, not a stored position history, and
+is not long-term portfolio advice.
 
 ## 2. Universal rules before running anything
 
@@ -169,7 +170,7 @@ the authoritative contract; §4 adds exits, boundaries and prerequisites.
 | Raw retained current-price context | `market-data price-context-current --input-file FILE --storage-root ROOT [--acquire-missing] [--contract-version v2] --output json` | [Plan 36](plans/36-bounded-current-price-context-refresh-contract.md) |
 | Retained current facts for a supplied cohort / one aggregate regime fact | `market-data cohort-current --cohort-file FILE --storage-root ROOT --cutoff UTC --output json`; `market-data regime-current --input-file FILE --storage-root ROOT --output json` | [Plan 19](plans/19-current-supplied-cohort-market-data-contract.md), [Plan 20](plans/20-current-supplied-cohort-market-regime-contract.md) |
 | Inspect fixed owner-staged NSE safety evidence | `stock-safety-evidence inspect --storage-root ROOT --observation HANDLE --output json` | [owner-staged-nse-safety-evidence.md](workflows/owner-staged-nse-safety-evidence.md) |
-| Read-only review of a manually supplied portfolio snapshot | `portfolio accounts add --storage-root ROOT --account-id ID --display-name NAME`; `portfolio accounts list --storage-root ROOT`; `portfolio import --storage-root ROOT --account ID --file FILE --as-of ISO`; `portfolio review --storage-root ROOT --account ID --output json` | [Plan 83](plans/83-read-only-portfolio-accounts.md) |
+| Live read-only broker portfolio review | `portfolio accounts add --storage-root ROOT --broker angel-one --account-id ID --display-name NAME --credential-prefix PREFIX`; `portfolio accounts list --storage-root ROOT`; `portfolio accounts verify --storage-root ROOT --account ID`; `portfolio review --storage-root ROOT --account ID --output json` | [Plan 84](plans/84-live-broker-portfolio-accounts.md) |
 
 ## 4. Capability reference
 
