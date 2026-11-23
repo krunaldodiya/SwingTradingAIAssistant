@@ -472,14 +472,17 @@ history as part of this withdrawal.
 - Built packages require both sdist and wheel plus a clean installed-wheel import/runtime smoke when package or runtime identity behavior changes.
 - Failures, skipped checks, unavailable windows, and residual boundaries remain explicit. Never inflate narrower evidence into a broader pass.
 - Cleanup follows successful behavioral proof: remove generated artifacts and obsolete scaffolding without deleting unrelated owner work.
-- Temporary-artifact hygiene: place large test, build, cache, and generated
-  temporary artifacts on the owner's data disk (for example under the private
-  data root) rather than the RAM-backed `/tmp`; record their location; and
-  remove them at task closeout after the required evidence is captured. Use
-  `TMPDIR` and `pytest --basetemp` for large suites. Remove one-off probes,
-  logs, patches, and test temp roots once their evidence is captured or they
-  are superseded. Never delete owner data, unrelated files, or evidence a
-  governing record requires. Report the location and any material space freed.
+- Temporary-artifact hygiene: place test, build, cache, and generated temporary
+  artifacts in a dedicated global temporary directory outside the private data
+  root and its backup scope (for example
+  `~/.cache/swing-trading-ai-assistant/tmp`) rather than the RAM-backed `/tmp`
+  or anywhere under the backed-up data root. Record the location and remove it
+  at task closeout after the required evidence is captured. Use `TMPDIR` and
+  `pytest --basetemp` for large suites. Remove one-off probes, logs, patches,
+  and test temp roots once their evidence is captured or they are superseded.
+  Never delete owner data, unrelated files, or evidence a governing record
+  requires. Report the location and any material space freed. Never create a
+  `tmp` directory inside the private data root.
 - Persistent tooling MUST use an owner-approved, reproducible environment outside
   disposable worktrees. Do not copy virtual environments with embedded paths.
   New installations and hidden directories retain their explicit authority gates.

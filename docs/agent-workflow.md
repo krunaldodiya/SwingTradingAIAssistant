@@ -246,12 +246,15 @@ receipt. Recreate environments from those inputs rather than copying embedded
 paths; verify interpreter, entrypoint and import paths before retiring a worktree
 that previously supplied tooling.
 
-Large suites and builds MUST place their temporary roots on the owner's data
-disk, for example with `TMPDIR` and `pytest --basetemp`, rather than the
-RAM-backed `/tmp`. Record the location and remove those roots, one-off probes,
-logs, patches, and generated caches at closeout once the required evidence is
-captured. Preserve owner data, unrelated files, and evidence a governing record
-requires; never clean the system `/tmp` wholesale.
+Large suites and builds MUST place their temporary roots in a dedicated global
+temporary directory outside the private data root and its backup scope, for
+example `~/.cache/swing-trading-ai-assistant/tmp`, using `TMPDIR` and
+`pytest --basetemp`. Never place temporary artifacts under the backed-up data
+root and never create a `tmp` directory there. Record the location and remove
+those roots, one-off probes, logs, patches, and generated caches at closeout
+once the required evidence is captured. Preserve owner data, unrelated files,
+and evidence a governing record requires; never clean the system `/tmp`
+wholesale.
 
 After merge, fetch remote `main`, verify that local `main` is its ancestor and
 that updating it will not disturb another checked-out worktree, then advance it
