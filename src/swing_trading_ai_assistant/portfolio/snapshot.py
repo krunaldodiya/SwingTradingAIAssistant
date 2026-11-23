@@ -12,7 +12,7 @@ import secrets
 import stat
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, localcontext
 from pathlib import Path
 from typing import cast
 
@@ -27,6 +27,7 @@ from .storage import (
     atomic_write,
     now_iso,
     parse_aware_timestamp,
+    private_lock,
     require_private_directory,
     require_private_file,
     validate_storage_root,
@@ -35,7 +36,7 @@ from .storage import (
 SCHEMA_VERSION = 1
 SOURCE = "MANUAL_SNAPSHOT"
 MAX_INPUT_BYTES = 1_048_576
-MAX_SNAPSHOT_BYTES = 4_194_304
+MAX_SNAPSHOT_BYTES = 16_777_216
 MAX_ABS_DECIMAL = Decimal("1e12")
 MIN_ABS_DECIMAL = Decimal("1e-9")
 REQUIRED_COLUMNS: set[str] = {
@@ -292,12 +293,12 @@ def _parse_csv(raw: bytes) -> tuple[tuple[Holding, ...], tuple[RejectedRow, ...]
             "INPUT_HEADER_INVALID", "snapshot CSV is malformed"
         ) from exc
     header_index = next(
-        (index for index, row in enumerate(rows) if any(cell.strip() for cell in row)),
+        (index for index, row in enumerate(rows) if row),
         None,
     )
     if header_index is None:
         raise PortfolioError("INPUT_HEADER_INVALID", "snapshot CSV has no header")
-    headers = [cell.strip().lower() for cell in rows[header_index]]
+    headers = [cell.strip().lstrip("\ufeff").lower() for cell in rows[header_index]]
     if any(not header for header in headers):
         raise PortfolioError(
             "INPUT_HEADER_INVALID", "snapshot header has a blank column"
@@ -318,7 +319,7 @@ def _parse_csv(raw: bytes) -> tuple[tuple[Holding, ...], tuple[RejectedRow, ...]
     rejected: list[RejectedRow] = []
     seen: set[str] = set()
     for offset, row in enumerate(rows[header_index + 1 :], start=header_index + 2):
-        if len(row) <= 1 and (not row or not row[0].strip()):
+        if not row:
             continue
         parsed = _parse_row(row, columns, number=offset, seen=seen)
         if isinstance(parsed, Holding):
@@ -403,23 +404,24 @@ def import_snapshot(
             "SNAPSHOT_PERMISSIONS", "snapshot storage is unavailable"
         ) from exc
     require_private_directory(container, code="SNAPSHOT_PERMISSIONS")
-    if directory.exists() and not directory.is_dir():
-        raise PortfolioError(
-            "SNAPSHOT_PERMISSIONS", "snapshot account path is not a directory"
-        )
     stamp = snapshot.snapshot_id.split("-", 1)[0]
-    if directory.exists() and any(directory.glob(f"{stamp}-*.json")):
-        raise PortfolioError("SNAPSHOT_COLLISION", "snapshot timestamp already exists")
     payload = (
         json.dumps(snapshot.to_dict(), indent=2, sort_keys=True, allow_nan=False) + "\n"
     )
-    atomic_write(
-        directory,
-        f"{snapshot.snapshot_id}.json",
-        payload,
-        overwrite=False,
-        permission_code="SNAPSHOT_PERMISSIONS",
-    )
+    with private_lock(directory, permission_code="SNAPSHOT_PERMISSIONS"):
+        if directory.exists() and any(directory.glob(f"{stamp}-*.json")):
+            raise PortfolioError(
+                "SNAPSHOT_COLLISION", "snapshot timestamp already exists"
+            )
+        atomic_write(
+            directory,
+            f"{snapshot.snapshot_id}.json",
+            payload,
+            overwrite=False,
+            permission_code="SNAPSHOT_PERMISSIONS",
+            max_bytes=MAX_SNAPSHOT_BYTES,
+            size_code="SNAPSHOT_TOO_LARGE",
+        )
     mark_imported(root, account_id=account.account_id, imported_at=imported_at)
     return snapshot
 
@@ -630,15 +632,18 @@ def load_latest_snapshot(storage_root: Path, account_id: str) -> Snapshot:
     get_account(root, account_id)
     directory = snapshot_directory(root, account_id)
     container = directory.parent
-    if container.exists():
-        require_private_directory(container, code="SNAPSHOT_PERMISSIONS")
+    try:
+        container.lstat()
+    except FileNotFoundError as exc:
+        raise PortfolioError("NO_SNAPSHOT", "account has no snapshot") from exc
+    require_private_directory(container, code="SNAPSHOT_PERMISSIONS")
     try:
         directory.lstat()
     except FileNotFoundError as exc:
         raise PortfolioError("NO_SNAPSHOT", "account has no snapshot") from exc
     require_private_directory(directory, code="SNAPSHOT_PERMISSIONS")
     files = sorted(
-        (path for path in directory.glob("*.json") if path.is_file()),
+        (path for path in directory.glob("*.json")),
         key=lambda path: path.name,
         reverse=True,
     )
@@ -665,6 +670,15 @@ def review_payload(account: AccountRecord, snapshot: Snapshot) -> dict[str, obje
 
     if snapshot.account_id != account.account_id:
         raise PortfolioError("SNAPSHOT_CORRUPT", "snapshot account does not match")
+    _validate_limitations(
+        list(snapshot.limitations), snapshot.holdings, snapshot.rejected
+    )
+    with localcontext() as context:
+        context.prec = 60
+        return _review_payload(account, snapshot)
+
+
+def _review_payload(account: AccountRecord, snapshot: Snapshot) -> dict[str, object]:
     invested = sum(
         (holding.average_price * holding.quantity for holding in snapshot.holdings),
         Decimal("0"),

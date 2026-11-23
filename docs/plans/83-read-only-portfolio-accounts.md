@@ -37,7 +37,7 @@ The snapshot is explicitly user supplied and unverified. It never claims broker 
 
 Path: `<storage-root>/.portfolio-accounts-v1/accounts.json`.
 
-- Directory `0700`; file `0600`; reject symlinks, non-regular files, unsafe modes, and foreign owners.
+- Directory `0700` on creation; file `0600`; reads reject symlinks, non-regular files, group/other access, and foreign owners.
 - Atomic write: exclusive temporary file in the same directory, `fsync`, `os.replace`, directory `fsync`.
 - `flock` on `.lock` serializes writers where the platform supports it.
 - Schema version `1`; unknown versions fail closed.
@@ -67,7 +67,7 @@ Path: `<storage-root>/.portfolio-accounts-v1/accounts.json`.
 `portfolio import --file <path> --as-of <ISO-8601 timestamp>`.
 
 - UTF-8 CSV, at most 1 MiB, regular file only; symlinks are rejected. The input is opened with `O_NOFOLLOW`, and its size is bounded before and after the read.
-- One header row. A leading UTF-8 BOM and completely empty leading lines are tolerated. A row with empty cells is validated and rejected explicitly, never skipped as blank.
+- One header row. A UTF-8 BOM at the start of the file or the header line and completely empty leading lines are tolerated. Only a completely empty line is skipped; any row with cells is validated and rejected explicitly.
 - Required columns, in any order: `symbol`, `exchange`, `quantity`, `average_price`, `last_price`.
 - Optional columns: `isin`, `previous_close`.
 - Missing required columns, duplicate headers, or unknown columns fail the whole import with `INPUT_HEADER_INVALID`. Unknown columns are rejected rather than silently ignored.
@@ -93,6 +93,8 @@ Path: `<storage-root>/.portfolio-accounts-v1/snapshots/<account_id>/<snapshot_id
 - A second import with the same microsecond timestamp fails with `SNAPSHOT_COLLISION` rather than relying on the random suffix for ordering.
 - Snapshot files are append-only and never overwritten. The `snapshots/` container and the account directory are both `0700`.
 - File `0600`; account snapshot directory `0700`; atomic write.
+- The serialized snapshot is at most 16 MiB and the registry at most 1 MiB. Both limits are checked **before** replacing the file, so a valid import cannot be stored and later rejected by the read bound. The closed failures are `SNAPSHOT_TOO_LARGE` and `REGISTRY_TOO_LARGE`.
+- Snapshot discovery includes every `*.json` entry, including symlinks, directories, and dangling links. A newest entry that is not a regular private file fails closed with `SNAPSHOT_PERMISSIONS`; it is never silently skipped in favor of an older snapshot.
 - The snapshot is a point-in-time record. It is never presented as historical holdings at an earlier cutoff.
 
 ```json
@@ -133,7 +135,7 @@ Decimal values are stored as strings to keep exact arithmetic.
   "account_id": "manual-main",
   "broker": "MANUAL",
   "source": "MANUAL_SNAPSHOT",
-  "snapshot_id": "20261123T120500123456Z-1a2b3c4d",
+  "snapshot_id": "20261123T063500123456Z-1a2b3c4d",
   "as_of": "2026-11-23T11:30:00+05:30",
   "imported_at": "2026-11-23T12:05:00+05:30",
   "summary": {
@@ -168,9 +170,9 @@ Decimal values are stored as strings to keep exact arithmetic.
 
 ### Failure codes
 
-`ACCOUNT_NOT_FOUND`, `ACCOUNT_ID_INVALID`, `BROKER_UNSUPPORTED`, `DISPLAY_NAME_INVALID`, `INVALID_ARGUMENT`, `DUPLICATE_ACCOUNT_ID`, `REGISTRY_PERMISSIONS`, `REGISTRY_CORRUPT`, `UNSUPPORTED_SCHEMA`, `IO_ERROR`, `INPUT_UNREADABLE`, `INPUT_TOO_LARGE`, `INPUT_HEADER_INVALID`, `AS_OF_INVALID`, `NO_VALID_HOLDINGS`, `NO_SNAPSHOT`, `SNAPSHOT_CORRUPT`, `SNAPSHOT_PERMISSIONS`, `SNAPSHOT_COLLISION`, `INTERNAL_ERROR`.
+`ACCOUNT_NOT_FOUND`, `ACCOUNT_ID_INVALID`, `BROKER_UNSUPPORTED`, `DISPLAY_NAME_INVALID`, `INVALID_ARGUMENT`, `DUPLICATE_ACCOUNT_ID`, `REGISTRY_PERMISSIONS`, `REGISTRY_CORRUPT`, `REGISTRY_TOO_LARGE`, `UNSUPPORTED_SCHEMA`, `IO_ERROR`, `INPUT_UNREADABLE`, `INPUT_TOO_LARGE`, `INPUT_HEADER_INVALID`, `AS_OF_INVALID`, `NO_VALID_HOLDINGS`, `NO_SNAPSHOT`, `SNAPSHOT_CORRUPT`, `SNAPSHOT_PERMISSIONS`, `SNAPSHOT_COLLISION`, `SNAPSHOT_TOO_LARGE`, `INTERNAL_ERROR`.
 
-Exit codes: `0` success; `1` domain or stored-state failure; `2` invalid request or internal error. Every failure prints a JSON error envelope to `stderr` containing only a closed code and a redacted message — never a traceback, private path, or holdings value.
+Exit codes: `0` success; `1` domain or stored-state failure (`ACCOUNT_NOT_FOUND`, `NO_SNAPSHOT`, `REGISTRY_CORRUPT`, `SNAPSHOT_CORRUPT`, `SNAPSHOT_COLLISION`, `DUPLICATE_ACCOUNT_ID`); `2` invalid request, unsafe/missing private path, unsupported schema, input/size rejection, parser failure, or internal error. Every failure prints a JSON error envelope to `stderr` containing only a closed code and a redacted message — never a traceback, private path, or holdings value.
 
 ## Acceptance
 
@@ -185,6 +187,10 @@ Exit codes: `0` success; `1` domain or stored-state failure; `2` invalid request
 - Same-microsecond imports are rejected as `SNAPSHOT_COLLISION`; microsecond ordering selects the true latest snapshot.
 - Out-of-range finite decimals and stored values that would overflow formatting are rejected at import or load.
 - Loaded snapshots cannot drop or forge the mandatory unverified labels, invent rejection reasons, or contain duplicate holdings.
+- A newer symlinked, dangling, or non-regular `*.json` snapshot entry fails with `SNAPSHOT_PERMISSIONS`; an older valid snapshot is never silently reviewed.
+- A snapshot or registry that would exceed its write bound fails before replacing the existing file; the previous valid state remains readable.
+- Parser failures (missing option, invalid value, unsupported broker) print the same redacted JSON envelope and exit `2`.
+- Review aggregates are computed under a high-precision Decimal context; 100 holdings at the per-value bound remain reviewable.
 - One account's import or review never reads another account's snapshots.
 - No credential, broker call, order, position, or network request exists in the slice.
 - `docs/agent-usage.md` no longer states that the tool never assesses a portfolio; it states the exact read-only, user-supplied limits.

@@ -122,8 +122,9 @@ HDFCBANK,NSE,100,790.58,829.85,846.00,INE040A01034
 Snapshots are append-only under
 `PRIVATE_ROOT/.portfolio-accounts-v1/snapshots/<account-id>/` with `0600`
 permissions; the registry and snapshot directories are `0700`. Exit codes are
-`0` success, `1` domain/state failure, and `2` invalid request or internal
-error; every failure is a redacted JSON error envelope on stderr. A broker
+`0` success, `1` domain/stored-state failure, and `2` invalid request, unsafe
+path, unsupported schema, input/size rejection, or internal error. Failures,
+including parser failures, are a redacted JSON envelope on stderr. A broker
 connector is a separate, later, gated slice; see
 [Plan 83](docs/plans/83-read-only-portfolio-accounts.md).
 

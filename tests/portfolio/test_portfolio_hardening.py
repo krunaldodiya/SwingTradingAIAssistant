@@ -1,6 +1,7 @@
 import json
 import os
 import stat
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -131,7 +132,7 @@ def test_cli_readonly_root_is_redacted(
                     "Main",
                 ]
             )
-            == 1
+            == 2
         )
     finally:
         os.chmod(tmp_path, 0o700)
@@ -399,7 +400,160 @@ def test_snapshot_size_is_bounded(
 
 
 def test_display_name_rejects_unicode_controls(tmp_path: Path) -> None:
-    for name in ("bad\u009bname", "bad\u202ename", "bad\u200bname"):
+    for name in (
+        "bad\u009bname",
+        "bad\u202ename",
+        "bad\u200bname",
+        "bad\u2028name",
+        "bad\u00a0name",
+        "   ",
+    ):
         with pytest.raises(PortfolioError) as error:
             add_account(tmp_path, account_id="manual-main", display_name=name, now=_NOW)
         assert error.value.code == "DISPLAY_NAME_INVALID"
+
+
+# --- non-regular newest entries, write bounds, aggregates ---------------------
+
+
+def test_newer_symlink_snapshot_is_rejected(tmp_path: Path) -> None:
+    root = _root(tmp_path)
+    _import(root)
+    directory = _snapshot_path(root).parent
+    target = tmp_path / "target"
+    target.mkdir()
+    newer = directory / "20261123T063500000001Z-aaaaaaaa.json"
+    newer.symlink_to(target)
+    with pytest.raises(PortfolioError) as error:
+        load_latest_snapshot(root, "manual-main")
+    assert error.value.code == "SNAPSHOT_PERMISSIONS"
+
+
+def test_newer_directory_snapshot_is_rejected(tmp_path: Path) -> None:
+    root = _root(tmp_path)
+    _import(root)
+    directory = _snapshot_path(root).parent
+    newer = directory / "20261123T063500000001Z-bbbbbbbb.json"
+    newer.mkdir()
+    with pytest.raises(PortfolioError) as error:
+        load_latest_snapshot(root, "manual-main")
+    assert error.value.code == "SNAPSHOT_PERMISSIONS"
+
+
+def test_snapshot_write_bound_rejects_before_store(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _root(tmp_path)
+    monkeypatch.setattr(snapshot_module, "MAX_SNAPSHOT_BYTES", 10)
+    with pytest.raises(PortfolioError) as error:
+        _import(root)
+    assert error.value.code == "SNAPSHOT_TOO_LARGE"
+    assert get_account(root, "manual-main").last_import_at is None
+
+
+def test_registry_write_bound_rejects_before_replace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _root(tmp_path)
+    monkeypatch.setattr(accounts_module, "MAX_REGISTRY_BYTES", 300)
+    with pytest.raises(PortfolioError) as error:
+        add_account(root, account_id="manual-second", display_name="Second", now=_NOW)
+    assert error.value.code == "REGISTRY_TOO_LARGE"
+    assert [account.account_id for account in list_accounts(root)] == ["manual-main"]
+
+
+def test_aggregate_decimal_review_is_supported(tmp_path: Path) -> None:
+    root = _root(tmp_path)
+    rows = "".join(
+        f"S{index:03d},NSE,1000000000000,1000000000000,1000000000000,,\n"
+        for index in range(100)
+    )
+    snapshot = _import(root, _HEADER + rows)
+    review = review_payload(get_account(root, "manual-main"), snapshot)
+    assert review["summary"]["holdings"] == 100
+    assert isinstance(review["summary"]["current"], float)
+
+
+def test_hand_built_snapshot_limitations_are_rejected(tmp_path: Path) -> None:
+    root = _root(tmp_path)
+    snapshot = _import(root)
+    forged = replace(snapshot, limitations=("BROKER_VERIFIED",))
+    with pytest.raises(PortfolioError) as error:
+        review_payload(get_account(root, "manual-main"), forged)
+    assert error.value.code == "SNAPSHOT_CORRUPT"
+
+
+# --- CLI parser contract ------------------------------------------------------
+
+
+def test_argparse_missing_option_is_json(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert main(["accounts", "list"]) == 2
+    captured = capsys.readouterr()
+    assert json.loads(captured.err)["error_code"] == "INVALID_ARGUMENT"
+    assert "usage:" not in captured.err.lower()
+
+
+def test_argparse_invalid_output_is_json(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert (
+        main(
+            [
+                "accounts",
+                "list",
+                "--storage-root",
+                str(tmp_path),
+                "--output",
+                "xml",
+            ]
+        )
+        == 2
+    )
+    assert json.loads(capsys.readouterr().err)["error_code"] == "INVALID_ARGUMENT"
+
+
+def test_broker_unsupported_is_reachable(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert (
+        main(
+            [
+                "accounts",
+                "add",
+                "--storage-root",
+                str(tmp_path),
+                "--account-id",
+                "manual-main",
+                "--display-name",
+                "Main",
+                "--broker",
+                "angel-one",
+            ]
+        )
+        == 2
+    )
+    assert json.loads(capsys.readouterr().err)["error_code"] == "BROKER_UNSUPPORTED"
+
+
+# --- header / blank hardening -------------------------------------------------
+
+
+def test_bom_after_leading_blank_lines_is_accepted(tmp_path: Path) -> None:
+    root = _root(tmp_path)
+    snapshot = _import(root, "\n\n\ufeff" + _VALID)
+    assert len(snapshot.holdings) == 1
+
+
+def test_leading_comma_row_is_a_header_error(tmp_path: Path) -> None:
+    root = _root(tmp_path)
+    with pytest.raises(PortfolioError) as error:
+        _import(root, ",,,,,\n" + _VALID)
+    assert error.value.code == "INPUT_HEADER_INVALID"
+
+
+def test_single_empty_cell_row_is_rejected(tmp_path: Path) -> None:
+    root = _root(tmp_path)
+    snapshot = _import(root, _VALID + '""\n')
+    assert snapshot.rejected[0].reason == "COLUMN_COUNT_MISMATCH"

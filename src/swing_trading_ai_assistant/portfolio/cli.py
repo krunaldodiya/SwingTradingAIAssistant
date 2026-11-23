@@ -7,7 +7,7 @@ import json
 import sys
 from collections.abc import Sequence
 from pathlib import Path
-from typing import cast
+from typing import NoReturn, cast
 
 from .accounts import (
     AccountRecord,
@@ -244,8 +244,13 @@ def _emit_review(payload: dict[str, object], output: str) -> int:
     return 0
 
 
+class _Parser(argparse.ArgumentParser):
+    def error(self, message: str) -> NoReturn:
+        raise PortfolioError("INVALID_ARGUMENT", "invalid command arguments")
+
+
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = _Parser(
         prog="portfolio",
         description="Read-only manual portfolio registry and review.",
     )
@@ -258,7 +263,7 @@ def _build_parser() -> argparse.ArgumentParser:
     add.add_argument("--storage-root", type=Path, required=True)
     add.add_argument("--account-id", required=True)
     add.add_argument("--display-name", required=True)
-    add.add_argument("--broker", choices=("manual",), default="manual")
+    add.add_argument("--broker", default="manual")
     add.add_argument("--output", choices=("json", "table"), default="table")
 
     listing = account_commands.add_parser("list", help="list accounts")
@@ -312,7 +317,6 @@ _INVALID_CODES = frozenset(
     {
         "INVALID_ARGUMENT",
         "ACCOUNT_ID_INVALID",
-        "CREDENTIAL_PREFIX_INVALID",
         "DISPLAY_NAME_INVALID",
         "BROKER_UNSUPPORTED",
         "INPUT_UNREADABLE",
@@ -320,6 +324,12 @@ _INVALID_CODES = frozenset(
         "INPUT_HEADER_INVALID",
         "AS_OF_INVALID",
         "NO_VALID_HOLDINGS",
+        "IO_ERROR",
+        "REGISTRY_PERMISSIONS",
+        "SNAPSHOT_PERMISSIONS",
+        "UNSUPPORTED_SCHEMA",
+        "REGISTRY_TOO_LARGE",
+        "SNAPSHOT_TOO_LARGE",
     }
 )
 
@@ -333,9 +343,8 @@ def _error_json(code: str, message: str) -> str:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = _build_parser()
-    args = parser.parse_args(argv)
     try:
+        args = _build_parser().parse_args(argv)
         return _dispatch(args)
     except PortfolioError as exc:
         print(_error_json(exc.code, exc.message), file=sys.stderr)

@@ -60,8 +60,8 @@ unverified, never broker-verified, and is not long-term portfolio advice.
 ### 2.1 Commands and credential injection
 
 Commands are console scripts installed with the project (`market-data`,
-`signal-decisions`, `stock-observations`, `stock-safety-evidence`, and the
-operator scripts in §7). In the owner's environment, commands that contact a
+`signal-decisions`, `stock-observations`, `stock-safety-evidence`, `portfolio`,
+and the operator scripts in §7). In the owner's environment, commands that contact a
 provider are wrapped for credential injection as `doppler run -- <command> ...`;
 retained-only commands read no credentials and make no provider call. Each
 capability below marks provider access where the contract documents it.

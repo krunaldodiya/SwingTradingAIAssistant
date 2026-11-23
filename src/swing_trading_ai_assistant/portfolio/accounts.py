@@ -72,6 +72,8 @@ def registry_directory(storage_root: Path) -> Path:
 
 
 def snapshot_directory(storage_root: Path, account_id: str) -> Path:
+    if not _ACCOUNT_ID.fullmatch(account_id):
+        raise PortfolioError("ACCOUNT_ID_INVALID", "account id is invalid")
     return registry_directory(storage_root) / SNAPSHOT_DIRNAME / account_id
 
 
@@ -88,11 +90,15 @@ def _text(value: object, message: str) -> str:
 
 
 def _valid_display_name(value: str) -> bool:
-    return (
-        bool(value)
-        and len(value) <= 100
-        and not any(unicodedata.category(char).startswith("C") for char in value)
-    )
+    if not value or len(value) > 100:
+        return False
+    for char in value:
+        category = unicodedata.category(char)
+        if category.startswith("C") or category in {"Zl", "Zp"}:
+            return False
+        if category == "Zs" and char != " ":
+            return False
+    return True
 
 
 def _validate_account(raw: object) -> AccountRecord:
@@ -177,7 +183,13 @@ def _load(storage_root: Path) -> Registry:
 
 def _write(storage_root: Path, registry: Registry) -> None:
     payload = json.dumps(registry.to_dict(), indent=2, sort_keys=True) + "\n"
-    atomic_write(registry_directory(storage_root), REGISTRY_FILENAME, payload)
+    atomic_write(
+        registry_directory(storage_root),
+        REGISTRY_FILENAME,
+        payload,
+        max_bytes=MAX_REGISTRY_BYTES,
+        size_code="REGISTRY_TOO_LARGE",
+    )
 
 
 def _validate_account_id(account_id: str) -> str:

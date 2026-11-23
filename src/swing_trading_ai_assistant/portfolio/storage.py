@@ -118,9 +118,14 @@ def atomic_write(
     *,
     overwrite: bool = True,
     permission_code: str = "REGISTRY_PERMISSIONS",
+    max_bytes: int | None = None,
+    size_code: str = "IO_ERROR",
 ) -> Path:
     """Write one private file atomically; optionally refuse replacement."""
 
+    encoded = payload.encode("utf-8")
+    if max_bytes is not None and len(encoded) > max_bytes:
+        raise PortfolioError(size_code, "private payload exceeds the size bound")
     _create_private_directory(directory, code=permission_code)
     target = directory / filename
     if not overwrite and target.exists():
@@ -151,10 +156,12 @@ def atomic_write(
 
 
 @contextlib.contextmanager
-def private_lock(directory: Path) -> Generator[None, None, None]:
+def private_lock(
+    directory: Path, *, permission_code: str = "REGISTRY_PERMISSIONS"
+) -> Generator[None, None, None]:
     """Serialize writers with an advisory lock on a private file."""
 
-    _create_private_directory(directory, code="REGISTRY_PERMISSIONS")
+    _create_private_directory(directory, code=permission_code)
     flags = os.O_CREAT | os.O_RDWR
     flags |= getattr(os, "O_NOFOLLOW", 0)
     flags |= getattr(os, "O_CLOEXEC", 0)
