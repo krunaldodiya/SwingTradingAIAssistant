@@ -93,12 +93,12 @@ Use `--output json` to emit prompt-ready `swing-trade-brief@v1` cards for extern
   ($< \text{INR } 25\text{ Cr / day}$ turnover), and circuit-locked stocks
   ($< 2.0\%$ distance).
 
-## Live read-only broker portfolio accounts
+## Live read-only broker records
 
-Register a broker account once, then fetch its current holdings live on every
-review. The registry stores only a non-secret credential reference; credentials
-stay in the environment (for example, injected by Doppler). **No CSV or
-portfolio snapshot is stored.**
+Register a broker account once, then read its current holdings, positions,
+order book, trade book, and GTT rules live. The registry stores only a
+non-secret credential reference; credentials stay in the environment (for
+example, injected by Doppler). **No CSV or portfolio snapshot is stored.**
 
 ```bash
 portfolio accounts add --storage-root PRIVATE_ROOT \
@@ -108,6 +108,8 @@ portfolio accounts add --storage-root PRIVATE_ROOT \
 portfolio accounts list --storage-root PRIVATE_ROOT
 
 portfolio review --storage-root PRIVATE_ROOT --account angel-main
+portfolio snapshot --storage-root PRIVATE_ROOT --account angel-main --output json
+portfolio gtt --storage-root PRIVATE_ROOT --account angel-main
 ```
 
 The prefix resolves four environment variables: `ANGEL_ONE_API_KEY`,
@@ -115,13 +117,18 @@ The prefix resolves four environment variables: `ANGEL_ONE_API_KEY`,
 distinct prefix for each account. `add` checks all four, performs a read-only
 login, and stores only the reference plus an HMAC identity fingerprint.
 
-`review` performs a read-only login and holdings fetch; no order, position, or
-execution endpoint is called. The registry is `0600` inside a `0700`
-directory. Exit codes are `0` success, `1` domain/stored-state failure, and `2`
-invalid request, unsafe path, unsupported schema, credential/auth/provider
-failure, parser failure, or internal error. Failures are a redacted JSON
-envelope on stderr. See
-[Plan 84](docs/plans/84-live-broker-portfolio-accounts.md).
+`snapshot` returns all five sections in one versioned envelope; `holdings`,
+`positions`, `orders`, `trades`, and `gtt` return one section each. Every
+command performs a read-only login. Only login and the five record endpoints
+are allowlisted; order placement, modification, cancellation, position
+conversion, and GTT mutation are not implemented. Section failures are
+explicit and do not erase successful sections in a snapshot. The registry is
+`0600` inside a `0700` directory. Exit codes are `0` success, `1`
+domain/stored-state failure or an incomplete snapshot, and `2` invalid request,
+unsafe path, unsupported schema, credential/auth/provider failure, parser
+failure, or internal error. Failures are a redacted JSON envelope on stderr.
+See [Plan 84](docs/plans/84-live-broker-portfolio-accounts.md) and
+[Plan 85](docs/plans/85-read-only-broker-records.md).
 
 ## Try single-stock research with a local assistant
 

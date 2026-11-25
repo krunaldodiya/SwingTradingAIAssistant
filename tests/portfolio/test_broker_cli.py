@@ -68,6 +68,15 @@ def _set_env(
     monkeypatch.setenv(f"{prefix}_TOTP_SECRET", TEST_TOTP)
 
 
+def _patch_connector(monkeypatch: pytest.MonkeyPatch, factory=FakeClient) -> None:
+    def opener(broker, prefix, environ=None):
+        code = os.environ.get(f"{prefix}_CLIENT_CODE", "CLIENT1")
+        credentials = type("Credentials", (), {"client_code": code})()
+        return code, factory(credentials)
+
+    monkeypatch.setattr(cli_module, "open_connector", opener)
+
+
 def _add(
     tmp_path: Path, *, account_id: str = "angel-main", prefix: str = "ANGEL_ONE"
 ) -> None:
@@ -100,7 +109,9 @@ def test_add_and_list_json(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _set_env(monkeypatch)
-    monkeypatch.setattr(accounts_module, "_default_verifier", lambda _prefix: "CLIENT1")
+    monkeypatch.setattr(
+        accounts_module, "_default_verifier", lambda _broker, _prefix: "CLIENT1"
+    )
     _add(tmp_path)
     capsys.readouterr()
     assert (
@@ -128,8 +139,10 @@ def test_review_json(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _set_env(monkeypatch)
-    monkeypatch.setattr(accounts_module, "_default_verifier", lambda _prefix: "CLIENT1")
-    monkeypatch.setattr(cli_module, "AngelOneClient", FakeClient)
+    monkeypatch.setattr(
+        accounts_module, "_default_verifier", lambda _broker, _prefix: "CLIENT1"
+    )
+    _patch_connector(monkeypatch)
     _add(tmp_path)
     capsys.readouterr()
     assert (
@@ -161,8 +174,10 @@ def test_accounts_and_review_tables(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _set_env(monkeypatch)
-    monkeypatch.setattr(accounts_module, "_default_verifier", lambda _prefix: "CLIENT1")
-    monkeypatch.setattr(cli_module, "AngelOneClient", FakeClient)
+    monkeypatch.setattr(
+        accounts_module, "_default_verifier", lambda _broker, _prefix: "CLIENT1"
+    )
+    _patch_connector(monkeypatch)
     _add(tmp_path)
     capsys.readouterr()
     assert main(["accounts", "list", "--storage-root", str(tmp_path)]) == 0
@@ -243,9 +258,9 @@ def test_cross_account_credentials_are_isolated(
     monkeypatch.setattr(
         accounts_module,
         "_default_verifier",
-        lambda prefix: "CLIENT1" if prefix == "ANGEL_ONE" else "CLIENT2",
+        lambda _broker, prefix: "CLIENT1" if prefix == "ANGEL_ONE" else "CLIENT2",
     )
-    monkeypatch.setattr(cli_module, "AngelOneClient", FakeClient)
+    _patch_connector(monkeypatch)
     _add(tmp_path, account_id="angel-main", prefix="ANGEL_ONE")
     _add(tmp_path, account_id="angel-two", prefix="ANGEL_TWO")
     capsys.readouterr()
@@ -272,12 +287,14 @@ def test_review_rejects_authenticated_identity_mismatch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _set_env(monkeypatch)
-    monkeypatch.setattr(accounts_module, "_default_verifier", lambda _prefix: "CLIENT1")
+    monkeypatch.setattr(
+        accounts_module, "_default_verifier", lambda _broker, _prefix: "CLIENT1"
+    )
 
     class BadAuthClient(FakeClient):
         authenticated_client_code = "OTHER"
 
-    monkeypatch.setattr(cli_module, "AngelOneClient", BadAuthClient)
+    _patch_connector(monkeypatch, BadAuthClient)
     _add(tmp_path)
     capsys.readouterr()
     BadAuthClient.holdings_calls = 0
@@ -303,8 +320,10 @@ def test_review_rejects_repointed_prefix(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _set_env(monkeypatch, "ANGEL_ONE", "CLIENT1")
-    monkeypatch.setattr(accounts_module, "_default_verifier", lambda _prefix: "CLIENT1")
-    monkeypatch.setattr(cli_module, "AngelOneClient", FakeClient)
+    monkeypatch.setattr(
+        accounts_module, "_default_verifier", lambda _broker, _prefix: "CLIENT1"
+    )
+    _patch_connector(monkeypatch)
     _add(tmp_path)
     capsys.readouterr()
     FakeClient.holdings_calls = 0
@@ -331,8 +350,10 @@ def test_review_writes_no_files(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _set_env(monkeypatch)
-    monkeypatch.setattr(accounts_module, "_default_verifier", lambda _prefix: "CLIENT1")
-    monkeypatch.setattr(cli_module, "AngelOneClient", FakeClient)
+    monkeypatch.setattr(
+        accounts_module, "_default_verifier", lambda _broker, _prefix: "CLIENT1"
+    )
+    _patch_connector(monkeypatch)
     _add(tmp_path)
     capsys.readouterr()
     registry = tmp_path / ".portfolio-accounts-v1" / "accounts.json"
@@ -363,7 +384,9 @@ def test_duplicate_prefix_cli(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _set_env(monkeypatch)
-    monkeypatch.setattr(accounts_module, "_default_verifier", lambda _prefix: "CLIENT1")
+    monkeypatch.setattr(
+        accounts_module, "_default_verifier", lambda _broker, _prefix: "CLIENT1"
+    )
     _add(tmp_path)
     capsys.readouterr()
     assert (
@@ -395,7 +418,9 @@ def test_add_and_verify_tables(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _set_env(monkeypatch)
-    monkeypatch.setattr(accounts_module, "_default_verifier", lambda _prefix: "CLIENT1")
+    monkeypatch.setattr(
+        accounts_module, "_default_verifier", lambda _broker, _prefix: "CLIENT1"
+    )
     assert (
         main(
             [
@@ -487,7 +512,9 @@ def test_uncaught_oserror_exit_two(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _set_env(monkeypatch)
-    monkeypatch.setattr(accounts_module, "_default_verifier", lambda _prefix: "CLIENT1")
+    monkeypatch.setattr(
+        accounts_module, "_default_verifier", lambda _broker, _prefix: "CLIENT1"
+    )
     _add(tmp_path)
     directory = tmp_path / ".portfolio-accounts-v1"
     os.chmod(directory, 0o000)  # noqa: S103 - deliberately unsafe fixture
@@ -506,13 +533,15 @@ def test_review_provider_error_exit_two(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _set_env(monkeypatch)
-    monkeypatch.setattr(accounts_module, "_default_verifier", lambda _prefix: "CLIENT1")
+    monkeypatch.setattr(
+        accounts_module, "_default_verifier", lambda _broker, _prefix: "CLIENT1"
+    )
 
     class FailingClient(FakeClient):
         def login(self) -> None:
             raise PortfolioError("PROVIDER_UNAVAILABLE", "down")
 
-    monkeypatch.setattr(cli_module, "AngelOneClient", FailingClient)
+    _patch_connector(monkeypatch, FailingClient)
     _add(tmp_path)
     capsys.readouterr()
     assert (
