@@ -51,10 +51,12 @@ structured facts the tool returns. You must never:
   rankings, or effectiveness.
 
 This is a research-only tool. It never trades and never sizes positions.
-Portfolio review is read-only and limited to supported listed-equity holdings
-fetched live from an explicitly registered broker account through a read-only
-API. It is a point-in-time broker snapshot, not a stored position history, and
-is not long-term portfolio advice.
+Portfolio review and record reads are read-only. They cover holdings,
+positions, the order book, the trade book, and GTT rules fetched live from an
+explicitly registered broker account through read-only APIs. They are
+point-in-time broker snapshots, not stored position history, and are not
+long-term portfolio advice. No order, position-conversion, or GTT mutation
+surface exists.
 
 ## 2. Universal rules before running anything
 
@@ -171,6 +173,17 @@ the authoritative contract; §4 adds exits, boundaries and prerequisites.
 | Retained current facts for a supplied cohort / one aggregate regime fact | `market-data cohort-current --cohort-file FILE --storage-root ROOT --cutoff UTC --output json`; `market-data regime-current --input-file FILE --storage-root ROOT --output json` | [Plan 19](plans/19-current-supplied-cohort-market-data-contract.md), [Plan 20](plans/20-current-supplied-cohort-market-regime-contract.md) |
 | Inspect fixed owner-staged NSE safety evidence | `stock-safety-evidence inspect --storage-root ROOT --observation HANDLE --output json` | [owner-staged-nse-safety-evidence.md](workflows/owner-staged-nse-safety-evidence.md) |
 | Live read-only broker portfolio review | `portfolio accounts add --storage-root ROOT --broker angel-one --account-id ID --display-name NAME --credential-prefix PREFIX`; `portfolio accounts list --storage-root ROOT`; `portfolio accounts verify --storage-root ROOT --account ID`; `portfolio review --storage-root ROOT --account ID --output json` | [Plan 84](plans/84-live-broker-portfolio-accounts.md) |
+| Live read-only broker records | `portfolio holdings`, `positions`, `orders`, `trades`, `gtt` each with `--storage-root ROOT --account ID --output json`; `portfolio snapshot --storage-root ROOT --account ID --output json` | [Plan 85](plans/85-read-only-broker-records.md) |
+
+**Portfolio records.** `portfolio snapshot` returns every section the broker
+adapter supports in one versioned envelope; the five section commands return
+one section each. Positions, orders, trades, and GTT records preserve the
+broker's reported status and timestamp text; only the common field names and
+`BUY`/`SELL` side are normalized. A section failure is explicit
+(`UNAVAILABLE`) and does not erase other snapshot sections. The connector is
+read-only: only the login and five record endpoints are allowlisted. Do not run
+two live commands against the same account concurrently; some brokers
+invalidate an earlier session when a new login occurs.
 
 ## 4. Capability reference
 

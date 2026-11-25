@@ -15,8 +15,7 @@ from functools import partial
 from pathlib import Path
 from typing import cast
 
-from .angel_one import AngelOneClient, load_credentials
-from .credentials import missing_credentials
+from .brokers import SUPPORTED_BROKERS, adapter_for
 from .errors import PortfolioError
 from .storage import (
     REGISTRY_DIRNAME,
@@ -37,7 +36,6 @@ _ACCOUNT_ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
 _PREFIX = re.compile(r"^[A-Z][A-Z0-9_]{0,62}$")
 _SALT = re.compile(r"^[0-9a-f]{64}$")
 _FINGERPRINT = re.compile(r"^hmac-sha256:[0-9a-f]{64}$")
-_BROKERS = frozenset({"ANGEL_ONE"})
 _STATUSES = frozenset(
     {"CONNECTED", "AUTH_FAILED", "CREDENTIALS_MISSING", "PROVIDER_UNAVAILABLE"}
 )
@@ -131,7 +129,7 @@ def _validate_account(raw: object) -> AccountRecord:
     if not _ACCOUNT_ID.fullmatch(account_id):
         raise PortfolioError("REGISTRY_CORRUPT", "account id is invalid")
     broker = _text(value["broker"], "REGISTRY_CORRUPT", "account broker is invalid")
-    if broker not in _BROKERS:
+    if broker not in SUPPORTED_BROKERS:
         raise PortfolioError("REGISTRY_CORRUPT", "account broker is unsupported")
     display_name = _text(
         value["display_name"], "REGISTRY_CORRUPT", "display name is invalid"
@@ -265,9 +263,10 @@ def _validate_display_name(display_name: str) -> str:
 
 def _validate_broker(broker: str) -> str:
     value = broker.strip().upper().replace("-", "_")
-    if value not in _BROKERS:
+    if value not in SUPPORTED_BROKERS:
         raise PortfolioError(
-            "BROKER_UNSUPPORTED", "this slice supports Angel One accounts only"
+            "BROKER_UNSUPPORTED",
+            "broker has no registered read-only adapter",
         )
     return value
 
@@ -289,10 +288,10 @@ def _fingerprint(salt: str, client_code: str) -> str:
     return f"hmac-sha256:{digest}"
 
 
-def _default_verifier(prefix: str, environ: Mapping[str, str] | None = None) -> str:
-    credentials = load_credentials(prefix, environ)
-    AngelOneClient(credentials, environ=environ).login()
-    return credentials.client_code
+def _default_verifier(
+    broker: str, prefix: str, environ: Mapping[str, str] | None = None
+) -> str:
+    return adapter_for(broker).verify(prefix, environ)
 
 
 def add_account(
@@ -313,7 +312,8 @@ def add_account(
     normalized_broker = _validate_broker(broker)
     normalized_name = _validate_display_name(display_name)
     normalized_prefix = _validate_prefix(credential_prefix)
-    missing = missing_credentials(normalized_prefix, environ)
+    adapter = adapter_for(normalized_broker)
+    missing = adapter.missing_credentials(normalized_prefix, environ)
     if missing:
         raise PortfolioError(
             "CREDENTIALS_MISSING",
@@ -322,9 +322,9 @@ def add_account(
     if verifier is not None:
         verify = verifier
     elif environ is None:
-        verify = _default_verifier
+        verify = partial(_default_verifier, normalized_broker)
     else:
-        verify = partial(_default_verifier, environ=environ)
+        verify = partial(_default_verifier, normalized_broker, environ=environ)
     try:
         client_code = verify(normalized_prefix)
     except PortfolioError:
@@ -422,7 +422,8 @@ def verify_account(
         if index is None:
             raise PortfolioError("ACCOUNT_NOT_FOUND", "account is not registered")
         account = registry.accounts[index]
-        missing = missing_credentials(account.credential_prefix, environ)
+        adapter = adapter_for(account.broker)
+        missing = adapter.missing_credentials(account.credential_prefix, environ)
         if missing:
             registry.accounts[index] = replace(
                 account, last_status="CREDENTIALS_MISSING"
@@ -435,9 +436,9 @@ def verify_account(
         if verifier is not None:
             verify = verifier
         elif environ is None:
-            verify = _default_verifier
+            verify = partial(_default_verifier, account.broker)
         else:
-            verify = partial(_default_verifier, environ=environ)
+            verify = partial(_default_verifier, account.broker, environ=environ)
         try:
             client_code = verify(account.credential_prefix)
         except PortfolioError as exc:

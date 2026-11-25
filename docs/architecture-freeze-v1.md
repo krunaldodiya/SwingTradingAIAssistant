@@ -546,7 +546,9 @@ stock outside it requires the same canonical identity and capability-specific
 evidence as every other supported instrument. Portfolio analysis may assess
 evidence, concentration, risk, performance, and candidate hold/exit conditions,
 but it does not place or manage broker orders and is not long-term portfolio
-advisory.
+advisory. A separate read-only account-record surface may expose positions,
+orders, trades, and GTT rules as raw broker facts; non-equity records are
+surfaced but are not analyzed or scored.
 
 ## Indicator minimization policy
 

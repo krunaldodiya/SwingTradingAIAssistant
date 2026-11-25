@@ -6,6 +6,8 @@ Status: accepted bounded specification under [Issue #441](https://github.com/kru
 
 The owner directed on 2026-11-23 that portfolio accounts are **broker accounts**, that no manual CSV is ever supplied, and that no portfolio snapshot is stored. Holdings and performance are fetched live from the broker on every review.
 
+[Plan 85](85-read-only-broker-records.md) extends this read-only connector to positions, the order book, the trade book, and GTT rules behind a broker-neutral record contract. This Plan's prohibition on order execution and stored portfolio snapshots remains unchanged.
+
 This supersedes the manual CSV baseline in [Plan 83](83-read-only-portfolio-accounts.md) and the manual repository code merged in PR #438. Plan 83 remains historical evidence; its manual import, manual account type, snapshot storage, and snapshot tests are removed by this slice. No real manual account or snapshot exists in the owner data root.
 
 The read-only account-connector boundary in `docs/notes/2026-08-09-provider-account-and-execution-connector-separation-hypothesis.md` still applies. This Plan supplies its bounded provider slice and does not authorize order execution.
@@ -143,6 +145,6 @@ Exit codes: `0` success; `1` domain/stored-state failure (`ACCOUNT_NOT_FOUND`, `
 
 ## Non-goals
 
-- Upstox, Kite, Fyers, orders, positions/F&O, execution, advice, history, tax, benchmarking.
+- Upstox, Kite, Fyers, execution, advice, history, tax, benchmarking. Read-only positions, order-book, trade-book, and GTT records are extended by [Plan 85](85-read-only-broker-records.md); order placement and mutation remain non-goals.
 - Credential storage, a vault, a database, or cloud sync.
 - Manual CSV import or any stored portfolio snapshot.

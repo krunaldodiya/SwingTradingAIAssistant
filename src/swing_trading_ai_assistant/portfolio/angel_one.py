@@ -1,7 +1,9 @@
 """Read-only Angel One SmartAPI connector.
 
-Only login and getAllHolding are implemented. No order, position, trade-book,
-profile, or generic request surface exists.
+Only the documented read endpoints for login, holdings, positions, the order
+book, the trade book, and GTT rule listing are implemented. No order placement,
+modification, cancellation, position conversion, GTT mutation, profile, or
+generic request surface exists.
 """
 
 from __future__ import annotations
@@ -16,6 +18,7 @@ import re
 import socket
 import struct
 import time
+import unicodedata
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Mapping
@@ -26,6 +29,19 @@ from typing import Any, cast
 
 from .credentials import missing_credentials
 from .errors import PortfolioError
+from .records import (
+    GttRecord,
+    GttSnapshot,
+    HoldingRow,
+    HoldingsSnapshot,
+    OrderRecord,
+    OrdersSnapshot,
+    PositionRecord,
+    PositionsSnapshot,
+    Section,
+    TradeRecord,
+    TradesSnapshot,
+)
 
 Transport = Callable[
     [str, str, Mapping[str, str], bytes | None], tuple[int, dict[str, object]]
@@ -34,10 +50,28 @@ Transport = Callable[
 BASE_URL = "https://apiconnect.angelone.in"
 LOGIN_PATH = "/rest/auth/angelbroking/user/v1/loginByPassword"
 HOLDINGS_PATH = "/rest/secure/angelbroking/portfolio/v1/getAllHolding"
-ALLOWED_URLS = frozenset({f"{BASE_URL}{LOGIN_PATH}", f"{BASE_URL}{HOLDINGS_PATH}"})
+POSITIONS_PATH = "/rest/secure/angelbroking/order/v1/getPosition"
+ORDERS_PATH = "/rest/secure/angelbroking/order/v1/getOrderBook"
+TRADES_PATH = "/rest/secure/angelbroking/order/v1/getTradeBook"
+GTT_LIST_PATH = "/rest/secure/angelbroking/gtt/v1/ruleList"
+ALLOWED_URLS = frozenset(
+    {
+        f"{BASE_URL}{LOGIN_PATH}",
+        f"{BASE_URL}{HOLDINGS_PATH}",
+        f"{BASE_URL}{POSITIONS_PATH}",
+        f"{BASE_URL}{ORDERS_PATH}",
+        f"{BASE_URL}{TRADES_PATH}",
+        f"{BASE_URL}{GTT_LIST_PATH}",
+    }
+)
 MAX_RESPONSE_BYTES = 8 * 1024 * 1024
+GTT_PAGE_SIZE = 50
+MAX_GTT_PAGES = 20
 RECONCILIATION_TOLERANCE = Decimal("5.00")
 _SYMBOL = re.compile(r"^[A-Z0-9][A-Z0-9&.-]{0,19}$")
+_EXCHANGE = re.compile(r"^[A-Z]{2,8}$")
+_IDENTIFIER = re.compile(r"^[!-~]{1,128}$")
+_ISIN = re.compile(r"^[A-Z]{2}[A-Z0-9]{9}[0-9]$")
 
 
 @dataclass(frozen=True, repr=False)
@@ -49,35 +83,6 @@ class AngelOneCredentials:
 
     def __repr__(self) -> str:
         return "AngelOneCredentials(<redacted>)"
-
-
-@dataclass(frozen=True)
-class HoldingRow:
-    symbol: str
-    quantity: Decimal
-    t1_quantity: Decimal
-    average_price: Decimal
-    last_price: Decimal
-    previous_close: Decimal | None
-    invested: Decimal
-    current: Decimal
-    pnl: Decimal
-    pnl_pct: Decimal | None
-    day_change: Decimal | None
-    day_pct: Decimal | None
-
-
-@dataclass(frozen=True)
-class HoldingsSnapshot:
-    rows: tuple[HoldingRow, ...]
-    invested: Decimal
-    current: Decimal
-    overall_pnl: Decimal
-    overall_pnl_pct: Decimal | None
-    day_change: Decimal | None
-    day_change_pct: Decimal | None
-    limitations: tuple[str, ...]
-    retrieved_at: str
 
 
 def load_credentials(
@@ -202,15 +207,13 @@ def _default_transport(
 
 def _decimal(value: object, field: str) -> Decimal:
     if isinstance(value, bool) or value is None:
-        raise PortfolioError("MALFORMED_RESPONSE", f"holding {field} is invalid")
+        raise PortfolioError("MALFORMED_RESPONSE", f"{field} is invalid")
     try:
         number = Decimal(str(value))
     except (InvalidOperation, ValueError) as exc:
-        raise PortfolioError(
-            "MALFORMED_RESPONSE", f"holding {field} is invalid"
-        ) from exc
+        raise PortfolioError("MALFORMED_RESPONSE", f"{field} is invalid") from exc
     if not number.is_finite():
-        raise PortfolioError("MALFORMED_RESPONSE", f"holding {field} is invalid")
+        raise PortfolioError("MALFORMED_RESPONSE", f"{field} is invalid")
     return number
 
 
@@ -239,6 +242,9 @@ def _percent(value: Decimal | None) -> float | None:
 
 class AngelOneClient:
     """One short-lived, read-only Angel One session."""
+
+    broker = "ANGEL_ONE"
+    capabilities = frozenset(Section)
 
     def __init__(
         self,
@@ -374,10 +380,119 @@ class AngelOneClient:
                     None if day_change_pct is None else _q2(day_change_pct)
                 ),
                 limitations=tuple(limitations),
-                retrieved_at=datetime.fromtimestamp(self._clock(), tz=UTC).isoformat(
-                    timespec="seconds"
-                ),
+                retrieved_at=self._retrieved_at(),
             )
+
+    def _require_token(self) -> str:
+        if self._token is None:
+            raise PortfolioError("AUTH_FAILED", "login is required before records")
+        return self._token
+
+    def _authorized_headers(self) -> dict[str, str]:
+        headers = self._headers()
+        headers["Authorization"] = f"Bearer {self._require_token()}"
+        return headers
+
+    def _retrieved_at(self) -> str:
+        return datetime.fromtimestamp(self._clock(), tz=UTC).isoformat(
+            timespec="seconds"
+        )
+
+    def _get_list(self, path: str, label: str) -> list[object]:
+        status, payload = self._transport(
+            "GET", f"{BASE_URL}{path}", self._authorized_headers(), None
+        )
+        return self._records_data(status, payload, label)
+
+    def _post_list(
+        self, path: str, body: Mapping[str, object], label: str
+    ) -> list[object]:
+        status, payload = self._transport(
+            "POST",
+            f"{BASE_URL}{path}",
+            self._authorized_headers(),
+            json.dumps(body).encode("utf-8"),
+        )
+        return self._records_data(status, payload, label)
+
+    def _records_data(
+        self,
+        status: int,
+        payload: Mapping[str, object],
+        label: str,
+    ) -> list[object]:
+        if status != 200 or payload.get("status") is not True:
+            raise self._records_error(status, payload, label)
+        data = payload.get("data")
+        if data is None:
+            return []
+        if not isinstance(data, list):
+            raise PortfolioError(
+                "MALFORMED_RESPONSE", f"Angel One {label} rows are invalid"
+            )
+        return cast("list[object]", data)
+
+    def positions(self) -> PositionsSnapshot:
+        records: list[PositionRecord] = []
+        limitations: list[str] = []
+        for raw in self._get_list(POSITIONS_PATH, "positions"):
+            record, record_limitations = _position_row(raw)
+            records.append(record)
+            limitations.extend(record_limitations)
+        return PositionsSnapshot(
+            rows=tuple(records),
+            limitations=tuple(dict.fromkeys(limitations)),
+            retrieved_at=self._retrieved_at(),
+        )
+
+    def orders(self) -> OrdersSnapshot:
+        records: list[OrderRecord] = []
+        limitations: list[str] = []
+        for raw in self._get_list(ORDERS_PATH, "orders"):
+            record, record_limitations = _order_row(raw)
+            records.append(record)
+            limitations.extend(record_limitations)
+        return OrdersSnapshot(
+            rows=tuple(records),
+            limitations=tuple(dict.fromkeys(limitations)),
+            retrieved_at=self._retrieved_at(),
+        )
+
+    def trades(self) -> TradesSnapshot:
+        records: list[TradeRecord] = []
+        limitations: list[str] = []
+        for raw in self._get_list(TRADES_PATH, "trades"):
+            record, record_limitations = _trade_row(raw)
+            records.append(record)
+            limitations.extend(record_limitations)
+        return TradesSnapshot(
+            rows=tuple(records),
+            limitations=tuple(dict.fromkeys(limitations)),
+            retrieved_at=self._retrieved_at(),
+        )
+
+    def gtt_rules(self) -> GttSnapshot:
+        records: list[GttRecord] = []
+        limitations: list[str] = []
+        for page in range(1, MAX_GTT_PAGES + 1):
+            rows = self._post_list(
+                GTT_LIST_PATH,
+                {"status": ["FORALL"], "page": page, "count": GTT_PAGE_SIZE},
+                "GTT rules",
+            )
+            for raw in rows:
+                record, record_limitations = _gtt_row(raw)
+                records.append(record)
+                limitations.extend(record_limitations)
+            if len(rows) < GTT_PAGE_SIZE:
+                break
+        else:
+            limitations.append("GTT_RESULTS_TRUNCATED")
+        return GttSnapshot(
+            rows=tuple(records),
+            limitations=tuple(dict.fromkeys(limitations)),
+            retrieved_at=self._retrieved_at(),
+        )
 
     def _login_error(
         self, status: int, payload: Mapping[str, object]
@@ -407,6 +522,24 @@ class AngelOneClient:
             "PROVIDER_UNAVAILABLE", "Angel One holdings request failed"
         )
 
+    def _records_error(
+        self,
+        status: int,
+        payload: Mapping[str, object],
+        label: str,
+    ) -> PortfolioError:
+        message = str(payload.get("message") or "").lower()
+        if "ip" in message and ("whitelist" in message or "static" in message):
+            return PortfolioError(
+                "IP_NOT_WHITELISTED",
+                "Angel One rejected this public IP; add it to the SmartAPI whitelist",
+            )
+        if status in {401, 403}:
+            return PortfolioError("AUTH_FAILED", "Angel One session is not authorized")
+        return PortfolioError(
+            "PROVIDER_UNAVAILABLE", f"Angel One {label} request failed"
+        )
+
 
 def _holding_row(raw: object) -> HoldingRow:
     if not isinstance(raw, dict):
@@ -432,6 +565,9 @@ def _holding_row(raw: object) -> HoldingRow:
         previous_close = None
     if row.get("profitandloss") is not None:
         _decimal(row["profitandloss"], "profitandloss")
+    exchange = _optional_exchange(row.get("exchange"))
+    symbol_token = _optional_identifier(row.get("symboltoken"), "symboltoken")
+    isin = _optional_isin(row.get("isin"))
     invested = average_price * quantity
     current = last_price * quantity
     pnl = current - invested
@@ -455,6 +591,365 @@ def _holding_row(raw: object) -> HoldingRow:
         pnl_pct=None if pnl_pct is None else _q2(pnl_pct),
         day_change=None if day_change is None else _q2(day_change),
         day_pct=None if day_pct is None else _q2(day_pct),
+        exchange=exchange,
+        symbol_token=symbol_token,
+        isin=isin,
+    )
+
+
+def _record_mapping(value: object, label: str) -> dict[str, object]:
+    if not isinstance(value, dict):
+        raise PortfolioError("MALFORMED_RESPONSE", f"{label} row is invalid")
+    return cast("dict[str, object]", value)
+
+
+def _record_text(value: object, field: str, *, max_len: int = 128) -> str:
+    if not isinstance(value, str):
+        raise PortfolioError("MALFORMED_RESPONSE", f"{field} is invalid")
+    text = value.strip()
+    if not text or len(text) > max_len or not text.isascii():
+        raise PortfolioError("MALFORMED_RESPONSE", f"{field} is invalid")
+    if any(ord(char) < 32 or ord(char) == 127 for char in text):
+        raise PortfolioError("MALFORMED_RESPONSE", f"{field} is invalid")
+    return text
+
+
+def _optional_record_text(
+    value: object, field: str, *, max_len: int = 128
+) -> str | None:
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    return _record_text(value, field, max_len=max_len)
+
+
+def _optional_message_text(
+    value: object, field: str, *, max_len: int = 200
+) -> str | None:
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    if not isinstance(value, str):
+        raise PortfolioError("MALFORMED_RESPONSE", f"{field} is invalid")
+    text = value.strip()
+    if len(text) > max_len:
+        raise PortfolioError("MALFORMED_RESPONSE", f"{field} is invalid")
+    for char in text:
+        category = unicodedata.category(char)
+        if category.startswith("C") or category in {"Zl", "Zp"}:
+            raise PortfolioError("MALFORMED_RESPONSE", f"{field} is invalid")
+    return text
+
+
+def _record_symbol(value: object) -> str:
+    if not isinstance(value, str):
+        raise PortfolioError("MALFORMED_RESPONSE", "symbol is invalid")
+    text = value.strip().upper()
+    if not text.isascii() or not _SYMBOL.fullmatch(text):
+        raise PortfolioError("MALFORMED_RESPONSE", "symbol is invalid")
+    return text
+
+
+def _record_exchange(value: object) -> str:
+    text = _record_text(value, "exchange", max_len=8).upper()
+    if not _EXCHANGE.fullmatch(text):
+        raise PortfolioError("MALFORMED_RESPONSE", "exchange is invalid")
+    return text
+
+
+def _optional_exchange(value: object) -> str | None:
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    return _record_exchange(value)
+
+
+def _record_identifier(value: object, field: str) -> str:
+    if isinstance(value, bool) or value is None:
+        raise PortfolioError("MALFORMED_RESPONSE", f"{field} is invalid")
+    text = str(value).strip()
+    if not _IDENTIFIER.fullmatch(text):
+        raise PortfolioError("MALFORMED_RESPONSE", f"{field} is invalid")
+    return text
+
+
+def _optional_identifier(value: object, field: str) -> str | None:
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    return _record_identifier(value, field)
+
+
+def _optional_isin(value: object) -> str | None:
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    if not isinstance(value, str):
+        raise PortfolioError("MALFORMED_RESPONSE", "isin is invalid")
+    text = value.strip().upper()
+    if not _ISIN.fullmatch(text):
+        raise PortfolioError("MALFORMED_RESPONSE", "isin is invalid")
+    return text
+
+
+def _non_negative(value: object, field: str) -> Decimal:
+    number = _decimal(value, field)
+    if number < 0:
+        raise PortfolioError("MALFORMED_RESPONSE", f"{field} is invalid")
+    return number
+
+
+def _positive(value: object, field: str) -> Decimal:
+    number = _decimal(value, field)
+    if number <= 0:
+        raise PortfolioError("MALFORMED_RESPONSE", f"{field} is invalid")
+    return number
+
+
+def _optional_positive(value: object, field: str) -> Decimal | None:
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    number = _decimal(value, field)
+    if number == 0:
+        return None
+    if number < 0:
+        raise PortfolioError("MALFORMED_RESPONSE", f"{field} is invalid")
+    return number
+
+
+def _optional_non_negative(value: object, field: str) -> Decimal | None:
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    return _non_negative(value, field)
+
+
+def _upper_text(value: object, field: str, *, max_len: int = 32) -> str:
+    return _record_text(value, field, max_len=max_len).upper()
+
+
+def _optional_upper_text(value: object, field: str, *, max_len: int = 32) -> str | None:
+    text = _optional_record_text(value, field, max_len=max_len)
+    return None if text is None else text.upper()
+
+
+def _record_side(value: object) -> str:
+    side = _upper_text(value, "transactiontype", max_len=8)
+    if side not in {"BUY", "SELL"}:
+        raise PortfolioError("MALFORMED_RESPONSE", "transactiontype is invalid")
+    return side
+
+
+def _position_row(raw: object) -> tuple[PositionRecord, tuple[str, ...]]:
+    row = _record_mapping(raw, "position")
+    symbol = _record_symbol(row.get("tradingsymbol"))
+    exchange = _record_exchange(row.get("exchange"))
+    symbol_token = _optional_identifier(row.get("symboltoken"), "symboltoken")
+    product_type = _upper_text(row.get("producttype"), "producttype")
+    instrument_type = _optional_upper_text(
+        row.get("instrumenttype"), "instrumenttype", max_len=16
+    )
+    quantity = _decimal(row.get("netqty"), "netqty")
+    average_price = _non_negative(row.get("avgnetprice"), "avgnetprice")
+    last_price = _optional_positive(row.get("ltp"), "ltp")
+    broker_pnl = _optional_decimal(row.get("pnl"), "pnl")
+    unrealised_pnl = _optional_decimal(row.get("unrealised"), "unrealised")
+    realised_pnl = _optional_decimal(row.get("realised"), "realised")
+    multiplier = _optional_decimal(row.get("multiplier"), "multiplier")
+    limitations: list[str] = []
+    is_equity = instrument_type in {None, "EQ"}
+    if broker_pnl is not None:
+        pnl = broker_pnl
+        pnl_source = "BROKER"
+    elif unrealised_pnl is not None:
+        pnl = unrealised_pnl
+        pnl_source = "BROKER"
+    elif last_price is not None and is_equity:
+        pnl = (last_price - average_price) * quantity
+        pnl_source = "DERIVED"
+        limitations.append("POSITION_PNL_DERIVED_FROM_LTP")
+    else:
+        pnl = None
+        pnl_source = None
+        limitations.append("POSITION_PNL_UNAVAILABLE")
+        if last_price is not None and not is_equity:
+            limitations.append("POSITION_PNL_DERIVATION_UNSUPPORTED")
+    if last_price is None:
+        limitations.append("POSITION_LTP_UNAVAILABLE")
+    pnl_pct: Decimal | None = None
+    if pnl is not None:
+        cost = abs(average_price * quantity)
+        if cost > 0:
+            pnl_pct = pnl / cost * 100
+    reported_at = _optional_record_text(
+        row.get("updateddate"), "updateddate", max_len=64
+    ) or _optional_record_text(row.get("createddate"), "createddate", max_len=64)
+    return (
+        PositionRecord(
+            symbol=symbol,
+            exchange=exchange,
+            symbol_token=symbol_token,
+            product_type=product_type,
+            instrument_type=instrument_type,
+            quantity=quantity,
+            average_price=_q2(average_price),
+            last_price=None if last_price is None else _q2(last_price),
+            pnl=None if pnl is None else _q2(pnl),
+            pnl_pct=None if pnl_pct is None else _q2(pnl_pct),
+            realised_pnl=None if realised_pnl is None else _q2(realised_pnl),
+            unrealised_pnl=(None if unrealised_pnl is None else _q2(unrealised_pnl)),
+            multiplier=multiplier,
+            pnl_source=pnl_source,
+            reported_at=reported_at,
+        ),
+        tuple(limitations),
+    )
+
+
+def _order_row(raw: object) -> tuple[OrderRecord, tuple[str, ...]]:
+    row = _record_mapping(raw, "order")
+    raw_order_id = row.get("uniqueorderid")
+    if raw_order_id is None or (
+        isinstance(raw_order_id, str) and not raw_order_id.strip()
+    ):
+        raw_order_id = row.get("orderid")
+    order_id = _record_identifier(raw_order_id, "orderid")
+    exchange_order_id = _optional_identifier(row.get("orderid"), "orderid")
+    if exchange_order_id == order_id:
+        exchange_order_id = None
+    parent_order_id = _optional_identifier(row.get("parentorderid"), "parentorderid")
+    symbol = _record_symbol(row.get("tradingsymbol"))
+    exchange = _record_exchange(row.get("exchange"))
+    symbol_token = _optional_identifier(row.get("symboltoken"), "symboltoken")
+    side = _record_side(row.get("transactiontype"))
+    order_type = _upper_text(row.get("ordertype"), "ordertype", max_len=24)
+    product_type = _upper_text(row.get("producttype"), "producttype", max_len=24)
+    variety = _optional_upper_text(row.get("variety"), "variety", max_len=24)
+    status = _upper_text(
+        row.get("orderstatus") or row.get("status"), "orderstatus", max_len=64
+    )
+    status_message = _optional_message_text(row.get("text"), "text")
+    quantity = _non_negative(row.get("quantity"), "quantity")
+    filled_quantity = _non_negative(row.get("filledshares"), "filledshares")
+    pending_quantity = _non_negative(row.get("unfilledshares"), "unfilledshares")
+    price = _non_negative(row.get("price"), "price")
+    trigger_price = _optional_positive(row.get("triggerprice"), "triggerprice")
+    average_fill_price = _optional_positive(row.get("averageprice"), "averageprice")
+    validity = _optional_upper_text(row.get("duration"), "duration", max_len=16)
+    reported_at = _optional_record_text(
+        row.get("updatetime"), "updatetime", max_len=64
+    ) or _optional_record_text(row.get("exchtime"), "exchtime", max_len=64)
+    return (
+        OrderRecord(
+            order_id=order_id,
+            exchange_order_id=exchange_order_id,
+            parent_order_id=parent_order_id,
+            symbol=symbol,
+            exchange=exchange,
+            symbol_token=symbol_token,
+            side=side,
+            order_type=order_type,
+            product_type=product_type,
+            variety=variety,
+            status=status,
+            status_message=status_message,
+            quantity=quantity,
+            filled_quantity=filled_quantity,
+            pending_quantity=pending_quantity,
+            price=_q2(price),
+            trigger_price=None if trigger_price is None else _q2(trigger_price),
+            average_fill_price=(
+                None if average_fill_price is None else _q2(average_fill_price)
+            ),
+            validity=validity,
+            reported_at=reported_at,
+        ),
+        (),
+    )
+
+
+def _trade_row(raw: object) -> tuple[TradeRecord, tuple[str, ...]]:
+    row = _record_mapping(raw, "trade")
+    trade_id = _record_identifier(row.get("fillid"), "fillid")
+    order_id = _record_identifier(row.get("orderid"), "orderid")
+    symbol = _record_symbol(row.get("tradingsymbol"))
+    exchange = _record_exchange(row.get("exchange"))
+    symbol_token = _optional_identifier(row.get("symboltoken"), "symboltoken")
+    side = _record_side(row.get("transactiontype"))
+    product_type = _upper_text(row.get("producttype"), "producttype", max_len=24)
+    quantity = _positive(row.get("fillsize"), "fillsize")
+    price = _positive(row.get("fillprice"), "fillprice")
+    raw_value = row.get("tradevalue")
+    limitations: tuple[str, ...] = ()
+    if raw_value is None or (isinstance(raw_value, str) and not raw_value.strip()):
+        trade_value = quantity * price
+        limitations = ("TRADE_VALUE_COMPUTED",)
+    else:
+        trade_value = _non_negative(raw_value, "tradevalue")
+    reported_at = _optional_record_text(row.get("filltime"), "filltime", max_len=32)
+    return (
+        TradeRecord(
+            trade_id=trade_id,
+            order_id=order_id,
+            symbol=symbol,
+            exchange=exchange,
+            symbol_token=symbol_token,
+            side=side,
+            product_type=product_type,
+            quantity=quantity,
+            price=_q2(price),
+            trade_value=_q2(trade_value),
+            reported_at=reported_at,
+        ),
+        limitations,
+    )
+
+
+def _gtt_row(raw: object) -> tuple[GttRecord, tuple[str, ...]]:
+    row = _record_mapping(raw, "GTT rule")
+    rule_id = _record_identifier(row.get("id"), "id")
+    symbol = _record_symbol(row.get("tradingsymbol"))
+    exchange = _record_exchange(row.get("exchange"))
+    symbol_token = _optional_identifier(row.get("symboltoken"), "symboltoken")
+    side = _record_side(row.get("transactiontype"))
+    product_type = _upper_text(row.get("producttype"), "producttype", max_len=24)
+    gtt_type = _optional_upper_text(row.get("gttType"), "gttType", max_len=16)
+    quantity = _positive(row.get("qty"), "qty")
+    disclosed_quantity = _optional_non_negative(row.get("disclosedqty"), "disclosedqty")
+    price = _positive(row.get("price"), "price")
+    trigger_price = _positive(row.get("triggerprice"), "triggerprice")
+    stoploss_price = _optional_positive(row.get("stoplossprice"), "stoplossprice")
+    stoploss_trigger_price = _optional_positive(
+        row.get("stoplosstriggerprice"), "stoplosstriggerprice"
+    )
+    status = _optional_upper_text(row.get("status"), "status", max_len=64)
+    limitations: list[str] = []
+    if status is None:
+        limitations.append("GTT_STATUS_UNAVAILABLE")
+    created_at = _optional_record_text(
+        row.get("createddate"), "createddate", max_len=64
+    )
+    updated_at = _optional_record_text(
+        row.get("updateddate"), "updateddate", max_len=64
+    )
+    expires_at = _optional_record_text(row.get("expirydate"), "expirydate", max_len=64)
+    return (
+        GttRecord(
+            rule_id=rule_id,
+            symbol=symbol,
+            exchange=exchange,
+            symbol_token=symbol_token,
+            side=side,
+            product_type=product_type,
+            gtt_type=gtt_type,
+            quantity=quantity,
+            disclosed_quantity=disclosed_quantity,
+            price=_q2(price),
+            trigger_price=_q2(trigger_price),
+            stoploss_price=None if stoploss_price is None else _q2(stoploss_price),
+            stoploss_trigger_price=(
+                None if stoploss_trigger_price is None else _q2(stoploss_trigger_price)
+            ),
+            status=status,
+            created_at=created_at,
+            updated_at=updated_at,
+            expires_at=expires_at,
+        ),
+        tuple(limitations),
     )
 
 
@@ -569,8 +1064,17 @@ def _top_weight(snapshot: HoldingsSnapshot) -> float | None:
 __all__ = [
     "AngelOneClient",
     "AngelOneCredentials",
+    "GttRecord",
+    "GttSnapshot",
     "HoldingRow",
     "HoldingsSnapshot",
+    "OrderRecord",
+    "OrdersSnapshot",
+    "PositionRecord",
+    "PositionsSnapshot",
+    "Section",
+    "TradeRecord",
+    "TradesSnapshot",
     "generate_totp",
     "load_credentials",
     "review_payload",
