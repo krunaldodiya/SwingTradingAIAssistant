@@ -34,6 +34,12 @@ def test_payload_rejects_unrepresentable_quantity() -> None:
     assert error.value.code == "MALFORMED_RESPONSE"
 
 
+def test_payload_rejects_underflowing_quantity() -> None:
+    with pytest.raises(PortfolioError) as error:
+        position_record(_position(Decimal("1e-1000000000")))
+    assert error.value.code == "MALFORMED_RESPONSE"
+
+
 def test_payload_rejects_unrepresentable_money() -> None:
     position = replace(_position(Decimal("1")), average_price=Decimal("1e100000"))
     with pytest.raises(PortfolioError) as error:

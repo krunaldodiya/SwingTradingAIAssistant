@@ -201,6 +201,8 @@ def test_positions_derive_pnl_from_ltp() -> None:
     ("field", "value"),
     [
         ("netqty", "1e100000"),
+        ("netqty", "1e1000000"),
+        ("netqty", "1e-1000000000"),
         ("avgnetprice", "1e500000"),
         ("ltp", "1e-100000"),
     ],

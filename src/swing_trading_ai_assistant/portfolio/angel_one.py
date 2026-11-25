@@ -217,8 +217,10 @@ def _decimal(value: object, field: str) -> Decimal:
         raise PortfolioError("MALFORMED_RESPONSE", f"{field} is invalid") from exc
     if not number.is_finite():
         raise PortfolioError("MALFORMED_RESPONSE", f"{field} is invalid")
-    magnitude = abs(number)
-    if magnitude != 0 and (magnitude > MAX_ABS_DECIMAL or magnitude < MIN_ABS_DECIMAL):
+    magnitude = number.copy_abs()
+    if not magnitude.is_zero() and (
+        magnitude > MAX_ABS_DECIMAL or magnitude < MIN_ABS_DECIMAL
+    ):
         raise PortfolioError("MALFORMED_RESPONSE", f"{field} is out of range")
     return number
 

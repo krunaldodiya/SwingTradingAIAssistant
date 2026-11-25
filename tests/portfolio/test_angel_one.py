@@ -198,6 +198,25 @@ def test_reconciliation_mismatch() -> None:
     assert error.value.code == "RECONCILIATION_MISMATCH"
 
 
+def test_extreme_holdings_total_fails_closed() -> None:
+    payload = {
+        "status": True,
+        "data": {
+            "holdings": _HOLDINGS["data"]["holdings"],
+            "totalholding": {
+                "totalinvvalue": "1e1000000",
+                "totalholdingvalue": "5250.00",
+                "totalprofitandloss": "250.00",
+            },
+        },
+    }
+    client = _client(FakeTransport(holdings=(200, payload)))
+    client.login()
+    with pytest.raises(PortfolioError) as error:
+        client.holdings()
+    assert error.value.code == "MALFORMED_RESPONSE"
+
+
 def test_missing_previous_close_and_t1_limitations() -> None:
     holdings = [dict(row) for row in _HOLDINGS["data"]["holdings"]]
     holdings[0].pop("close")

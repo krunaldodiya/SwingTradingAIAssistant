@@ -32,7 +32,7 @@ def _money(value: Decimal) -> float:
         number = float(value.quantize(Decimal("0.01")))
     except (InvalidOperation, OverflowError, ValueError) as exc:
         raise PortfolioError("MALFORMED_RESPONSE", "money value is invalid") from exc
-    if not math.isfinite(number):
+    if not math.isfinite(number) or (value != 0 and number == 0.0):
         raise PortfolioError("MALFORMED_RESPONSE", "money value is invalid")
     return number
 
@@ -42,7 +42,7 @@ def _quantity(value: Decimal) -> float:
         number = float(value)
     except (OverflowError, ValueError) as exc:
         raise PortfolioError("MALFORMED_RESPONSE", "quantity value is invalid") from exc
-    if not math.isfinite(number):
+    if not math.isfinite(number) or (value != 0 and number == 0.0):
         raise PortfolioError("MALFORMED_RESPONSE", "quantity value is invalid")
     return number
 
