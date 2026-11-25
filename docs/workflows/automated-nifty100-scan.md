@@ -470,6 +470,33 @@ to improve a trading outcome. The report preserves every scan candidate and
 reports outcome and gate counts; it does not suppress, reorder, or reclassify
 the scan candidate set. Flags remain available for research filtering.
 
+### Additive research watchlist (provisional)
+
+The strict `swing-analysis-policy@v1` outcome is unchanged. An additive
+`swing-analysis-research-tier@v1` object gives a broader research watchlist:
+
+```bash
+swing-analysis --research-tier \
+  --analysis-json "$HOME/SwingTradingAIAssistantData/daily-scan/analysis-YYYY-MM-DD.json" \
+  --output json
+```
+
+- `RESEARCH_QUALIFIED` — critical and structural gates pass, all three soft gates strong.
+- `RESEARCH_WATCH` — critical and structural gates pass, at most one soft gate weak.
+- `NOT_QUALIFIED` — a critical/structural gate fails, or two soft gates are weak.
+- `INSUFFICIENT` — a critical gate is unavailable or pending.
+
+Critical gates are ATR availability, extension ≤2 ATR, positive risk and risk ≤3.5 ATR.
+Structural gates are retest and demand zone: an explicit failure blocks; a pending
+retest or unavailable structural fact is a flag, not a blocker. Soft gates are
+volume versus prior 20-session median (strong ≥1.5x, moderate ≥1.0x), weekly
+(UPTREND strong; RANGE above the 20-week average moderate), and candle body
+(bullish ≥60% strong, 40–60% moderate).
+
+The tier is `PROVISIONAL_RESEARCH`: a research watchlist, not a strict finalist,
+trade eligibility, target or recommendation. The daily report and private ledger
+show the watchlist alongside the unchanged strict policy outcome.
+
 ### Full per-stock lifecycle
 
 To project every scan member through the actual lifecycle, run:

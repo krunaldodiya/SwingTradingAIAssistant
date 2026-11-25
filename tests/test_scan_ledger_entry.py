@@ -149,6 +149,66 @@ def test_entry_renders_candidate_facts_and_reasons() -> None:
     assert "53.13% of range" in text
 
 
+def test_entry_renders_research_tier_and_flags() -> None:
+    analysis = {
+        "schema": "swing-analysis@v2",
+        "policy": {"outcome_counts": {"NOT_QUALIFIED": 1}},
+        "research_tier": {
+            "tier_counts": {
+                "RESEARCH_QUALIFIED": 0,
+                "RESEARCH_WATCH": 1,
+                "NOT_QUALIFIED": 0,
+                "INSUFFICIENT": 0,
+            }
+        },
+        "members": [
+            {
+                "symbol": "BSE",
+                "policy": {
+                    "schema": "swing-analysis-policy@v1",
+                    "outcome": "NOT_QUALIFIED",
+                    "gates": [
+                        {
+                            "id": "VOLUME_EXPANSION",
+                            "status": "FAIL",
+                            "observed": "0.55",
+                        }
+                    ],
+                },
+                "research_tier": {
+                    "tier": "RESEARCH_WATCH",
+                    "hard_gates": [
+                        {
+                            "id": "RISK_WITHIN_3_5_ATR",
+                            "status": "PASS",
+                            "observed": "2.87",
+                        }
+                    ],
+                    "soft_gates": [
+                        {"id": "VOLUME_EXPANSION", "strength": "WEAK"},
+                        {"id": "WEEKLY_TREND_UP", "strength": "MODERATE"},
+                        {"id": "CANDLE_BODY_QUALITY", "strength": "MODERATE"},
+                    ],
+                    "flags": ["VOLUME_EXPANSION_WEAK"],
+                },
+            }
+        ],
+    }
+    text = writer.build_entry(
+        scan_envelope=_scan_payload(),
+        analysis=analysis,
+        research=None,
+        lifecycle=None,
+        now=datetime(2026, 10, 29, 20, 45, tzinfo=IST),
+        status="recorded",
+        commands=["signal-decisions scan --nifty200"],
+    )
+    assert "Research tier `RESEARCH_WATCH`" in text
+    assert "volume `WEAK`, weekly `MODERATE`, candle `MODERATE`" in text
+    assert "Research tier counts:" in text
+    assert "RESEARCH_WATCH 1" in text
+
+
 def test_backfill_states_the_method_is_not_restated() -> None:
     """A backfilled entry must not claim a command sequence it does not know."""
     text = writer.build_entry(

@@ -22,6 +22,9 @@ from datetime import date
 from pathlib import Path
 from typing import cast
 
+from swing_trading_ai_assistant.market_data.research_tier import (
+    evaluate_research_tier,
+)
 from swing_trading_ai_assistant.market_data.scan_decision_evidence import (
     ScanDecisionEvidenceUnavailable,
     read_scan_decision_evidence_completed_session_v1,
@@ -122,6 +125,44 @@ def _scan(directory: Path, day: str) -> Json | None:
     return _mapping(cast(object, inner)) if isinstance(inner, dict) else page
 
 
+def _soft_strength(tier: Json, gate_id: str) -> str | None:
+    for gate in _rows(tier.get("soft_gates")):
+        if gate.get("id") == gate_id:
+            return _text(gate.get("strength"))
+    return None
+
+
+def _research_rows(analysis: Json | None) -> list[Json]:
+    rows: list[Json] = []
+    for member in _rows((analysis or {}).get("members")):
+        tier = _mapping(member.get("research_tier")) or evaluate_research_tier(member)
+        label = _text(tier.get("tier"))
+        if label not in {"RESEARCH_QUALIFIED", "RESEARCH_WATCH"}:
+            continue
+        risk = next(
+            (
+                _text(_mapping(gate).get("observed"))
+                for gate in _rows(tier.get("hard_gates"))
+                if gate.get("id") == "RISK_WITHIN_3_5_ATR"
+            ),
+            None,
+        )
+        rows.append(
+            {
+                "symbol": _text(member.get("symbol")) or "?",
+                "tier": label,
+                "volume": _soft_strength(tier, "VOLUME_EXPANSION"),
+                "weekly": _soft_strength(tier, "WEEKLY_TREND_UP"),
+                "candle": _soft_strength(tier, "CANDLE_BODY_QUALITY"),
+                "risk": risk,
+                "flags": ", ".join(
+                    str(flag) for flag in cast(list[object], tier.get("flags") or [])
+                ),
+            }
+        )
+    return rows
+
+
 def _candidate_rows(analysis: Json | None, scan: Json) -> list[Json]:
     policies = {
         _text(_mapping(member).get("symbol")): _mapping(_mapping(member).get("policy"))
@@ -197,6 +238,7 @@ def build_report(
         "downtrend": _text(regime.get("downtrend_percent")),
         "outcomes": _mapping((analysis or {}).get("policy")).get("outcome_counts"),
         "rows": _candidate_rows(analysis, scan),
+        "research_rows": _research_rows(analysis),
         "observation_layer_stopped": _observation_layer_stopped(scan),
         "analysis_present": analysis is not None,
         "lifecycle_present": _load(directory / f"lifecycle-{session}.json") is not None,
@@ -309,6 +351,27 @@ def render(report: Json) -> str:
         lines.append(
             "**The pass stopped upstream:** no member reached a safety outcome, so "
             "this page is not a zero-candidate market result."
+        )
+
+    research_rows = _rows(report.get("research_rows"))
+    if research_rows:
+        lines.extend(
+            [
+                "",
+                "## Research watchlist",
+                "",
+                "Provisional watch tier only; not a strict finalist or a recommendation.",
+                "",
+                "| Symbol | Tier | Volume | Weekly | Candle | Risk ATR | Flags |",
+                "|---|---|---|---|---|---:|---|",
+            ]
+        )
+        lines.extend(
+            f"| {row['symbol']} | `{row.get('tier')}` | "
+            f"{row.get('volume') or '—'} | {row.get('weekly') or '—'} | "
+            f"{row.get('candle') or '—'} | {row.get('risk') or '—'} | "
+            f"{row.get('flags') or '—'} |"
+            for row in research_rows
         )
 
     lines.extend(["", "## Market breadth", ""])
