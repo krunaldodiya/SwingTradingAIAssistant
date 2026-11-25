@@ -1,5 +1,6 @@
 import hashlib
 import json
+from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
 
@@ -89,7 +90,7 @@ _ORDERS = OrdersSnapshot(
     rows=(
         OrderRecord(
             order_id="order-uuid-1",
-            exchange_order_id="201020000000080",
+            exchange_order_id="1100000000048358",
             parent_order_id=None,
             symbol="EXAMPLE1-EQ",
             exchange="NSE",
@@ -191,6 +192,12 @@ class FakeConnector:
 class PartialConnector(FakeConnector):
     def orders(self) -> OrdersSnapshot:
         raise PortfolioError("PROVIDER_UNAVAILABLE", "orders are down")
+
+
+class BadPayloadConnector(FakeConnector):
+    def positions(self) -> PositionsSnapshot:
+        row = replace(_POSITIONS.rows[0], quantity=Decimal("1e100000"))
+        return replace(_POSITIONS, rows=(row,))
 
 
 class NoGttConnector(FakeConnector):
@@ -314,6 +321,21 @@ def test_snapshot_json_keeps_successful_sections(
         "BROKER_READ_ONLY",
         "POINT_IN_TIME_SNAPSHOT",
     ]
+
+
+def test_snapshot_marks_payload_failure_as_unavailable(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _setup(tmp_path)
+    _patch(monkeypatch, BadPayloadConnector())
+    code, out, _err = _run(tmp_path, "snapshot", capsys)
+    assert code == 1
+    payload = json.loads(out)
+    assert payload["sections"]["positions"]["status"] == "UNAVAILABLE"
+    assert payload["sections"]["positions"]["error_code"] == "MALFORMED_RESPONSE"
+    assert payload["sections"]["holdings"]["status"] == "OK"
 
 
 def test_snapshot_table_shows_partial_failure(

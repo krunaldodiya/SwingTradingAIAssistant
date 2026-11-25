@@ -45,6 +45,7 @@ _ORDERS = {
         {
             "orderid": 201020000000080,
             "uniqueorderid": "order-uuid-1",
+            "exchangeorderid": "1100000000048358",
             "tradingsymbol": "EXAMPLE1-EQ",
             "exchange": "NSE",
             "transactiontype": "BUY",
@@ -196,6 +197,68 @@ def test_positions_derive_pnl_from_ltp() -> None:
     assert "POSITION_PNL_DERIVED_FROM_LTP" in snapshot.limitations
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("netqty", "1e100000"),
+        ("avgnetprice", "1e500000"),
+        ("ltp", "1e-100000"),
+    ],
+)
+def test_extreme_position_numerics_fail_closed(field: str, value: str) -> None:
+    row = dict(_POSITIONS["data"][0], **{field: value})
+    with pytest.raises(PortfolioError) as error:
+        _logged_in(FakeTransport(positions={"status": True, "data": [row]})).positions()
+    assert error.value.code == "MALFORMED_RESPONSE"
+
+
+def test_missing_data_is_malformed() -> None:
+    with pytest.raises(PortfolioError) as error:
+        _logged_in(FakeTransport(positions={"status": True})).positions()
+    assert error.value.code == "MALFORMED_RESPONSE"
+
+
+def test_blank_optional_position_numerics_are_absent() -> None:
+    row = dict(
+        _POSITIONS["data"][0],
+        pnl="",
+        unrealised="",
+        realised="",
+        multiplier="",
+    )
+    snapshot = _logged_in(
+        FakeTransport(positions={"status": True, "data": [row]})
+    ).positions()
+    data = snapshot.rows[0]
+    assert data.pnl_source == "DERIVED"
+    assert data.realised_pnl is None
+    assert data.unrealised_pnl is None
+    assert data.multiplier is None
+
+
+def test_non_ascii_symbol_rejected_before_uppercase() -> None:
+    row = dict(_POSITIONS["data"][0], tradingsymbol="ß")
+    with pytest.raises(PortfolioError) as error:
+        _logged_in(FakeTransport(positions={"status": True, "data": [row]})).positions()
+    assert error.value.code == "MALFORMED_RESPONSE"
+
+
+def test_non_equity_without_ltp_still_flags_derivation_unsupported() -> None:
+    row = dict(
+        _POSITIONS["data"][0],
+        instrumenttype="FUT",
+        ltp=None,
+        pnl=None,
+        unrealised=None,
+    )
+    snapshot = _logged_in(
+        FakeTransport(positions={"status": True, "data": [row]})
+    ).positions()
+    assert "POSITION_PNL_UNAVAILABLE" in snapshot.limitations
+    assert "POSITION_PNL_DERIVATION_UNSUPPORTED" in snapshot.limitations
+    assert "POSITION_LTP_UNAVAILABLE" in snapshot.limitations
+
+
 def test_non_equity_position_pnl_is_not_derived() -> None:
     payload = {
         "status": True,
@@ -250,12 +313,29 @@ def test_orders_parse_status_and_ids() -> None:
     snapshot = _logged_in(FakeTransport()).orders()
     row = snapshot.rows[0]
     assert row.order_id == "order-uuid-1"
-    assert row.exchange_order_id == "201020000000080"
+    assert row.exchange_order_id == "1100000000048358"
     assert row.side == "BUY"
     assert row.status == "COMPLETE"
     assert row.trigger_price is None
     assert row.average_fill_price == 100.5
     assert row.reported_at == "25-Nov-2026 10:00:00"
+
+
+def test_order_falls_back_to_orderid_and_keeps_exchange_id() -> None:
+    row = dict(_ORDERS["data"][0])
+    row.pop("uniqueorderid")
+    snapshot = _logged_in(
+        FakeTransport(orders={"status": True, "data": [row]})
+    ).orders()
+    assert snapshot.rows[0].order_id == "201020000000080"
+    assert snapshot.rows[0].exchange_order_id == "1100000000048358"
+
+
+def test_float_order_id_rejected() -> None:
+    row = dict(_ORDERS["data"][0], uniqueorderid=float("nan"))
+    with pytest.raises(PortfolioError) as error:
+        _logged_in(FakeTransport(orders={"status": True, "data": [row]})).orders()
+    assert error.value.code == "MALFORMED_RESPONSE"
 
 
 def test_order_status_message_allows_currency_but_not_controls() -> None:

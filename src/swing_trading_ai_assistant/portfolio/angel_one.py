@@ -24,8 +24,8 @@ import urllib.request
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from decimal import Decimal, InvalidOperation, localcontext
-from typing import Any, cast
+from decimal import Decimal, DecimalException, InvalidOperation, localcontext
+from typing import Any, TypeVar, cast
 
 from .credentials import missing_credentials
 from .errors import PortfolioError
@@ -65,6 +65,8 @@ ALLOWED_URLS = frozenset(
     }
 )
 MAX_RESPONSE_BYTES = 8 * 1024 * 1024
+MAX_ABS_DECIMAL = Decimal("1e18")
+MIN_ABS_DECIMAL = Decimal("1e-18")
 GTT_PAGE_SIZE = 50
 MAX_GTT_PAGES = 20
 RECONCILIATION_TOLERANCE = Decimal("5.00")
@@ -72,6 +74,7 @@ _SYMBOL = re.compile(r"^[A-Z0-9][A-Z0-9&.-]{0,19}$")
 _EXCHANGE = re.compile(r"^[A-Z]{2,8}$")
 _IDENTIFIER = re.compile(r"^[!-~]{1,128}$")
 _ISIN = re.compile(r"^[A-Z]{2}[A-Z0-9]{9}[0-9]$")
+T = TypeVar("T")
 
 
 @dataclass(frozen=True, repr=False)
@@ -214,11 +217,14 @@ def _decimal(value: object, field: str) -> Decimal:
         raise PortfolioError("MALFORMED_RESPONSE", f"{field} is invalid") from exc
     if not number.is_finite():
         raise PortfolioError("MALFORMED_RESPONSE", f"{field} is invalid")
+    magnitude = abs(number)
+    if magnitude != 0 and (magnitude > MAX_ABS_DECIMAL or magnitude < MIN_ABS_DECIMAL):
+        raise PortfolioError("MALFORMED_RESPONSE", f"{field} is out of range")
     return number
 
 
 def _optional_decimal(value: object, field: str) -> Decimal | None:
-    if value is None:
+    if value is None or (isinstance(value, str) and not value.strip()):
         return None
     return _decimal(value, field)
 
@@ -341,7 +347,14 @@ class AngelOneClient:
             )
         with localcontext() as context:
             context.prec = 60
-            rows = tuple(_holding_row(row) for row in cast("list[object]", raw_rows))
+            try:
+                rows = tuple(
+                    _holding_row(row) for row in cast("list[object]", raw_rows)
+                )
+            except DecimalException as exc:
+                raise PortfolioError(
+                    "MALFORMED_RESPONSE", "Angel One holdings values are invalid"
+                ) from exc
             raw_row_list = cast("list[object]", raw_rows)
             limitations: list[str] = []
             if any(row.t1_quantity > 0 for row in rows):
@@ -423,7 +436,11 @@ class AngelOneClient:
     ) -> list[object]:
         if status != 200 or payload.get("status") is not True:
             raise self._records_error(status, payload, label)
-        data = payload.get("data")
+        if "data" not in payload:
+            raise PortfolioError(
+                "MALFORMED_RESPONSE", f"Angel One {label} data is missing"
+            )
+        data = payload["data"]
         if data is None:
             return []
         if not isinstance(data, list):
@@ -433,12 +450,11 @@ class AngelOneClient:
         return cast("list[object]", data)
 
     def positions(self) -> PositionsSnapshot:
-        records: list[PositionRecord] = []
-        limitations: list[str] = []
-        for raw in self._get_list(POSITIONS_PATH, "positions"):
-            record, record_limitations = _position_row(raw)
-            records.append(record)
-            limitations.extend(record_limitations)
+        records, limitations = _parse_records(
+            self._get_list(POSITIONS_PATH, "positions"),
+            _position_row,
+            "positions",
+        )
         return PositionsSnapshot(
             rows=tuple(records),
             limitations=tuple(dict.fromkeys(limitations)),
@@ -446,12 +462,11 @@ class AngelOneClient:
         )
 
     def orders(self) -> OrdersSnapshot:
-        records: list[OrderRecord] = []
-        limitations: list[str] = []
-        for raw in self._get_list(ORDERS_PATH, "orders"):
-            record, record_limitations = _order_row(raw)
-            records.append(record)
-            limitations.extend(record_limitations)
+        records, limitations = _parse_records(
+            self._get_list(ORDERS_PATH, "orders"),
+            _order_row,
+            "orders",
+        )
         return OrdersSnapshot(
             rows=tuple(records),
             limitations=tuple(dict.fromkeys(limitations)),
@@ -459,12 +474,11 @@ class AngelOneClient:
         )
 
     def trades(self) -> TradesSnapshot:
-        records: list[TradeRecord] = []
-        limitations: list[str] = []
-        for raw in self._get_list(TRADES_PATH, "trades"):
-            record, record_limitations = _trade_row(raw)
-            records.append(record)
-            limitations.extend(record_limitations)
+        records, limitations = _parse_records(
+            self._get_list(TRADES_PATH, "trades"),
+            _trade_row,
+            "trades",
+        )
         return TradesSnapshot(
             rows=tuple(records),
             limitations=tuple(dict.fromkeys(limitations)),
@@ -480,10 +494,9 @@ class AngelOneClient:
                 {"status": ["FORALL"], "page": page, "count": GTT_PAGE_SIZE},
                 "GTT rules",
             )
-            for raw in rows:
-                record, record_limitations = _gtt_row(raw)
-                records.append(record)
-                limitations.extend(record_limitations)
+            page_records, page_limitations = _parse_records(rows, _gtt_row, "GTT rules")
+            records.extend(page_records)
+            limitations.extend(page_limitations)
             if len(rows) < GTT_PAGE_SIZE:
                 break
         else:
@@ -603,6 +616,25 @@ def _record_mapping(value: object, label: str) -> dict[str, object]:
     return cast("dict[str, object]", value)
 
 
+def _parse_records(
+    raw_rows: list[object],
+    parser: Callable[[object], tuple[T, tuple[str, ...]]],
+    label: str,
+) -> tuple[list[T], list[str]]:
+    records: list[T] = []
+    limitations: list[str] = []
+    try:
+        for raw in raw_rows:
+            record, record_limitations = parser(raw)
+            records.append(record)
+            limitations.extend(record_limitations)
+    except DecimalException as exc:
+        raise PortfolioError(
+            "MALFORMED_RESPONSE", f"Angel One {label} values are invalid"
+        ) from exc
+    return records, limitations
+
+
 def _record_text(value: object, field: str, *, max_len: int = 128) -> str:
     if not isinstance(value, str):
         raise PortfolioError("MALFORMED_RESPONSE", f"{field} is invalid")
@@ -642,8 +674,11 @@ def _optional_message_text(
 def _record_symbol(value: object) -> str:
     if not isinstance(value, str):
         raise PortfolioError("MALFORMED_RESPONSE", "symbol is invalid")
-    text = value.strip().upper()
-    if not text.isascii() or not _SYMBOL.fullmatch(text):
+    text = value.strip()
+    if not text.isascii():
+        raise PortfolioError("MALFORMED_RESPONSE", "symbol is invalid")
+    text = text.upper()
+    if not _SYMBOL.fullmatch(text):
         raise PortfolioError("MALFORMED_RESPONSE", "symbol is invalid")
     return text
 
@@ -662,7 +697,7 @@ def _optional_exchange(value: object) -> str | None:
 
 
 def _record_identifier(value: object, field: str) -> str:
-    if isinstance(value, bool) or value is None:
+    if isinstance(value, (bool, float)) or value is None:
         raise PortfolioError("MALFORMED_RESPONSE", f"{field} is invalid")
     text = str(value).strip()
     if not _IDENTIFIER.fullmatch(text):
@@ -681,7 +716,10 @@ def _optional_isin(value: object) -> str | None:
         return None
     if not isinstance(value, str):
         raise PortfolioError("MALFORMED_RESPONSE", "isin is invalid")
-    text = value.strip().upper()
+    text = value.strip()
+    if not text.isascii():
+        raise PortfolioError("MALFORMED_RESPONSE", "isin is invalid")
+    text = text.upper()
     if not _ISIN.fullmatch(text):
         raise PortfolioError("MALFORMED_RESPONSE", "isin is invalid")
     return text
@@ -766,7 +804,7 @@ def _position_row(raw: object) -> tuple[PositionRecord, tuple[str, ...]]:
         pnl = None
         pnl_source = None
         limitations.append("POSITION_PNL_UNAVAILABLE")
-        if last_price is not None and not is_equity:
+        if not is_equity:
             limitations.append("POSITION_PNL_DERIVATION_UNSUPPORTED")
     if last_price is None:
         limitations.append("POSITION_LTP_UNAVAILABLE")
@@ -808,9 +846,9 @@ def _order_row(raw: object) -> tuple[OrderRecord, tuple[str, ...]]:
     ):
         raw_order_id = row.get("orderid")
     order_id = _record_identifier(raw_order_id, "orderid")
-    exchange_order_id = _optional_identifier(row.get("orderid"), "orderid")
-    if exchange_order_id == order_id:
-        exchange_order_id = None
+    exchange_order_id = _optional_identifier(
+        row.get("exchangeorderid"), "exchangeorderid"
+    )
     parent_order_id = _optional_identifier(row.get("parentorderid"), "parentorderid")
     symbol = _record_symbol(row.get("tradingsymbol"))
     exchange = _record_exchange(row.get("exchange"))

@@ -302,6 +302,8 @@ def _section_body_safe(client: BrokerConnector, section: Section) -> dict[str, o
         )
     try:
         snapshot = _fetch_snapshot(client, section)
+        records = section_records(section, snapshot)
+        limitations = section_limitations(section, snapshot)
     except PortfolioError as exc:
         return section_body(
             section,
@@ -314,8 +316,8 @@ def _section_body_safe(client: BrokerConnector, section: Section) -> dict[str, o
         section,
         status=STATUS_OK,
         source=source,
-        records=section_records(section, snapshot),
-        limitations=section_limitations(section, snapshot),
+        records=records,
+        limitations=limitations,
     )
 
 
@@ -471,7 +473,7 @@ def _emit_snapshot(payload: dict[str, object], output: str) -> int:
 def _build_parser() -> argparse.ArgumentParser:
     parser = _Parser(
         prog="portfolio",
-        description="Live, read-only broker portfolio accounts and review.",
+        description="Live, read-only broker accounts, records, and review.",
     )
     commands = parser.add_subparsers(dest="command", required=True)
 

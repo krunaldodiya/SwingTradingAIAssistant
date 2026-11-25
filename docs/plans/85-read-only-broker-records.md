@@ -43,7 +43,7 @@ A connector declares the sections it supports. A section request outside the con
 
 ### Common record fields
 
-All records use canonical NSE-style `symbol` text, `exchange`, and optional provider `symbol_token` and `isin`. Money and quantities are decimal values; JSON emits numbers with at most two decimal places. Nullable fields are explicit. Provider-specific status and timestamp strings are preserved, not reinterpreted as a cross-broker state machine.
+All records use canonical NSE-style `symbol` text, `exchange`, and optional provider `symbol_token` and `isin`. Money values are emitted with two decimals; quantities preserve their provider decimal value. Provider numerics are bounded to `|x| <= 1e18` and non-zero `|x| >= 1e-18`; values outside that range fail the section with `MALFORMED_RESPONSE`, so Decimal arithmetic and JSON floats stay representable. Nullable fields are explicit. Provider-specific status and timestamp strings are preserved, not reinterpreted as a cross-broker state machine.
 
 Holding records add optional `exchange`, `symbol_token`, and `isin` to the existing holding row. The existing invested/current/P&L/day arithmetic and review contract are unchanged.
 
@@ -163,12 +163,12 @@ Credential suffixes are `API_KEY`, `CLIENT_CODE`, `PIN`, and `TOTP_SECRET`. The 
 
 Parsing rules:
 
-- For positions, orders, trades, and GTT, a successful response with `data: null` is an empty section. A non-list `data` for a list section is malformed. Holdings retain their Plan 84 object/list handling.
+- For positions, orders, trades, and GTT, a successful response with an explicit `data: null` is an empty section. A missing `data` key or a non-list `data` for a list section is malformed. Holdings retain their Plan 84 object/list handling.
 - `tradingsymbol`, `exchange`, and identifiers are validated and bounded before table output. `clientid` is never emitted.
-- Order IDs prefer `uniqueorderid`, then `orderid`. The exchange order ID is retained separately.
+- Order IDs prefer `uniqueorderid`, then `orderid`. `exchange_order_id` uses the provider's `exchangeorderid`; the numeric broker `orderid` is not relabeled as an exchange ID.
 - Order and GTT statuses are provider-reported and uppercased. An empty status is malformed for orders; a null GTT status yields `GTT_STATUS_UNAVAILABLE`.
 - Position P&L uses a broker-provided `pnl`/`unrealised` value when present. If only `ltp` is present and the instrument is equity, P&L is derived as `(ltp - average_price) * quantity` and marked `pnl_source: DERIVED` plus `POSITION_PNL_DERIVED_FROM_LTP`. Non-equity positions without broker P&L are not derived; they carry `POSITION_PNL_DERIVATION_UNSUPPORTED`. If neither source is present, P&L is null and the section carries `POSITION_PNL_UNAVAILABLE`. A missing `ltp` yields `POSITION_LTP_UNAVAILABLE`.
-- GTT rules are fetched in pages of 50 for `FORALL`, up to 20 pages. A full final page at the bound yields `GTT_RESULTS_TRUNCATED` rather than an unbounded retry.
+- GTT rules are fetched in pages of 50 for `FORALL`, up to 20 pages. A full final page at the bound yields `GTT_RESULTS_TRUNCATED` rather than an unbounded retry. The live SmartAPI `ruleList` response is a JSON array of rule objects with `id`; the published single-object example is stale. A non-list response remains malformed under this contract.
 - Trade value uses `tradevalue` when present; otherwise `quantity * price` plus `TRADE_VALUE_COMPUTED`.
 
 ## CLI
@@ -209,7 +209,7 @@ Exit codes: `0` every requested section is OK; `1` a requested section is unsupp
 ## Acceptance
 
 - The record contract, envelopes, capabilities, ordering, nullability, and failure statuses are documented and tested.
-- Angel One returns holdings, positions, orders, trades, and GTT against synthetic payloads, including `data: null`, optional fields, malformed rows, and GTT pagination.
+- Angel One returns holdings, positions, orders, trades, and GTT against synthetic payloads, including `data: null`, missing `data`, optional fields, extreme numerics, duplicate-free `exchangeorderid` handling, malformed rows, and GTT pagination.
 - The allowlist contains exactly the six read-only endpoints; mutation endpoints are rejected before transport.
 - `portfolio holdings|positions|orders|trades|gtt|snapshot` emit deterministic JSON; tables render without control-character injection.
 - A snapshot with one failing section emits every other section and exits `1`; a fully successful snapshot exits `0`.

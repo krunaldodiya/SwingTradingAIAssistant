@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from decimal import Decimal
+import math
+from decimal import Decimal, InvalidOperation
 from typing import cast
 
+from .errors import PortfolioError
 from .records import (
     GttRecord,
     GttSnapshot,
@@ -26,11 +28,23 @@ STATUS_UNSUPPORTED = "UNSUPPORTED"
 
 
 def _money(value: Decimal) -> float:
-    return float(value.quantize(Decimal("0.01")))
+    try:
+        number = float(value.quantize(Decimal("0.01")))
+    except (InvalidOperation, OverflowError, ValueError) as exc:
+        raise PortfolioError("MALFORMED_RESPONSE", "money value is invalid") from exc
+    if not math.isfinite(number):
+        raise PortfolioError("MALFORMED_RESPONSE", "money value is invalid")
+    return number
 
 
 def _quantity(value: Decimal) -> float:
-    return float(value)
+    try:
+        number = float(value)
+    except (OverflowError, ValueError) as exc:
+        raise PortfolioError("MALFORMED_RESPONSE", "quantity value is invalid") from exc
+    if not math.isfinite(number):
+        raise PortfolioError("MALFORMED_RESPONSE", "quantity value is invalid")
+    return number
 
 
 def _optional_money(value: Decimal | None) -> float | None:
