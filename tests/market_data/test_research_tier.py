@@ -8,6 +8,7 @@ from swing_trading_ai_assistant.market_data.research_tier import (
     TIER_NOT_QUALIFIED,
     TIER_RESEARCH_QUALIFIED,
     TIER_RESEARCH_WATCH,
+    analysis_identity_sha256,
     build_research_tier_report,
     evaluate_research_tier,
     summarize_research_tiers,
@@ -126,6 +127,15 @@ def _bhartiartl() -> dict[str, object]:
         candle_body="91.50",
         risk_atr="4.60",
     )
+
+
+def _analysis_document(members: list[dict[str, object]]) -> dict[str, object]:
+    document: dict[str, object] = {
+        "schema": "swing-analysis@v2",
+        "members": members,
+    }
+    document["report_identity_sha256"] = analysis_identity_sha256(document)
+    return document
 
 
 def _strengths(result: dict[str, object]) -> dict[str, object]:
@@ -265,14 +275,7 @@ def test_summary_and_report_counts() -> None:
 def test_cli_reads_analysis_without_provider(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    analysis = {
-        "schema": "swing-analysis@v2",
-        "report_identity_sha256": "a" * 64,
-        "members": [
-            {**_bankbaroda(), "research_tier": evaluate_research_tier(_bankbaroda())},
-            {**_bhartiartl(), "research_tier": evaluate_research_tier(_bhartiartl())},
-        ],
-    }
+    analysis = _analysis_document([_bankbaroda(), _bhartiartl()])
     path = tmp_path / "analysis.json"
     path.write_text(json.dumps(analysis), encoding="utf-8")
     assert (
@@ -285,12 +288,7 @@ def test_cli_reads_analysis_without_provider(
 
 
 def test_cli_table_output(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    analysis = {
-        "schema": "swing-analysis@v2",
-        "members": [
-            {**_bankbaroda(), "research_tier": evaluate_research_tier(_bankbaroda())}
-        ],
-    }
+    analysis = _analysis_document([_bankbaroda()])
     path = tmp_path / "analysis.json"
     path.write_text(json.dumps(analysis), encoding="utf-8")
     assert (
@@ -298,8 +296,75 @@ def test_cli_table_output(tmp_path: Path, capsys: pytest.CaptureFixture[str]) ->
         == 0
     )
     output = capsys.readouterr().out
+    assert "PROVISIONAL_RESEARCH" in output
     assert "BANKBARODA" in output
     assert "RESEARCH_WATCH" in output
+
+
+def test_forged_artifact_label_is_ignored() -> None:
+    forged = {**_bankbaroda(), "research_tier": {"tier": "QUALIFIED"}}
+    report = build_research_tier_report(_analysis_document([forged]))
+    assert report["members"][0]["tier"] == TIER_RESEARCH_WATCH
+
+
+def test_cli_rejects_unverified_analysis(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    analysis = _analysis_document([_bankbaroda()])
+    analysis["report_identity_sha256"] = "deadbeef"
+    path = tmp_path / "analysis.json"
+    path.write_text(json.dumps(analysis), encoding="utf-8")
+    assert (
+        main(["--research-tier", "--analysis-json", str(path), "--output", "json"]) == 1
+    )
+    assert "swing analysis unavailable" in capsys.readouterr().err
+
+
+def test_impossible_soft_values_do_not_reach_top_tier() -> None:
+    for body in ("1000", "-5"):
+        member = _member(
+            "BADBODY",
+            event_volume=200,
+            prior_median=100,
+            weekly_trend="UPTREND",
+            above_twenty_week_average=True,
+            candle_direction="BULLISH",
+            candle_body=body,
+            risk_atr="2.00",
+        )
+        assert evaluate_research_tier(member)["tier"] != TIER_RESEARCH_QUALIFIED
+    volume = _member(
+        "BADVOLUME",
+        event_volume=10**20,
+        prior_median="100",
+        weekly_trend="UPTREND",
+        above_twenty_week_average=True,
+        candle_direction="BULLISH",
+        candle_body="80",
+        risk_atr="2.00",
+    )
+    assert evaluate_research_tier(volume)["tier"] != TIER_RESEARCH_QUALIFIED
+
+
+def test_extreme_risk_is_insufficient() -> None:
+    member = _member(
+        "BADRISK",
+        event_volume=200,
+        prior_median=100,
+        weekly_trend="UPTREND",
+        above_twenty_week_average=True,
+        candle_direction="BULLISH",
+        candle_body="80",
+        risk_atr="1e999999",
+    )
+    assert evaluate_research_tier(member)["tier"] == TIER_INSUFFICIENT
+
+
+def test_unknown_precomputed_tier_counts_as_insufficient() -> None:
+    summary = summarize_research_tiers(
+        [{"symbol": "X", "research_tier": {"tier": "QUALIFIED"}}]
+    )
+    assert summary["tier_counts"][TIER_INSUFFICIENT] == 1
 
 
 def test_cli_table_and_invalid_schema(

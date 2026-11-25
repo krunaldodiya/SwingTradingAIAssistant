@@ -3,25 +3,31 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from pathlib import Path
 from typing import cast
 
-from .research_tier import build_research_tier_report, render_research_tier_table
+from .research_tier import (
+    build_research_tier_report,
+    render_research_tier_table,
+    verify_analysis_identity,
+)
 from .swing_analysis import SCHEMA, analyze_lifecycle, analyze_scan
 
 
-def _read_analysis(path: Path) -> dict[str, object]:
+def _read_analysis(path: Path) -> tuple[dict[str, object], str]:
     if not path.is_absolute():
         raise ValueError("absolute analysis path required")
-    payload: object = json.loads(path.read_text(encoding="utf-8"))
+    raw = path.read_bytes()
+    payload: object = json.loads(raw.decode("utf-8"))
     if not isinstance(payload, dict):
         raise ValueError("unsupported swing-analysis document")
     document = cast("dict[str, object]", payload)
-    if document.get("schema") != SCHEMA:
-        raise ValueError("unsupported swing-analysis document")
-    return document
+    if document.get("schema") != SCHEMA or not verify_analysis_identity(document):
+        raise ValueError("unsupported or unverified swing-analysis document")
+    return document, hashlib.sha256(raw).hexdigest()
 
 
 def _run_research_tier(args: argparse.Namespace) -> int:
@@ -31,7 +37,10 @@ def _run_research_tier(args: argparse.Namespace) -> int:
         raise ValueError("research tier cannot run with --lifecycle")
     if args.analysis_json is None:
         raise ValueError("absolute analysis path required")
-    report = build_research_tier_report(_read_analysis(args.analysis_json))
+    document, document_sha256 = _read_analysis(args.analysis_json)
+    report = build_research_tier_report(
+        document, source_document_sha256=document_sha256
+    )
     if args.output == "table":
         sys.stdout.write(render_research_tier_table(report) + "\n")
     else:
@@ -83,3 +92,7 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as error:  # noqa: BLE001 - closed CLI error boundary
         sys.stderr.write(f"swing analysis unavailable: {type(error).__name__}\n")
         return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

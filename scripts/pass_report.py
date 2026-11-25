@@ -45,6 +45,10 @@ def _rows(value: object) -> list[Json]:
     return [_mapping(item) for item in cast(list[object], value)]
 
 
+def _sequence(value: object) -> list[object]:
+    return cast(list[object], value) if isinstance(value, list) else []
+
+
 def _text(value: object) -> str | None:
     return value if isinstance(value, str) else None
 
@@ -135,7 +139,7 @@ def _soft_strength(tier: Json, gate_id: str) -> str | None:
 def _research_rows(analysis: Json | None) -> list[Json]:
     rows: list[Json] = []
     for member in _rows((analysis or {}).get("members")):
-        tier = _mapping(member.get("research_tier")) or evaluate_research_tier(member)
+        tier = evaluate_research_tier(member)
         label = _text(tier.get("tier"))
         if label not in {"RESEARCH_QUALIFIED", "RESEARCH_WATCH"}:
             continue
@@ -155,9 +159,7 @@ def _research_rows(analysis: Json | None) -> list[Json]:
                 "weekly": _soft_strength(tier, "WEEKLY_TREND_UP"),
                 "candle": _soft_strength(tier, "CANDLE_BODY_QUALITY"),
                 "risk": risk,
-                "flags": ", ".join(
-                    str(flag) for flag in cast(list[object], tier.get("flags") or [])
-                ),
+                "flags": ", ".join(str(flag) for flag in _sequence(tier.get("flags"))),
             }
         )
     return rows

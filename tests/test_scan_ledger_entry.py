@@ -164,15 +164,47 @@ def test_entry_renders_research_tier_and_flags() -> None:
         "members": [
             {
                 "symbol": "BSE",
+                "volume": {"event_volume": 55, "prior_median": "100"},
+                "weekly": {
+                    "trend": "RANGE_OR_TRANSITION",
+                    "above_twenty_week_average": True,
+                },
+                "levels": {"risk_atr": "2.87"},
                 "policy": {
                     "schema": "swing-analysis-policy@v1",
                     "outcome": "NOT_QUALIFIED",
                     "gates": [
+                        {"id": "ATR_AVAILABLE", "status": "PASS", "observed": "108.60"},
                         {
                             "id": "VOLUME_EXPANSION",
                             "status": "FAIL",
                             "observed": "0.55",
-                        }
+                        },
+                        {
+                            "id": "CANDLE_BODY_QUALITY",
+                            "status": "PASS",
+                            "observed": {
+                                "direction": "BULLISH",
+                                "body_percent": "53.13",
+                            },
+                        },
+                        {
+                            "id": "RETEST_CONFIRMED",
+                            "status": "PENDING",
+                            "observed": "TESTING",
+                        },
+                        {"id": "DEMAND_ZONE_VALID", "status": "PASS", "observed": {}},
+                        {
+                            "id": "EXTENSION_WITHIN_2_ATR",
+                            "status": "PASS",
+                            "observed": "0.47",
+                        },
+                        {"id": "RISK_POSITIVE", "status": "PASS", "observed": "2.87"},
+                        {
+                            "id": "WEEKLY_TREND_UP",
+                            "status": "PENDING",
+                            "observed": "RANGE",
+                        },
                     ],
                 },
                 "research_tier": {

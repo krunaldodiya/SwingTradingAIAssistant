@@ -7,6 +7,8 @@ separate research-watch classification for the owner.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from decimal import Decimal, InvalidOperation
@@ -24,8 +26,11 @@ TIER_INSUFFICIENT = "INSUFFICIENT"
 _RISK_MAX_ATR = Decimal("3.50")
 _VOLUME_STRONG = Decimal("1.50")
 _VOLUME_MODERATE = Decimal("1.00")
+_VOLUME_MAX_RATIO = Decimal("100")
 _CANDLE_STRONG = Decimal("60")
 _CANDLE_MODERATE = Decimal("40")
+_MAX_ABS_DECIMAL = Decimal("1e18")
+_MIN_ABS_DECIMAL = Decimal("1e-18")
 
 _CRITICAL_POLICY_GATES = (
     ("ATR_AVAILABLE", "atr20 present"),
@@ -61,7 +66,14 @@ def _decimal(value: object) -> Decimal | None:
         number = Decimal(str(value))
     except (InvalidOperation, ValueError):
         return None
-    return number if number.is_finite() else None
+    if not number.is_finite():
+        return None
+    magnitude = number.copy_abs()
+    if not magnitude.is_zero() and (
+        magnitude > _MAX_ABS_DECIMAL or magnitude < _MIN_ABS_DECIMAL
+    ):
+        return None
+    return number
 
 
 def _gate_map(member: Mapping[str, object]) -> dict[str, Json]:
@@ -150,7 +162,12 @@ def _volume_soft(member: Mapping[str, object], flags: list[str]) -> Json:
     volume = _mapping(member.get("volume"))
     event_volume = _decimal(volume.get("event_volume"))
     prior_median = _decimal(volume.get("prior_median"))
-    if event_volume is None or prior_median is None or prior_median <= 0:
+    if (
+        event_volume is None
+        or prior_median is None
+        or event_volume <= 0
+        or prior_median <= 0
+    ):
         return _soft_gate(
             "VOLUME_EXPANSION",
             "UNAVAILABLE",
@@ -159,6 +176,14 @@ def _volume_soft(member: Mapping[str, object], flags: list[str]) -> Json:
             flags,
         )
     ratio = (event_volume / prior_median).quantize(Decimal("0.01"))
+    if ratio <= 0 or ratio > _VOLUME_MAX_RATIO:
+        return _soft_gate(
+            "VOLUME_EXPANSION",
+            "UNAVAILABLE",
+            str(ratio),
+            ">=1.50 prior-median ratio strong, >=1.00 moderate",
+            flags,
+        )
     if ratio >= _VOLUME_STRONG:
         strength = "STRONG"
     elif ratio >= _VOLUME_MODERATE:
@@ -178,7 +203,9 @@ def _weekly_soft(member: Mapping[str, object], flags: list[str]) -> Json:
     weekly = _mapping(member.get("weekly"))
     trend = _text(weekly.get("trend"))
     above = weekly.get("above_twenty_week_average") is True
-    if trend == "UPTREND":
+    if trend is None:
+        strength = "UNAVAILABLE"
+    elif trend == "UPTREND":
         strength = "STRONG"
     elif trend == "RANGE_OR_TRANSITION" and above:
         strength = "MODERATE"
@@ -198,7 +225,12 @@ def _candle_soft(member: Mapping[str, object], flags: list[str]) -> Json:
     observed = _mapping(gate.get("observed")) if gate else {}
     direction = _text(observed.get("direction"))
     body = _decimal(observed.get("body_percent"))
-    if direction is None or body is None:
+    if (
+        direction not in {"BULLISH", "BEARISH"}
+        or body is None
+        or body < 0
+        or body > 100
+    ):
         return _soft_gate(
             "CANDLE_BODY_QUALITY",
             "UNAVAILABLE",
@@ -275,6 +307,24 @@ def evaluate_research_tier(member: Mapping[str, object]) -> Json:
     }
 
 
+def analysis_identity_sha256(document: Mapping[str, object]) -> str:
+    payload = {
+        str(key): value
+        for key, value in document.items()
+        if key != "report_identity_sha256"
+    }
+    return hashlib.sha256(
+        json.dumps(
+            payload, ensure_ascii=True, sort_keys=True, separators=(",", ":")
+        ).encode()
+    ).hexdigest()
+
+
+def verify_analysis_identity(document: Mapping[str, object]) -> bool:
+    claimed = _text(document.get("report_identity_sha256"))
+    return claimed is not None and claimed == analysis_identity_sha256(document)
+
+
 def summarize_research_tiers(members: Sequence[Mapping[str, object]]) -> Json:
     counts = {
         TIER_RESEARCH_QUALIFIED: 0,
@@ -284,8 +334,7 @@ def summarize_research_tiers(members: Sequence[Mapping[str, object]]) -> Json:
     }
     for member in members:
         tier = _text(_mapping(member.get("research_tier")).get("tier"))
-        if tier in counts:
-            counts[tier] += 1
+        counts[tier if tier in counts else TIER_INSUFFICIENT] += 1
     return {
         "schema": SCHEMA,
         "mode": MODE,
@@ -293,21 +342,20 @@ def summarize_research_tiers(members: Sequence[Mapping[str, object]]) -> Json:
     }
 
 
-def build_research_tier_report(analysis: Mapping[str, object]) -> Json:
+def build_research_tier_report(
+    analysis: Mapping[str, object], *, source_document_sha256: str | None = None
+) -> Json:
     members: list[Json] = []
     for member in (_mapping(item) for item in _sequence(analysis.get("members"))):
-        symbol = _text(member.get("symbol"))
-        tier = _mapping(member.get("research_tier"))
-        if not tier:
-            tier = evaluate_research_tier(member)
+        tier = evaluate_research_tier(member)
         members.append(
             {
-                "symbol": symbol,
-                "tier": _text(tier.get("tier")),
-                "hard_gates": tier.get("hard_gates") or [],
-                "soft_gates": tier.get("soft_gates") or [],
-                "weak_soft_gates": tier.get("weak_soft_gates") or [],
-                "flags": tier.get("flags") or [],
+                "symbol": _text(member.get("symbol")),
+                "tier": tier["tier"],
+                "hard_gates": tier["hard_gates"],
+                "soft_gates": tier["soft_gates"],
+                "weak_soft_gates": tier["weak_soft_gates"],
+                "flags": tier["flags"],
             }
         )
     counts = Counter(str(member.get("tier")) for member in members)
@@ -315,7 +363,9 @@ def build_research_tier_report(analysis: Mapping[str, object]) -> Json:
         "schema": REPORT_SCHEMA,
         "mode": MODE,
         "source_schema": _text(analysis.get("schema")),
-        "source_identity_sha256": _text(analysis.get("report_identity_sha256")),
+        "source_document_sha256": source_document_sha256,
+        "source_report_identity_sha256": _text(analysis.get("report_identity_sha256")),
+        "source_identity_verified": verify_analysis_identity(analysis),
         "tier_counts": {
             TIER_RESEARCH_QUALIFIED: counts.get(TIER_RESEARCH_QUALIFIED, 0),
             TIER_RESEARCH_WATCH: counts.get(TIER_RESEARCH_WATCH, 0),
@@ -328,6 +378,8 @@ def build_research_tier_report(analysis: Mapping[str, object]) -> Json:
 
 def render_research_tier_table(report: Mapping[str, object]) -> str:
     lines = [
+        "PROVISIONAL_RESEARCH — not strict QUALIFIED, trade eligibility or advice.",
+        "",
         "Symbol        Tier                Volume      Weekly       Candle       Flags",
         "------------  ------------------  ----------  -----------  -----------  ------------------------------",
     ]
@@ -355,8 +407,10 @@ __all__ = [
     "TIER_NOT_QUALIFIED",
     "TIER_RESEARCH_QUALIFIED",
     "TIER_RESEARCH_WATCH",
+    "analysis_identity_sha256",
     "build_research_tier_report",
     "evaluate_research_tier",
     "render_research_tier_table",
     "summarize_research_tiers",
+    "verify_analysis_identity",
 ]

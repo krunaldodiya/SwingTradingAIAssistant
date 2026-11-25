@@ -202,8 +202,8 @@ def _research_tier_by_symbol(analysis: Json | None) -> dict[str, Json]:
     result: dict[str, Json] = {}
     for member in _rows(analysis.get("members")):
         symbol = _text(member.get("symbol"))
-        tier = _mapping(member.get("research_tier")) or evaluate_research_tier(member)
-        if symbol and tier:
+        tier = evaluate_research_tier(member)
+        if symbol:
             result[symbol] = tier
     return result
 
