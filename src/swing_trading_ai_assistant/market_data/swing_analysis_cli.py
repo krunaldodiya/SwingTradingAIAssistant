@@ -16,11 +16,15 @@ from .research_tier import (
 )
 from .swing_analysis import SCHEMA, analyze_lifecycle, analyze_scan
 
+_MAX_ANALYSIS_BYTES = 8 * 1024 * 1024
+
 
 def _read_analysis(path: Path) -> tuple[dict[str, object], str]:
     if not path.is_absolute():
         raise ValueError("absolute analysis path required")
     raw = path.read_bytes()
+    if len(raw) > _MAX_ANALYSIS_BYTES:
+        raise ValueError("analysis document is too large")
     payload: object = json.loads(raw.decode("utf-8"))
     if not isinstance(payload, dict):
         raise ValueError("unsupported swing-analysis document")

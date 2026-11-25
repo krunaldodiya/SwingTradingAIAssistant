@@ -155,8 +155,8 @@ def test_entry_renders_research_tier_and_flags() -> None:
         "policy": {"outcome_counts": {"NOT_QUALIFIED": 1}},
         "research_tier": {
             "tier_counts": {
-                "RESEARCH_QUALIFIED": 0,
-                "RESEARCH_WATCH": 1,
+                "RESEARCH_QUALIFIED": 99,
+                "RESEARCH_WATCH": 0,
                 "NOT_QUALIFIED": 0,
                 "INSUFFICIENT": 0,
             }
@@ -238,6 +238,7 @@ def test_entry_renders_research_tier_and_flags() -> None:
     assert "Research tier `RESEARCH_WATCH`" in text
     assert "volume `WEAK`, weekly `MODERATE`, candle `MODERATE`" in text
     assert "Research tier counts:" in text
+    assert "RESEARCH_QUALIFIED 99" not in text
     assert "RESEARCH_WATCH 1" in text
 
 

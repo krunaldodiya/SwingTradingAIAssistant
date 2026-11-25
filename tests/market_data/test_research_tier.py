@@ -344,6 +344,19 @@ def test_impossible_soft_values_do_not_reach_top_tier() -> None:
         risk_atr="2.00",
     )
     assert evaluate_research_tier(volume)["tier"] != TIER_RESEARCH_QUALIFIED
+    quotient = _member(
+        "BADQUOTIENT",
+        event_volume=10**18,
+        prior_median="1e-18",
+        weekly_trend="UPTREND",
+        above_twenty_week_average=True,
+        candle_direction="BULLISH",
+        candle_body="80",
+        risk_atr="2.00",
+    )
+    result = evaluate_research_tier(quotient)
+    assert result["tier"] != TIER_RESEARCH_QUALIFIED
+    assert _strengths(result)["VOLUME_EXPANSION"] == "UNAVAILABLE"
 
 
 def test_extreme_risk_is_insufficient() -> None:

@@ -153,7 +153,7 @@ Reads an existing `swing-analysis@v2` document. No provider access. It requires 
 ### Daily report and ledger
 
 - `scripts/pass_report.py` adds a **Research watchlist** section listing `RESEARCH_WATCH` and `RESEARCH_QUALIFIED` members with their flags; the existing candidate table keeps the strict policy outcome. It recomputes the tier from facts.
-- `scripts/write_scan_ledger_entry.py` adds a `- Research tier ...` line and the soft/hard flags under each candidate. It recomputes the tier from facts.
+- `scripts/write_scan_ledger_entry.py` adds a `- Research tier ...` line and the soft/hard flags under each candidate. It recomputes both the per-member tiers and the summary counts from facts; document-level precomputed counts are ignored.
 - `gate_friction_report.py` remains unchanged; it is a strict-policy diagnostic.
 
 ## Compatibility
@@ -167,7 +167,7 @@ Reads an existing `swing-analysis@v2` document. No provider access. It requires 
 
 - No new provider calls, credentials, or storage.
 - The tier is computed only from the existing analysis facts; precomputed tier labels and forged source identities are not trusted.
-- Input numerics are bounded. Volume median ratios must be positive and at most 100; candle bodies must be 0–100; a malformed value becomes `UNAVAILABLE`, never the top research tier.
+- Input numerics are bounded. Volume median ratios are range-checked before quantization (positive and at most 100); candle bodies must be 0–100; a malformed value becomes `UNAVAILABLE`, never the top research tier.
 - The analysis identity check is document integrity, not a cryptographic signature; the owner-private file remains the trust boundary.
 - No raw bars, private paths, account data, or broker payloads are introduced.
 - The output carries no target prices, returns, position sizes, or advice.
@@ -181,7 +181,7 @@ Reads an existing `swing-analysis@v2` document. No provider access. It requires 
 - The strict `swing-analysis-policy@v1` outcome and existing facts remain unchanged for the same input.
 - The CLI reads a verified analysis file without provider access and emits the tier report.
 - The daily report and ledger recompute the tier from facts and show it with flags.
-- Tests cover strong/moderate/weak, hard failure, hard unavailable, risk ceiling, summary counts, forged precomputed labels, unverified analysis identity, impossible candle/volume values, and extreme risk.
+- Tests cover strong/moderate/weak, hard failure, hard unavailable, risk ceiling, summary counts, forged precomputed labels and document counts, unverified analysis identity, impossible candle/volume values (including within-bound quotient overflow), and extreme risk.
 - The strict policy is unchanged on a fresh normal `swing-analysis --scan-json` run over the retained 2026-11-23 page: 5 `NOT_QUALIFIED`, 0 `QUALIFIED`/`WATCH`/`INSUFFICIENT`.
 - Ruff, Pyright, focused and full test/coverage gates, independent functional/domain and security/privacy reviews, hosted CI, and exact merge admission pass.
 

@@ -31,6 +31,7 @@ from typing import cast
 
 from swing_trading_ai_assistant.market_data.research_tier import (
     evaluate_research_tier,
+    summarize_research_tiers,
 )
 from swing_trading_ai_assistant.market_data.scan_decision_evidence import (
     ScanDecisionEvidenceUnavailable,
@@ -411,7 +412,7 @@ def _outcome_lines(
         rendered = ", ".join(f"{key} {value}" for key, value in sorted(counts.items()))
         lines.append(f"- Candidate analysis outcomes: {rendered or 'none reported'}.")
         tier_counts = _mapping(
-            _mapping(analysis.get("research_tier")).get("tier_counts")
+            summarize_research_tiers(_rows(analysis.get("members"))).get("tier_counts")
         )
         tier_rendered = ", ".join(
             f"{key} {value}" for key, value in sorted(tier_counts.items())

@@ -175,7 +175,7 @@ def _volume_soft(member: Mapping[str, object], flags: list[str]) -> Json:
             ">=1.50 prior-median ratio strong, >=1.00 moderate",
             flags,
         )
-    ratio = (event_volume / prior_median).quantize(Decimal("0.01"))
+    ratio = event_volume / prior_median
     if ratio <= 0 or ratio > _VOLUME_MAX_RATIO:
         return _soft_gate(
             "VOLUME_EXPANSION",
@@ -184,6 +184,7 @@ def _volume_soft(member: Mapping[str, object], flags: list[str]) -> Json:
             ">=1.50 prior-median ratio strong, >=1.00 moderate",
             flags,
         )
+    ratio = ratio.quantize(Decimal("0.01"))
     if ratio >= _VOLUME_STRONG:
         strength = "STRONG"
     elif ratio >= _VOLUME_MODERATE:
@@ -333,7 +334,7 @@ def summarize_research_tiers(members: Sequence[Mapping[str, object]]) -> Json:
         TIER_INSUFFICIENT: 0,
     }
     for member in members:
-        tier = _text(_mapping(member.get("research_tier")).get("tier"))
+        tier = _text(evaluate_research_tier(member).get("tier"))
         counts[tier if tier in counts else TIER_INSUFFICIENT] += 1
     return {
         "schema": SCHEMA,
@@ -378,7 +379,7 @@ def build_research_tier_report(
 
 def render_research_tier_table(report: Mapping[str, object]) -> str:
     lines = [
-        "PROVISIONAL_RESEARCH — not strict QUALIFIED, trade eligibility or advice.",
+        "PROVISIONAL_RESEARCH - not strict QUALIFIED, trade eligibility or advice.",
         "",
         "Symbol        Tier                Volume      Weekly       Candle       Flags",
         "------------  ------------------  ----------  -----------  -----------  ------------------------------",
