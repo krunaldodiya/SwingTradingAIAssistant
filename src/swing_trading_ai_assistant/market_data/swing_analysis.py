@@ -32,6 +32,7 @@ from .bharatstock import (
     BharatStockError,
     BharatStockInstrument,
 )
+from .research_tier import evaluate_research_tier, summarize_research_tiers
 from .scan_decision_evidence import admit_retained_scan_document_v1
 from .scanner_observation_pair_state_v1 import read_scanner_pair_state_v1
 from .stock_observations import read_stock_observation_v1
@@ -856,6 +857,7 @@ def _unavailable_member(
             "gates": [_gate(gate_id, "UNAVAILABLE", observed, requirement)],
         },
     }
+    member["research_tier"] = evaluate_research_tier(member)
     member["analysis_identity_sha256"] = _identity(member)
     return member
 
@@ -1088,6 +1090,7 @@ def _analyze_member(
         risk_atr,
         bars[event_index],
     )
+    member["research_tier"] = evaluate_research_tier(member)
     member["analysis_identity_sha256"] = _identity(member)
     return member
 
@@ -1196,6 +1199,7 @@ def analyze_scan(scan_path: Path) -> dict[str, object]:
         ),
         "scan_runtime_code_identity_sha256": scan.get("runtime_code_identity_sha256"),
         "policy": _policy_summary(members),
+        "research_tier": summarize_research_tiers(members),
         "members": members,
     }
     report["report_identity_sha256"] = _identity(report)

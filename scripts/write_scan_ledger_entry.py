@@ -29,6 +29,10 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import cast
 
+from swing_trading_ai_assistant.market_data.research_tier import (
+    evaluate_research_tier,
+    summarize_research_tiers,
+)
 from swing_trading_ai_assistant.market_data.scan_decision_evidence import (
     ScanDecisionEvidenceUnavailable,
     read_scan_decision_evidence_completed_session_v1,
@@ -193,6 +197,18 @@ def _policy_by_symbol(analysis: Json | None) -> dict[str, Json]:
     return result
 
 
+def _research_tier_by_symbol(analysis: Json | None) -> dict[str, Json]:
+    if analysis is None:
+        return {}
+    result: dict[str, Json] = {}
+    for member in _rows(analysis.get("members")):
+        symbol = _text(member.get("symbol"))
+        tier = evaluate_research_tier(member)
+        if symbol:
+            result[symbol] = tier
+    return result
+
+
 def _dossier_by_symbol(research: Json | None) -> dict[str, Json]:
     if research is None:
         return {}
@@ -296,6 +312,31 @@ def _gate_lines(policy: Json) -> list[str]:
     return lines
 
 
+def _research_tier_lines(tier: Json | None) -> list[str]:
+    if tier is None:
+        return []
+    soft = {
+        _text(gate.get("id")): _text(gate.get("strength"))
+        for gate in _rows(tier.get("soft_gates"))
+    }
+    risk = next(
+        (
+            _text(gate.get("observed"))
+            for gate in _rows(tier.get("hard_gates"))
+            if gate.get("id") == "RISK_WITHIN_3_5_ATR"
+        ),
+        None,
+    )
+    flags = ", ".join(str(flag) for flag in _sequence(tier.get("flags"))) or "none"
+    return [
+        f"- Research tier `{_text(tier.get('tier'))}`; volume "
+        f"`{soft.get('VOLUME_EXPANSION') or '—'}`, weekly "
+        f"`{soft.get('WEEKLY_TREND_UP') or '—'}`, candle "
+        f"`{soft.get('CANDLE_BODY_QUALITY') or '—'}`; risk `{risk or '—'}` ATR; "
+        f"flags: {flags}."
+    ]
+
+
 def _dossier_lines(dossier: Json) -> list[str]:
     features = _mapping(dossier.get("features"))
     facts = [
@@ -312,6 +353,7 @@ def _candidate_lines(
     policy: Json | None,
     dossier: Json | None,
     freshness: Json | None = None,
+    research_tier: Json | None = None,
 ) -> list[str]:
     lines = _header_lines(candidate)
     lines.extend(
@@ -319,6 +361,7 @@ def _candidate_lines(
     )
     if policy is not None:
         lines.extend(_gate_lines(policy))
+    lines.extend(_research_tier_lines(research_tier))
     if dossier is not None:
         lines.extend(_dossier_lines(dossier))
     lines.append("")
@@ -368,6 +411,14 @@ def _outcome_lines(
         counts = _mapping(_mapping(analysis.get("policy")).get("outcome_counts"))
         rendered = ", ".join(f"{key} {value}" for key, value in sorted(counts.items()))
         lines.append(f"- Candidate analysis outcomes: {rendered or 'none reported'}.")
+        tier_counts = _mapping(
+            summarize_research_tiers(_rows(analysis.get("members"))).get("tier_counts")
+        )
+        tier_rendered = ", ".join(
+            f"{key} {value}" for key, value in sorted(tier_counts.items())
+        )
+        if tier_rendered:
+            lines.append(f"- Research tier counts: {tier_rendered}.")
     if lifecycle is not None:
         basket: dict[str, int] = {}
         for member in _rows(lifecycle.get("members")):
@@ -428,6 +479,7 @@ def build_entry(
     run_label = (_text(scan.get("scan_timestamp")) or "unknown")[:10]
     scope_session = session or f"unestablished (research-run label {run_label})"
     policies = _policy_by_symbol(analysis)
+    research_tiers = _research_tier_by_symbol(analysis)
     dossiers = _dossier_by_symbol(research)
     candidates = _rows(scan.get("candidates"))
 
@@ -477,6 +529,7 @@ def build_entry(
                     policies.get(symbol) if symbol else None,
                     dossiers.get(symbol) if symbol else None,
                     freshness,
+                    research_tiers.get(symbol) if symbol else None,
                 )
             )
     else:

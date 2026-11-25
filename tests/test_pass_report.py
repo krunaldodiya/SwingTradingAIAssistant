@@ -56,20 +56,71 @@ def _analysis() -> dict[str, object]:
         "schema": "swing-analysis@v2",
         "scan_result_identity_sha256": "b" * 64,
         "policy": {"outcome_counts": {"NOT_QUALIFIED": 1}},
+        "research_tier": {
+            "tier_counts": {
+                "RESEARCH_QUALIFIED": 0,
+                "RESEARCH_WATCH": 1,
+                "NOT_QUALIFIED": 0,
+                "INSUFFICIENT": 0,
+            }
+        },
         "members": [
             {
                 "symbol": "AAA",
+                "volume": {"event_volume": 125, "prior_median": "100"},
+                "weekly": {
+                    "trend": "RANGE_OR_TRANSITION",
+                    "above_twenty_week_average": True,
+                },
+                "levels": {"risk_atr": "3.06"},
                 "policy": {
                     "schema": "swing-analysis-policy@v1",
                     "outcome": "NOT_QUALIFIED",
                     "gates": [
+                        {"id": "ATR_AVAILABLE", "status": "PASS", "observed": "5.87"},
                         {"id": "VOLUME_EXPANSION", "status": "FAIL", "observed": "1.0"},
+                        {
+                            "id": "CANDLE_BODY_QUALITY",
+                            "status": "PASS",
+                            "observed": {
+                                "direction": "BULLISH",
+                                "body_percent": "97.03",
+                            },
+                        },
+                        {
+                            "id": "RETEST_CONFIRMED",
+                            "status": "PENDING",
+                            "observed": "TESTING",
+                        },
+                        {"id": "DEMAND_ZONE_VALID", "status": "PASS", "observed": {}},
+                        {
+                            "id": "EXTENSION_WITHIN_2_ATR",
+                            "status": "PASS",
+                            "observed": "0.71",
+                        },
+                        {"id": "RISK_POSITIVE", "status": "PASS", "observed": "3.06"},
                         {
                             "id": "WEEKLY_TREND_UP",
                             "status": "PENDING",
                             "observed": "RANGE",
                         },
                     ],
+                },
+                "research_tier": {
+                    "tier": "RESEARCH_WATCH",
+                    "hard_gates": [
+                        {
+                            "id": "RISK_WITHIN_3_5_ATR",
+                            "status": "PASS",
+                            "observed": "3.06",
+                        }
+                    ],
+                    "soft_gates": [
+                        {"id": "VOLUME_EXPANSION", "strength": "MODERATE"},
+                        {"id": "WEEKLY_TREND_UP", "strength": "MODERATE"},
+                        {"id": "CANDLE_BODY_QUALITY", "strength": "STRONG"},
+                    ],
+                    "flags": ["VOLUME_EXPANSION_MODERATE"],
                 },
             }
         ],
@@ -113,7 +164,10 @@ def test_report_states_facts_and_candidate_gates(tmp_path: Path) -> None:
     assert "Members evaluated once: **200**" in text
     assert "`RANGE_OR_TRANSITION`" in text
     assert "| AAA | NIFTY_100 | BOS | 2 | 100 | 90 | 10 | `NOT_QUALIFIED` |" in text
-    assert "FAIL VOLUME_EXPANSION; PENDING WEEKLY_TREND_UP" in text
+    assert "FAIL VOLUME_EXPANSION" in text
+    assert "PENDING RETEST_CONFIRMED, WEEKLY_TREND_UP" in text
+    assert "## Research watchlist" in text
+    assert "| AAA | `RESEARCH_WATCH` | MODERATE | MODERATE | STRONG | 3.06 |" in text
     assert "trend `DETERIORATING`" in text
 
 
